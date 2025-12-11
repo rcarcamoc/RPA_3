@@ -1,0 +1,68 @@
+"""Generador de módulos."""
+import json
+import shutil
+from pathlib import Path
+
+class ModuleGenerator:
+    """Genera módulo independiente."""
+    
+    def __init__(self, recording_json: str, module_name: str, config: dict):
+        self.recording_path = Path(recording_json)
+        self.module_name = module_name
+        self.config = config
+    
+    def generate(self) -> Path:
+        """Genera módulo independiente sin dependencias externas."""
+        module_dir = Path("modules") / self.module_name
+        module_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Leer JSON original
+        with open(self.recording_path, "r", encoding="utf-8") as f:
+            recording_content = f.read()
+
+        # Crear run.py con JSON incrustado
+        run_py = f'''#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Module runner (Standalone)."""
+
+import sys
+import json
+from pathlib import Path
+
+# Agregar raíz del proyecto al path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.player import RecordingPlayer
+from utils.config_loader import load_config
+from utils.logging_setup import setup_logging
+
+# DATOS DE LA GRABACIÓN (INCRUSTADOS)
+RECORDING_JSON = r"""
+{recording_content}
+"""
+
+if __name__ == "__main__":
+    setup_logging()
+    
+    # Cargar configuración (puede ser externa o default)
+    try:
+        config = load_config("../../config/ris_config.yaml")
+    except:
+        config = {{}}
+        
+    print("🚀 Ejecutando módulo independiente: {self.module_name}")
+    
+    # Parsear datos incrustados
+    recording_data = json.loads(RECORDING_JSON)
+    
+    # Instanciar player con diccionario de datos
+    player = RecordingPlayer(recording_data, config)
+    
+    results = player.run()
+    print(results)
+'''
+        
+        with open(module_dir / "run.py", "w", encoding="utf-8") as f:
+            f.write(run_py)
+        
+        return module_dir

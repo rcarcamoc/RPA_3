@@ -1,0 +1,19 @@
+# Default config
+
+app_context: "Application"
+window_title: ".*"
+
+recorder:
+  text_timeout: 2.0
+
+execution:
+  max_retries: 3
+  retry_delay: 1.0
+  click_retries: 2
+  type_retries: 1
+  element_timeout: 5.0
+  action_timeout: 10.0
+  stop_on_error: false
+
+logging:
+  level: "INFO"

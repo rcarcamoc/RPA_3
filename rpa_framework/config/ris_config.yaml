@@ -1,0 +1,25 @@
+# Vue RIS config
+
+app_context: "VueRIS"
+window_title: ".*Vue.*RIS.*"
+
+recorder:
+  text_timeout: 2.0
+  capture_element_info: true
+
+execution:
+  max_retries: 3
+  retry_delay: 1.0
+  click_retries: 2
+  type_retries: 1
+  element_timeout: 5.0
+  action_timeout: 10.0
+  stop_on_error: false
+
+validation:
+  post_login:
+    rule: "grid_visible"
+    timeout: 15.0
+
+logging:
+  level: "INFO"
