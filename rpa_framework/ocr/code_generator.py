@@ -68,9 +68,14 @@ def {function_name}():
     Busca el texto '{text_to_find}' en la pantalla
     y hace click en su ubicación.
     """
-    from rpa_framework.ocr.engine import OCREngine
-    from rpa_framework.ocr.matcher import OCRMatcher
-    from rpa_framework.ocr.actions import OCRActions
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
     try:
         # Inicializar motor OCR
@@ -92,7 +97,7 @@ def {function_name}():
             search_term='{text_to_find}',
             offset_x={offset_x},
             offset_y={offset_y},
-            fuzzy={str(fuzzy).lower()},
+            fuzzy={str(fuzzy)},
             button='{button}'
         )
         
@@ -124,7 +129,145 @@ def {function_name}():
                 'button': button
             }
         }
+
+    def generate_double_click_module(
+        self,
+        text_to_find: str,
+        offset_x: int = 0,
+        offset_y: int = 0,
+        fuzzy: bool = True,
+        module_name: Optional[str] = None
+    ) -> Dict:
+        """Generar módulo para double click."""
+        if not module_name:
+            module_name = f"ocr_double_click_{self.generated_count}"
+            self.generated_count += 1
+            
+        function_name = f"execute_{module_name}".replace('-', '_')
+        
+        code = f'''# Auto-generated OCR Double Click Module
+# Generated: {datetime.now().isoformat()}
+
+def {function_name}():
+    """
+    Acción OCR: Doble Click en texto '{text_to_find}'
+    """
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
+    try:
+        engine = OCREngine(
+            engine='{self.engine}',
+            language='{self.language}',
+            confidence_threshold=0.5,
+            use_gpu=False
+        )
+        matcher = OCRMatcher(threshold=80)
+        actions = OCRActions(engine, matcher, delay=0.3)
+        
+        result = actions.double_click_on_text(
+            search_term='{text_to_find}',
+            offset_x={offset_x},
+            offset_y={offset_y},
+            fuzzy={str(fuzzy)}
+        )
+        
+        return result
+    
+    except Exception as e:
+        return {{
+            'action': 'double_click',
+            'status': 'error',
+            'error': str(e),
+            'text_searched': '{text_to_find}'
+        }}
+
+{module_name} = {function_name}
+'''
+        return {
+            'name': module_name,
+            'function_name': function_name,
+            'code': code,
+            'action_type': 'double_click',
+            'parameters': {'text_to_find': text_to_find}
+        }
+        
+
+
+    def generate_right_click_module(
+        self,
+        text_to_find: str,
+        offset_x: int = 0,
+        offset_y: int = 0,
+        fuzzy: bool = True,
+        module_name: Optional[str] = None
+    ) -> Dict:
+        """Generar módulo para click derecho."""
+        if not module_name:
+            module_name = f"ocr_rclick_{self.generated_count}"
+            self.generated_count += 1
+            
+        function_name = f"execute_{module_name}".replace('-', '_')
+        
+        code = f'''# Auto-generated OCR Right Click Module
+# Generated: {datetime.now().isoformat()}
+
+def {function_name}():
+    """
+    Acción OCR: Click Derecho en texto '{text_to_find}'
+    """
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
+    
+    try:
+        engine = OCREngine(
+            engine='{self.engine}',
+            language='{self.language}',
+            confidence_threshold=0.5,
+            use_gpu=False
+        )
+        matcher = OCRMatcher(threshold=80)
+        actions = OCRActions(engine, matcher, delay=0.3)
+        
+        result = actions.right_click_on_text(
+            search_term='{text_to_find}',
+            offset_x={offset_x},
+            offset_y={offset_y},
+            fuzzy={str(fuzzy)}
+        )
+        
+        return result
+    
+    except Exception as e:
+        return {{
+            'action': 'right_click',
+            'status': 'error',
+            'error': str(e),
+            'text_searched': '{text_to_find}'
+        }}
+
+{module_name} = {function_name}
+'''
+        return {
+            'name': module_name,
+            'function_name': function_name,
+            'code': code,
+            'action_type': 'right_click',
+            'parameters': {'text_to_find': text_to_find}
+        }
+
     def generate_copy_module(
         self,
         text_to_find: str,
@@ -149,9 +292,14 @@ def {function_name}():
     Busca el texto '{text_to_find}' en la pantalla,
     lo selecciona y lo copia al portapapeles.
     """
-    from rpa_framework.ocr.engine import OCREngine
-    from rpa_framework.ocr.matcher import OCRMatcher
-    from rpa_framework.ocr.actions import OCRActions
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
     try:
         # Inicializar motor OCR
@@ -171,8 +319,8 @@ def {function_name}():
         # Ejecutar acción
         result = actions.copy_text_by_ocr(
             search_term='{text_to_find}',
-            fuzzy={str(fuzzy).lower()},
-            case_sensitive={str(case_sensitive).lower()}
+            fuzzy={str(fuzzy)},
+            case_sensitive={str(case_sensitive)}
         )
         
         return result
@@ -225,9 +373,14 @@ def {function_name}():
     Busca el texto '{text_to_find}' en la pantalla
     y lo selecciona (triple-click).
     """
-    from rpa_framework.ocr.engine import OCREngine
-    from rpa_framework.ocr.matcher import OCRMatcher
-    from rpa_framework.ocr.actions import OCRActions
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
     try:
         engine = OCREngine(
@@ -241,7 +394,7 @@ def {function_name}():
         
         result = actions.select_text(
             search_term='{text_to_find}',
-            fuzzy={str(fuzzy).lower()}
+            fuzzy={str(fuzzy)}
         )
         
         return result
@@ -298,9 +451,14 @@ def {function_name}():
     Busca el elemento '{reference_text}' y escribe
     el texto en una posición relativa.
     """
-    from rpa_framework.ocr.engine import OCREngine
-    from rpa_framework.ocr.matcher import OCRMatcher
-    from rpa_framework.ocr.actions import OCRActions
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
     try:
         engine = OCREngine(
@@ -317,7 +475,7 @@ def {function_name}():
             text_to_type='{text_escaped}',
             offset_x={offset_x},
             offset_y={offset_y},
-            fuzzy={str(fuzzy).lower()}
+            fuzzy={str(fuzzy)}
         )
         
         return result
@@ -376,9 +534,14 @@ def {function_name}():
     Si encuentra los textos {search_terms},
     ejecuta acciones true. Si no, ejecuta acciones false.
     """
-    from rpa_framework.ocr.engine import OCREngine
-    from rpa_framework.ocr.matcher import OCRMatcher
-    from rpa_framework.ocr.actions import OCRActions
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
     
     try:
         engine = OCREngine(
@@ -442,6 +605,141 @@ def {function_name}():
                 'false_actions': false_actions or []
             }
         }
+
+    def generate_hover_module(
+        self,
+        text_to_find: str,
+        offset_x: int = 0,
+        offset_y: int = 0,
+        fuzzy: bool = True,
+        module_name: Optional[str] = None
+    ) -> Dict:
+        """Generar módulo para hover."""
+        if not module_name:
+            module_name = f"ocr_hover_{self.generated_count}"
+            self.generated_count += 1
+            
+        function_name = f"execute_{module_name}".replace('-', '_')
+        
+        code = f'''# Auto-generated OCR Hover Module
+# Generated: {datetime.now().isoformat()}
+
+def {function_name}():
+    """
+    Acción OCR: Hover sobre texto '{text_to_find}'
+    """
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
+    
+    try:
+        engine = OCREngine(
+            engine='{self.engine}',
+            language='{self.language}',
+            confidence_threshold=0.5,
+            use_gpu=False
+        )
+        matcher = OCRMatcher(threshold=80)
+        actions = OCRActions(engine, matcher, delay=0.3)
+        
+        result = actions.hover_on_text(
+            search_term='{text_to_find}',
+            offset_x={offset_x},
+            offset_y={offset_y},
+            fuzzy={str(fuzzy)}
+        )
+        
+        return result
+    
+    except Exception as e:
+        return {{
+            'action': 'hover',
+            'status': 'error',
+            'error': str(e),
+            'text_searched': '{text_to_find}'
+        }}
+
+{module_name} = {function_name}
+'''
+        return {
+            'name': module_name,
+            'function_name': function_name,
+            'code': code,
+            'action_type': 'hover',
+            'parameters': {'text_to_find': text_to_find}
+        }
+
+    def generate_wait_module(
+        self,
+        text_to_find: str,
+        timeout: int = 10,
+        fuzzy: bool = True,
+        module_name: Optional[str] = None
+    ) -> Dict:
+        """Generar módulo para esperar texto."""
+        if not module_name:
+            module_name = f"ocr_wait_{self.generated_count}"
+            self.generated_count += 1
+            
+        function_name = f"execute_{module_name}".replace('-', '_')
+        
+        code = f'''# Auto-generated OCR Wait Module
+# Generated: {datetime.now().isoformat()}
+
+def {function_name}():
+    """
+    Acción OCR: Esperar texto '{text_to_find}' (Timeout: {timeout}s)
+    """
+    import sys
+    import os
+    # Add parent dir to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    from ocr.engine import OCREngine
+    from ocr.matcher import OCRMatcher
+    from ocr.actions import OCRActions
+    
+    try:
+        engine = OCREngine(
+            engine='{self.engine}',
+            language='{self.language}',
+            confidence_threshold=0.5,
+            use_gpu=False
+        )
+        matcher = OCRMatcher(threshold=80)
+        actions = OCRActions(engine, matcher, delay=0.3)
+        
+        result = actions.wait_for_text(
+            search_term='{text_to_find}',
+            timeout={timeout},
+            fuzzy={str(fuzzy)}
+        )
+        
+        return result
+    
+    except Exception as e:
+        return {{
+            'action': 'wait_for_text',
+            'status': 'error',
+            'error': str(e),
+            'text_searched': '{text_to_find}'
+        }}
+
+{module_name} = {function_name}
+'''
+        return {
+            'name': module_name,
+            'function_name': function_name,
+            'code': code,
+            'action_type': 'wait_for_text',
+            'parameters': {'text_to_find': text_to_find}
+        }
+
     
     def validate_code(self, code: str) -> bool:
         """

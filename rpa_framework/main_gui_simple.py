@@ -654,17 +654,36 @@ class GeneratorPanel(QWidget):
         self.load_recordings()
     
     def load_recordings(self):
-        """Carga lista de grabaciones."""
+        """Carga lista de grabaciones y módulos OCR."""
         self.recordings_list.clear()
+        
+        # 1. Grabaciones JSON (Acciones UI)
         recordings_dir = Path("recordings")
         if not recordings_dir.exists():
             recordings_dir.mkdir()
             
-        files = sorted(list(recordings_dir.glob("*.json")), reverse=True, key=lambda p: p.stat().st_mtime)
+        json_files = sorted(list(recordings_dir.glob("*.json")), reverse=True, key=lambda p: p.stat().st_mtime)
         
-        for p in files:
+        # 2. Módulos OCR Generados (Python) - Opcional, si queremos re-generar o ver
+        # Por ahora, la lógica de GeneratorPanel está diseñada solo para JSON -> Python
+        # Pero el usuario pidió "ver las grabaciones de OCR".
+        # Dado que OCR genera .py directamente, tal vez quiera verlos listados.
+        
+        modules_dir = Path("modules")
+        py_files = []
+        if modules_dir.exists():
+            py_files = sorted(list(modules_dir.glob("*.py")), reverse=True, key=lambda p: p.stat().st_mtime)
+
+        # Agregar JSONs
+        for p in json_files:
             date_str = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            self.recordings_list.addItem(f"{p.name}  ({date_str})")
+            self.recordings_list.addItem(f"[REC] {p.name}  ({date_str})")
+            
+        # Agregar OCR Modules (visualización)
+        for p in py_files:
+            if p.name != "__init__.py":
+                date_str = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                self.recordings_list.addItem(f"[OCR] {p.name}  ({date_str})")
             
     def generate(self):
         current_item = self.recordings_list.currentItem()
@@ -672,7 +691,26 @@ class GeneratorPanel(QWidget):
             QMessageBox.warning(self, "⚠️ Advertencia", "Selecciona una grabación de la lista")
             return
             
-        filename = current_item.text().split("  (")[0]
+        text = current_item.text()
+        filename = text.split("  (")[0]
+        
+        # Detectar tipo por prefijo
+        is_ocr = "[OCR]" in filename
+        is_rec = "[REC]" in filename
+        
+        # Limpiar prefijo para obtener nombre real
+        filename = filename.replace("[OCR] ", "").replace("[REC] ", "")
+
+        if is_ocr:
+            # Si es OCR, solo mostrar el código pues ya es un módulo .py
+            file_path = Path("modules") / filename
+            if file_path.exists():
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    self.results_text.setText(f.read())
+                QMessageBox.information(self, "ℹ️ Info", f"Visualizando módulo existente:\n{filename}")
+                return
+        
+        # Si es [REC] (JSON), procedemos a generar código
         file_path = Path("recordings") / filename
         
         if not file_path.exists():
@@ -717,6 +755,14 @@ class OCRTab(QWidget):
         
         self.init_ui()
         
+    def showEvent(self, event):
+        """Evento al mostrar la pestaña: Auto-iniciar OCR si es necesario."""
+        super().showEvent(event)
+        # Si no esta inicializado y no se esta inicializando (btn habilitado)
+        if self.ocr_engine is None and self.btn_init.isEnabled():
+            print("[DEBUG] Auto-inicializando OCR al seleccionar pestaña...")
+            self.initialize_ocr()
+            
     def init_ui(self):
         layout = QVBoxLayout()
         
@@ -796,7 +842,16 @@ class OCRTab(QWidget):
         gen_layout = QFormLayout()
         
         self.action_combo = QComboBox()
-        self.action_combo.addItems(['click', 'copy', 'select', 'type_near_text'])
+        self.action_combo.addItems([
+            'click', 
+            'double_click', 
+            'right_click', 
+            'hover', 
+            'wait_for_text',
+            'copy', 
+            'select', 
+            'type_near_text'
+        ])
         gen_layout.addRow("Acción:", self.action_combo)
         
         offset_layout = QHBoxLayout()
@@ -951,6 +1006,26 @@ class OCRTab(QWidget):
                     offset_x=self.offset_x.value(),
                     offset_y=self.offset_y.value()
                 )
+            elif action == 'double_click':
+                module = self.code_generator.generate_double_click_module(
+                    term,
+                    offset_x=self.offset_x.value(),
+                    offset_y=self.offset_y.value()
+                )
+            elif action == 'right_click':
+                module = self.code_generator.generate_right_click_module(
+                    term,
+                    offset_x=self.offset_x.value(),
+                    offset_y=self.offset_y.value()
+                )
+            elif action == 'hover':
+                module = self.code_generator.generate_hover_module(
+                    term,
+                    offset_x=self.offset_x.value(),
+                    offset_y=self.offset_y.value()
+                )
+            elif action == 'wait_for_text':
+                module = self.code_generator.generate_wait_module(term)
             elif action == 'copy':
                 module = self.code_generator.generate_copy_module(term)
             elif action == 'select':
@@ -968,7 +1043,31 @@ class OCRTab(QWidget):
             
             if module:
                 self.results_text.setText(module['code'])
-                self.results_text.append(f"\n# ✅ Module '{module['name']}' generated!")
+                
+                # Auto-save to recordings
+                try:
+                    base_dir = Path(__file__).resolve().parent
+                    save_dir = base_dir / "recordings"
+                    save_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    filename = f"{module['name']}.py"
+                    file_path = save_dir / filename
+                    
+                    # Prepare code with runner for immediate execution
+                    code_to_save = module['code']
+                    if 'if __name__' not in code_to_save:
+                         code_to_save += f"\n\nif __name__ == '__main__':\n    import logging\n    logging.basicConfig(level=logging.INFO)\n    print('🚀 Executing {module['function_name']}...')\n    res = {module['function_name']}()\n    print(f'Result: {{res}}')\n"
+
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(code_to_save)
+                        
+                    self.results_text.append(f"\n# ✅ Module '{module['name']}' generated!")
+                    self.results_text.append(f"# 📂 Saved to: {file_path}")
+                    
+                except Exception as e:
+                    self.results_text.append(f"\n# ⚠️ Auto-save failed: {e}")
+                    self.results_text.append(f"\n# ✅ Module '{module['name']}' generated!")
+
                 self.last_generated_module_name = module['name'] # Keep track for runner
                 
         except Exception as e:
@@ -981,8 +1080,37 @@ class OCRTab(QWidget):
              QMessageBox.warning(self, "Warning", "No valid code generated to save.")
              return
 
+        # Ensure modules directory exists (absolute path)
+        try:
+            # Resolving regular path
+            base_dir = Path(__file__).resolve().parent
+            # User requested OCR results to be saved in 'recordings'
+            modules_dir = base_dir / "recordings"
+            modules_dir.mkdir(parents=True, exist_ok=True)
+            
+            print(f"[DEBUG] Directorio base detectado: {base_dir}")
+            print(f"[DEBUG] Carpeta de módulos objetivo: {modules_dir}")
+            self.results_text.append(f"\n[INFO] Directorio destino: {modules_dir}")
+            
+        except Exception as e:
+            msg = f"Error creando directorio modules: {e}"
+            print(f"[ERROR] {msg}")
+            QMessageBox.critical(self, "Error", msg)
+            return
+
+        # Ask for filename first
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Guardar Módulo", "Nombre del archivo (sin .py):")
+        if not ok or not name:
+            return
+            
+        if not name.endswith(".py"):
+            name += ".py"
+
+        initial_path = modules_dir / name
+
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Save Script", "mi_automacion_ocr.py", "Python Files (*.py)"
+            self, "Save Script", str(initial_path), "Python Files (*.py)"
         )
         
         if filename:
@@ -1000,7 +1128,11 @@ class OCRTab(QWidget):
                     f.write(code)
                 
                 QMessageBox.information(self, "Success", f"Script guardado en:\n{filename}")
+                self.results_text.append(f"\n✅ GUARDADO EXITOSO EN:\n{filename}")
+                print(f"[DEBUG] Archivo guardado correctamente: {filename}")
+                
             except Exception as e:
+                print(f"[ERROR] Fallo al escribir archivo: {e}")
                 QMessageBox.critical(self, "Error", f"Could not save file: {e}")
 
 # ============================================================================

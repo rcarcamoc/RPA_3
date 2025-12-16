@@ -64,29 +64,37 @@ class OCRMatcher:
                 similarity = self._fuzzy_match(search_norm, text_norm)
                 
                 if similarity >= self.threshold:
+                    # Calcular similitud exacta como desempate
+                    exact_similarity = fuzz.ratio(search_norm, text_norm)
+                    
                     match = {
                         **text_data,
                         'match_similarity': similarity,
+                        'exact_similarity': exact_similarity,
                         'match_type': 'fuzzy',
                         'search_term': search_term
                     }
                     matches.append(match)
-                    logger.debug(f"Fuzzy match: '{text}' (similarity: {similarity}%)")
+                    logger.debug(f"Fuzzy match: '{text}' (similarity: {similarity}%, exact: {exact_similarity}%)")
             
             else:
                 # Búsqueda exacta (substring)
                 if search_norm in text_norm:
+                    # Calcular ratio también para exacta
+                    exact_similarity = fuzz.ratio(search_norm, text_norm)
+                    
                     match = {
                         **text_data,
                         'match_similarity': 100,
+                        'exact_similarity': exact_similarity,
                         'match_type': 'exact',
                         'search_term': search_term
                     }
                     matches.append(match)
                     logger.debug(f"Exact match: '{text}'")
         
-        # Ordenar por similitud descendente
-        matches.sort(key=lambda x: x['match_similarity'], reverse=True)
+        # Ordenar por similitud fuzzy descendente, y luego por similitud exacta
+        matches.sort(key=lambda x: (x['match_similarity'], x.get('exact_similarity', 0)), reverse=True)
         
         if not return_all and matches:
             return [matches[0]]  # Retornar solo el mejor match

@@ -386,6 +386,112 @@ class OCRActions:
         self.delay = delay
         logger.info(f"Delay actualizado a {delay}s")
     
+
+    def hover_on_text(
+        self,
+        search_term: str,
+        offset_x: int = 0,
+        offset_y: int = 0,
+        fuzzy: bool = True,
+        case_sensitive: bool = False
+    ) -> Dict:
+        """
+        Busca texto y mueve el mouse sobre él (hover).
+        
+        Args:
+            search_term: Texto a buscar
+            offset_x: Desplazamiento X
+            offset_y: Desplazamiento Y
+            fuzzy: Usar búsqueda fuzzy
+            case_sensitive: Distinguir mayúsculas
+            
+        Returns:
+            Dict con resultado
+        """
+        matches = self.capture_and_find(
+            search_term,
+            fuzzy=fuzzy,
+            case_sensitive=case_sensitive,
+            take_screenshot=True
+        )
+        
+        if not matches:
+            raise ValueError(f"No se encontró texto para hover: '{search_term}'")
+        
+        best_match = matches[0]
+        
+        click_x = int(best_match['center']['x'] + offset_x)
+        click_y = int(best_match['center']['y'] + offset_y)
+        
+        try:
+            pyautogui.moveTo(click_x, click_y)
+            time.sleep(self.delay)
+            
+            logger.info(f"Hover sobre '{best_match['text']}' en ({click_x}, {click_y})")
+            
+            return {
+                'action': 'hover',
+                'status': 'success',
+                'text_found': best_match['text'],
+                'position': {'x': click_x, 'y': click_y}
+            }
+        except Exception as e:
+            logger.error(f"Error en hover: {e}")
+            raise
+
+    def wait_for_text(
+        self,
+        search_term: str,
+        timeout: int = 10,
+        interval: float = 1.0,
+        fuzzy: bool = True,
+        case_sensitive: bool = False
+    ) -> Dict:
+        """
+        Espera a que aparezca un texto en pantalla.
+        
+        Args:
+            search_term: Texto a esperar
+            timeout: Tiempo máximo de espera (segundos)
+            interval: Intervalo entre intentos (segundos)
+            fuzzy: Usar búsqueda fuzzy
+            case_sensitive: Distinguir mayúsculas
+            
+        Returns:
+            Dict con resultado (found/timeout)
+        """
+        start_time = time.time()
+        
+        logger.info(f"Esperando texto '{search_term}' (Timeout: {timeout}s)...")
+        
+        while time.time() - start_time < timeout:
+            try:
+                matches = self.capture_and_find(
+                    search_term,
+                    fuzzy=fuzzy,
+                    case_sensitive=case_sensitive,
+                    take_screenshot=True
+                )
+                
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"Texto '{search_term}' encontrado!")
+                    return {
+                        'action': 'wait_for_text',
+                        'status': 'success',
+                        'found': True,
+                        'text_found': best_match['text'],
+                        'position': best_match['center'],
+                        'time_elapsed': time.time() - start_time
+                    }
+                    
+            except Exception:
+                pass
+            
+            time.sleep(interval)
+            
+        raise TimeoutError(f"Tiempo de espera agotado para el texto: '{search_term}'")
+
     def save_screenshot(self, filepath: str):
         """Guardar screenshot actual como imagen"""
         if self.last_screenshot is None:
