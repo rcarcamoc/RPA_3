@@ -1,0 +1,34 @@
+{
+  "name": "RPA - demo-grabacion-web",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://www.google.com",
+        "waitForNavigation": true
+      },
+      "name": "HTTP Start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "selector": "textarea[name='q']",
+        "action": "click",
+        "value": "",
+        "waitTime": 0
+      },
+      "name": "Step 1 - click",
+      "type": "n8n-nodes-base.playwright",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    }
+  ]
+}
