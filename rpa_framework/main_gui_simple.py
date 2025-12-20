@@ -45,6 +45,7 @@ try:
     from generators.module_generator import ModuleGenerator
     from utils.config_loader import load_config
     from utils.logging_setup import setup_logging
+    from ui.workflow_panel import WorkflowPanel
 except ImportError as e:
     print(f"❌ Error importando módulos RPA: {e}")
     print("Asegúrate de estar en rpa_framework/")
@@ -1360,12 +1361,13 @@ class MainWindow(QMainWindow):
         
         # Tabs
         tabs = QTabWidget()
-        tabs.addTab(DashboardPanel(), "📊 Dashboard")
-        tabs.addTab(RecordPanel(self.config), "📹 Grabar")
-        tabs.addTab(ReplayPanel(self.config), "▶ Reproducir")
-        tabs.addTab(GeneratorPanel(self.config), "🔧 Generar")
-        tabs.addTab(OCRTab(self), "👁️ OCR")
-        tabs.addTab(WebRecordPanel(self.config), "🌐 Web Recorder")
+        tabs.addTab(DashboardPanel(), "Dashboard")
+        tabs.addTab(RecordPanel(self.config), "Grabar")
+        tabs.addTab(ReplayPanel(self.config), "Reproducir")
+        tabs.addTab(GeneratorPanel(self.config), "Generar")
+        tabs.addTab(OCRTab(self), "OCR")
+        tabs.addTab(WebRecordPanel(self.config), "Web Recorder")
+        tabs.addTab(WorkflowPanel(self.config), "Workflows")
         
         layout.addWidget(tabs)
         

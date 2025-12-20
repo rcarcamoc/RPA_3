@@ -1,0 +1,99 @@
+{
+    "id": "wf_login_example",
+    "name": "Login Example Workflow",
+    "description": "Workflow de ejemplo que demuestra IF/ELSE y LOOP",
+    "nodes": [
+        {
+            "id": "start",
+            "type": "start",
+            "label": "Inicio",
+            "position": {
+                "x": 200,
+                "y": 50
+            }
+        },
+        {
+            "id": "n1",
+            "type": "action",
+            "label": "Login",
+            "script": "scripts/example_login.py",
+            "position": {
+                "x": 200,
+                "y": 150
+            }
+        },
+        {
+            "id": "n2",
+            "type": "decision",
+            "label": "Login OK?",
+            "condition": "login_status == 'success'",
+            "truePath": "n3",
+            "falsePath": "n4",
+            "position": {
+                "x": 200,
+                "y": 250
+            }
+        },
+        {
+            "id": "n3",
+            "type": "action",
+            "label": "Process Success",
+            "script": "scripts/example_success.py",
+            "position": {
+                "x": 100,
+                "y": 350
+            }
+        },
+        {
+            "id": "n4",
+            "type": "loop",
+            "label": "Retry 3 times",
+            "script": "scripts/example_retry.py",
+            "iterations": "3",
+            "loopVar": "retry_count",
+            "position": {
+                "x": 300,
+                "y": 350
+            }
+        },
+        {
+            "id": "end",
+            "type": "end",
+            "label": "Fin",
+            "position": {
+                "x": 200,
+                "y": 450
+            }
+        }
+    ],
+    "edges": [
+        {
+            "from": "start",
+            "to": "n1"
+        },
+        {
+            "from": "n1",
+            "to": "n2"
+        },
+        {
+            "from": "n2",
+            "to": "n3"
+        },
+        {
+            "from": "n2",
+            "to": "n4"
+        },
+        {
+            "from": "n3",
+            "to": "end"
+        },
+        {
+            "from": "n4",
+            "to": "end"
+        }
+    ],
+    "variables": {
+        "username": "admin",
+        "max_retries": 3
+    }
+}

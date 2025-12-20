@@ -1,0 +1,114 @@
+{
+    "id": "wf_data_processing",
+    "name": "Data Processing Workflow",
+    "description": "Workflow completo que demuestra procesamiento de datos con condiciones y loops",
+    "nodes": [
+        {
+            "id": "start",
+            "type": "start",
+            "label": "Inicio",
+            "position": {
+                "x": 250,
+                "y": 30
+            }
+        },
+        {
+            "id": "load_data",
+            "type": "action",
+            "label": "Cargar Datos",
+            "script": "scripts/load_data.py",
+            "position": {
+                "x": 250,
+                "y": 110
+            }
+        },
+        {
+            "id": "check_data",
+            "type": "decision",
+            "label": "Datos Validos?",
+            "condition": "data_valid == True",
+            "truePath": "process_loop",
+            "falsePath": "handle_error",
+            "position": {
+                "x": 250,
+                "y": 200
+            }
+        },
+        {
+            "id": "process_loop",
+            "type": "loop",
+            "label": "Procesar Items",
+            "script": "scripts/process_item.py",
+            "iterations": "item_count",
+            "loopVar": "current_index",
+            "position": {
+                "x": 100,
+                "y": 300
+            }
+        },
+        {
+            "id": "handle_error",
+            "type": "action",
+            "label": "Manejar Error",
+            "script": "scripts/handle_error.py",
+            "position": {
+                "x": 400,
+                "y": 300
+            }
+        },
+        {
+            "id": "save_results",
+            "type": "action",
+            "label": "Guardar Resultados",
+            "script": "scripts/save_results.py",
+            "position": {
+                "x": 250,
+                "y": 400
+            }
+        },
+        {
+            "id": "end",
+            "type": "end",
+            "label": "Fin",
+            "position": {
+                "x": 250,
+                "y": 490
+            }
+        }
+    ],
+    "edges": [
+        {
+            "from": "start",
+            "to": "load_data"
+        },
+        {
+            "from": "load_data",
+            "to": "check_data"
+        },
+        {
+            "from": "check_data",
+            "to": "process_loop"
+        },
+        {
+            "from": "check_data",
+            "to": "handle_error"
+        },
+        {
+            "from": "process_loop",
+            "to": "save_results"
+        },
+        {
+            "from": "handle_error",
+            "to": "end"
+        },
+        {
+            "from": "save_results",
+            "to": "end"
+        }
+    ],
+    "variables": {
+        "data_source": "input.csv",
+        "output_path": "output/results.json",
+        "max_retries": 3
+    }
+}
