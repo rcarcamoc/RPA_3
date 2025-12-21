@@ -11,15 +11,21 @@ from PyQt6.QtWidgets import (
     QTextEdit, QGroupBox, QFormLayout, QLineEdit, QComboBox,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
     QGraphicsPathItem, QGraphicsEllipseItem, QMessageBox, QFileDialog, QApplication,
-    QInputDialog
+    QInputDialog, QAction
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
-from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker
+from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence
 from pathlib import Path
 from datetime import datetime
 import json
 import os
 import sys
+
+# Importar comandos
+try:
+    from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
+except ImportError:
+    pass # Se intentará resolver después si es necesario
 
 # Añadir path para importar módulos core
 sys.path.insert(0, str(Path(__file__).parent))
@@ -485,6 +491,10 @@ class WorkflowPanel(QWidget):
         self.config = config or {}
         self.current_workflow = None
         self.worker = None
+        
+        # Undo Stack
+        self.undo_stack = QUndoStack(self)
+        
         self.init_ui()
         self.load_workflow_list()
     
@@ -500,6 +510,34 @@ class WorkflowPanel(QWidget):
         header_layout.addWidget(title)
         
         header_layout.addStretch()
+        
+        # Botones Undo/Redo
+        self.btn_undo = QPushButton("↺")
+        self.btn_undo.setToolTip("Deshacer (Ctrl+Z)")
+        self.btn_undo.setFixedWidth(30)
+        self.btn_undo.clicked.connect(self.undo_stack.undo)
+        self.btn_undo.setEnabled(False)
+        header_layout.addWidget(self.btn_undo)
+        
+        self.btn_redo = QPushButton("↻")
+        self.btn_redo.setToolTip("Rehacer (Ctrl+Y)")
+        self.btn_redo.setFixedWidth(30)
+        self.btn_redo.clicked.connect(self.undo_stack.redo)
+        self.btn_redo.setEnabled(False)
+        header_layout.addWidget(self.btn_redo)
+        
+        # Conectar señales del stack
+        self.undo_stack.canUndoChanged.connect(self.btn_undo.setEnabled)
+        self.undo_stack.canRedoChanged.connect(self.btn_redo.setEnabled)
+        
+        # Actions for Shortcuts
+        undo_action = self.undo_stack.createUndoAction(self, "Deshacer")
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.addAction(undo_action)
+        
+        redo_action = self.undo_stack.createRedoAction(self, "Rehacer")
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.addAction(redo_action)
         
         btn_new = QPushButton("+ Nuevo")
         btn_new.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 5px 15px;")
@@ -1199,53 +1237,45 @@ class WorkflowPanel(QWidget):
         else:
             new_node = Node(id=node_id, type=NodeType(node_type), label=node_label, position=new_pos)
         
-        # Agregar nodo
-        self.current_workflow.nodes.append(new_node)
+        # Agregar nodo con Undo
+        self.undo_stack.beginMacro(f"Agregar {node_label}")
+        self.undo_stack.push(AddNodeCommand(self.current_workflow, new_node, self))
         
         # Agregar conexion si se especifico siguiente
         next_node = self.prop_next_node.text().strip()
         if next_node and node_type != "decision":
-            self.current_workflow.edges.append(Edge(from_node=node_id, to_node=next_node))
+            self.undo_stack.push(ConnectionCommand(self.current_workflow, node_id, next_node, self))
         
-        # Actualizar canvas
-        self.canvas.load_workflow(self.current_workflow)
+        self.undo_stack.endMacro()
+        
+        # Limpieza UI
         self.clear_node_fields()
         self.log(f"Nodo agregado: {node_label} ({node_type})")
         
-        QMessageBox.information(self, "Nodo Agregado", f"Nodo '{node_label}' agregado.\nRecuerda guardar el workflow.")
+        QMessageBox.information(self, "Nodo Agregado", f"Nodo '{node_label}' agregado.")
     
     def delete_node(self):
-        """Elimina el nodo seleccionado."""
+        """Elimina el nodo seleccionado (Undoable)."""
         if not self.current_workflow or not hasattr(self, 'selected_node') or not self.selected_node:
             return
         
-        node_id = self.selected_node.id
         node_label = self.selected_node.label
         
         # Confirmar
         reply = QMessageBox.question(
             self, "Confirmar Eliminacion",
-            f"Eliminar nodo '{node_label}'?\n\nTambien se eliminaran las conexiones asociadas.",
+            f"Eliminar nodo '{node_label}'?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply != QMessageBox.StandardButton.Yes:
             return
         
-        # Eliminar nodo
-        self.current_workflow.nodes = [n for n in self.current_workflow.nodes if n.id != node_id]
+        # Undo Command
+        self.undo_stack.push(DeleteNodeCommand(self.current_workflow, self.selected_node, self))
         
-        # Eliminar conexiones
-        self.current_workflow.edges = [
-            e for e in self.current_workflow.edges 
-            if e.from_node != node_id and e.to_node != node_id
-        ]
-        
-        # Actualizar canvas
         self.selected_node = None
-        self.canvas.load_workflow(self.current_workflow)
         self.clear_node_fields()
-        self.log(f"Nodo eliminado: {node_label}")
     
     def apply_node_changes(self):
         """Aplica cambios al nodo seleccionado."""
@@ -1285,7 +1315,7 @@ class WorkflowPanel(QWidget):
         self.log(f"Nodo actualizado: {node.label}")
 
     def on_connection_created(self, from_id: str, to_id: str):
-        """Maneja la creación visual de conexiones."""
+        """Maneja la creación visual de conexiones (Undoable)."""
         if not self.current_workflow:
             return
             
@@ -1298,53 +1328,46 @@ class WorkflowPanel(QWidget):
             QMessageBox.warning(self, "Acción inválida", "No puedes conectar un nodo consigo mismo.")
             return
 
+        self.undo_stack.beginMacro(f"Conectar {from_id} -> {to_id}")
+        
         # Lógica para DecisionNode
         if isinstance(from_node, DecisionNode):
             # Preguntar camino
-            items = []
-            if not from_node.true_path: items.append("TRUE")
-            if not from_node.false_path: items.append("FALSE")
-            
-            # Si caminos están ocupados, permitir reescribir? Si.
             items = ["TRUE", "FALSE"]
-            
             path, ok = QInputDialog.getItem(self, "Conexión de Decisión", 
                 f"Conectar '{from_node.label}' -> '{to_id}' como:", items, 0, False)
             
             if not ok or not path:
+                self.undo_stack.endMacro()
                 return
             
-            # Actualizar modelo
-            if path == "TRUE":
-                from_node.true_path = to_id
-            else:
-                from_node.false_path = to_id
+            # Actualizar propiedad
+            prop_name = "true_path" if path == "TRUE" else "false_path"
+            old_val = getattr(from_node, prop_name)
             
-            # Reconstruir edges para asegurar consistencia
-            # Eliminar edges antiguos de este nodo que coincidan con el path si es necesario
-            # Simplificación: Agregar el nuevo edge. El canvas redibujará todo.
-            # Nota: Si ya existía edge visual para ese path, deberíamos limpiarlo.
-            # Pero Workflow.edges es lista simple. 
-            pass # Se agrega abajo
+            self.undo_stack.push(ModifyPropertyCommand(
+                self.current_workflow, from_id, prop_name, to_id, old_val, self
+            ))
+            
+            # Agregar edge visual
+            self.undo_stack.push(ConnectionCommand(self.current_workflow, from_id, to_id, self, is_add=True))
             
         else:
-            # Action/Loop/Start -> Solo 1 salida normal
-            # Eliminar conexiones salientes previas
-            self.current_workflow.edges = [e for e in self.current_workflow.edges if e.from_node != from_id]
+            # Action/Loop -> Solo 1 salida normal. Eliminar previas via Command
+            existing = [e for e in self.current_workflow.edges if e.from_node == from_id]
+            for e in existing:
+                self.undo_stack.push(ConnectionCommand(
+                    self.current_workflow, e.from_node, e.to_node, self, is_add=False
+                ))
+            
+            # Agregar nueva
+            self.undo_stack.push(ConnectionCommand(self.current_workflow, from_id, to_id, self, is_add=True))
             
             # Si estamos editando el nodo seleccionado, actualizar UI text
             if hasattr(self, 'selected_node') and self.selected_node and self.selected_node.id == from_id:
                 self.prop_next_node.setText(to_id)
         
-        # Eliminar cualquier edge duplicado exacto
-        self.current_workflow.edges = [e for e in self.current_workflow.edges 
-                                     if not (e.from_node == from_id and e.to_node == to_id)]
-                                     
-        # Agregar nueva conexión
-        self.current_workflow.edges.append(Edge(from_node=from_id, to_node=to_id))
-        
-        # Recargar canvas
-        self.canvas.load_workflow(self.current_workflow)
+        self.undo_stack.endMacro()
         self.log(f"Conexión creada: {from_id} -> {to_id}")
 
     def on_edge_split_requested(self, node: Node, from_id: str, to_id: str):
@@ -1360,33 +1383,43 @@ class WorkflowPanel(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        self.undo_stack.beginMacro(f"Insertar nodo en {from_id}->{to_id}")
+
         # 1. Eliminar edge viejo
-        self.current_workflow.edges = [e for e in self.current_workflow.edges 
-            if not (e.from_node == from_id and e.to_node == to_id)]
+        self.undo_stack.push(ConnectionCommand(self.current_workflow, from_id, to_id, self, is_add=False))
             
         # Si era DecisionNode (A), actualizar path
         from_node = self.current_workflow.get_node(from_id)
         if isinstance(from_node, DecisionNode):
             if from_node.true_path == to_id:
-                from_node.true_path = node.id
+                self.undo_stack.push(ModifyPropertyCommand(
+                    self.current_workflow, from_id, "true_path", node.id, to_id, self
+                ))
             if from_node.false_path == to_id:
-                from_node.false_path = node.id
+                self.undo_stack.push(ModifyPropertyCommand(
+                    self.current_workflow, from_id, "false_path", node.id, to_id, self
+                ))
         
         # 2. Crear edge (A->Nodo)
-        self.current_workflow.edges.append(Edge(from_node=from_id, to_node=node.id))
+        self.undo_stack.push(ConnectionCommand(self.current_workflow, from_id, node.id, self, is_add=True))
         
         # 3. Crear edge (Nodo->B)
         if not isinstance(node, DecisionNode):
-            self.current_workflow.edges.append(Edge(from_node=node.id, to_node=to_id))
-            # Actualizar next_node visualmente si seleccionamos el nodo insertado
+            self.undo_stack.push(ConnectionCommand(self.current_workflow, node.id, to_id, self, is_add=True))
+            # Actualizar next_node visualmente
             if hasattr(self, 'selected_node') and self.selected_node and self.selected_node.id == node.id:
                  self.prop_next_node.setText(to_id)
         else:
              # Si insertamos DecisionNode, conectamos true_path por defecto
-             node.true_path = to_id
-             self.current_workflow.edges.append(Edge(from_node=node.id, to_node=to_id))
+             self.undo_stack.push(ModifyPropertyCommand(
+                 self.current_workflow, node.id, "true_path", to_id, getattr(node, "true_path", ""), self
+             ))
+             self.undo_stack.push(ConnectionCommand(self.current_workflow, node.id, to_id, self, is_add=True))
         
-        # Recargar
-        self.canvas.load_workflow(self.current_workflow)
+        self.undo_stack.endMacro()
+        
+        # Recargar lo manejan los comandos, pero si hay cambios propiedades fuera de command...
+        # ModifyPropertyCommand ya recarga.
+        
         self.log(f"Nodo insertado: {from_id} -> {node.id} -> {to_id}")
 
