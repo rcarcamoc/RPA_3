@@ -32,7 +32,8 @@ class WorkflowExecutorWorker(QThread):
     """Worker thread para ejecutar workflows sin bloquear la UI."""
     
     log_update = pyqtSignal(str)
-    progress = pyqtSignal(str, str)  # node_id, status
+    node_started = pyqtSignal(str)  # node_id cuando empieza
+    node_finished = pyqtSignal(str)  # node_id cuando termina
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
@@ -46,14 +47,33 @@ class WorkflowExecutorWorker(QThread):
         try:
             self.executor = WorkflowExecutor(self.workflow, self.log_dir)
             
-            # Parche para capturar logs en tiempo real
+            # Parche para capturar logs en tiempo real y detectar nodos
             original_log = self.executor.logger.log
+            current_node_id = [None]  # Usamos lista para poder modificar en closure
+            
             def patched_log(message, level="INFO"):
                 original_log(message, level)
                 self.log_update.emit(f"[{level}] {message}")
+                
+                # Detectar inicio de nodo
+                if "Ejecutando nodo:" in message:
+                    # Buscar el nodo por label
+                    for node in self.workflow.nodes:
+                        if node.label in message:
+                            if current_node_id[0]:
+                                self.node_finished.emit(current_node_id[0])
+                            current_node_id[0] = node.id
+                            self.node_started.emit(node.id)
+                            break
+            
             self.executor.logger.log = patched_log
             
             result = self.executor.execute()
+            
+            # Emitir fin del ultimo nodo
+            if current_node_id[0]:
+                self.node_finished.emit(current_node_id[0])
+            
             self.finished.emit(result)
             
         except Exception as e:
@@ -576,6 +596,8 @@ class WorkflowPanel(QWidget):
         
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(self.on_log_update)
+        self.worker.node_started.connect(self.on_node_started)
+        self.worker.node_finished.connect(self.on_node_finished)
         self.worker.finished.connect(self.on_execution_finished)
         self.worker.error.connect(self.on_execution_error)
         self.worker.start()
@@ -586,6 +608,7 @@ class WorkflowPanel(QWidget):
             self.worker.stop()
             self.log("Deteniendo ejecucion...")
     
+    
     def on_log_update(self, message: str):
         """Actualiza el log en tiempo real."""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -594,6 +617,14 @@ class WorkflowPanel(QWidget):
         # Auto-scroll
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+    
+    def on_node_started(self, node_id: str):
+        """Resalta el nodo que esta ejecutandose."""
+        self.canvas.highlight_node(node_id, True)
+    
+    def on_node_finished(self, node_id: str):
+        """Quita el resaltado del nodo que termino."""
+        self.canvas.highlight_node(node_id, False)
     
     def on_execution_finished(self, result: dict):
         """Maneja el fin de la ejecucion."""
