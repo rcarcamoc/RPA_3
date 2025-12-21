@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, Edge
 from core.workflow_executor import WorkflowExecutor
 from core.logger import WorkflowLogger
+from core.validator import WorkflowValidator
 
 
 class WorkflowExecutorWorker(QThread):
@@ -138,6 +139,9 @@ class NodeGraphicsItem(QGraphicsRectItem):
         super().__init__(0, 0, 150, 60, parent)
         self.node = node
         
+        self.is_highlighted = False
+        self.has_warning = False
+        
         self.setBrush(QBrush(self.COLORS.get(node.type, QColor("#999999"))))
         self.setPen(QPen(QColor("#333333"), 2))
         
@@ -169,8 +173,19 @@ class NodeGraphicsItem(QGraphicsRectItem):
         return QPointF(self.pos().x() + 75, self.pos().y() + 30)
     
     def highlight(self, active: bool = True):
-        if active:
+        self.is_highlighted = active
+        self._update_appearance()
+        
+    def set_warning(self, message: str):
+        self.has_warning = bool(message)
+        self.setToolTip(f"⚠️ {message}" if message else "")
+        self._update_appearance()
+        
+    def _update_appearance(self):
+        if self.is_highlighted:
             self.setPen(QPen(QColor("#00ff00"), 3))
+        elif self.has_warning:
+            self.setPen(QPen(QColor("#dc3545"), 3))
         else:
             self.setPen(QPen(QColor("#333333"), 2))
     
@@ -549,6 +564,12 @@ class WorkflowPanel(QWidget):
         self.btn_save.clicked.connect(self.save_workflow)
         self.btn_save.setEnabled(False)
         header_layout.addWidget(self.btn_save)
+        
+        self.btn_validate = QPushButton("Validar")
+        self.btn_validate.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 5px 15px;")
+        self.btn_validate.clicked.connect(self.validate_workflow)
+        self.btn_validate.setEnabled(False) # Habilitar al cargar workflow
+        header_layout.addWidget(self.btn_validate)
         
         layout.addLayout(header_layout)
         
@@ -1050,6 +1071,7 @@ class WorkflowPanel(QWidget):
         self.canvas.load_workflow(self.current_workflow)
         self.btn_execute.setEnabled(True)
         self.btn_save.setEnabled(True)
+        self.btn_validate.setEnabled(True)
         self.var_text.setText("{}")
         self.status_label.setText(f"Nuevo: {name}")
         
@@ -1123,6 +1145,7 @@ class WorkflowPanel(QWidget):
             self.canvas.load_workflow(self.current_workflow)
             self.btn_execute.setEnabled(True)
             self.btn_save.setEnabled(True)
+            self.btn_validate.setEnabled(True)
             self.btn_add_node.setEnabled(True)
             self.status_label.setText(f"Cargado: {self.current_workflow.name}")
             self.status_label.setStyleSheet("color: #28a745; font-weight: bold;")
@@ -1313,6 +1336,46 @@ class WorkflowPanel(QWidget):
         # Actualizar canvas
         self.canvas.load_workflow(self.current_workflow)
         self.log(f"Nodo actualizado: {node.label}")
+
+    def validate_workflow(self):
+        """Ejecuta validación y muestra errores visualmente."""
+        if not self.current_workflow:
+            return
+            
+        errors = WorkflowValidator.validate(self.current_workflow)
+        
+        # Limpiar errores previos
+        if hasattr(self, 'scene'):
+            for item in self.scene.items():
+                if isinstance(item, NodeGraphicsItem):
+                    item.set_warning(None)
+        
+        if not errors:
+            self.status_label.setText("Validación OK")
+            self.status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+            QMessageBox.information(self, "Validación Correcta", "El workflow es válido y está listo para ejecutarse.")
+            return
+
+        # Mostrar errores
+        msg_list = []
+        for err in errors:
+            node_id = err["node_id"]
+            msg = err["message"]
+            msg_list.append(f"- {node_id or 'Global'}: {msg}")
+            
+            if node_id:
+                # Buscar item y marcar
+                for item in self.scene.items():
+                    if isinstance(item, NodeGraphicsItem) and item.node.id == node_id:
+                        item.set_warning(msg)
+                        break
+        
+        count = len(errors)
+        self.status_label.setText(f"{count} Errores encontrados")
+        self.status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+        
+        QMessageBox.warning(self, "Errores de Validación", 
+            f"Se encontraron {count} problemas:\n\n" + "\n".join(msg_list))
 
     def on_connection_created(self, from_id: str, to_id: str):
         """Maneja la creación visual de conexiones (Undoable)."""
