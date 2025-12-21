@@ -187,6 +187,7 @@ class NodeGraphicsItem(QGraphicsRectItem):
     
     def mouseReleaseEvent(self, event):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
         
         # Detectar si se soltó sobre un edge (para insertar nodo)
         if self.scene():
@@ -201,8 +202,6 @@ class NodeGraphicsItem(QGraphicsRectItem):
                         if hasattr(view, 'request_split_edge'):
                             view.request_split_edge(self, item)
                             break
-        
-        super().mouseReleaseEvent(event)
     
     def mouseDoubleClickEvent(self, event):
         """Abre el script asociado al hacer doble click"""
@@ -368,15 +367,22 @@ class WorkflowCanvas(QGraphicsView):
                          target_node = item.parentItem()
                          break
             
-            if target_node:
-                self.connection_created.emit(self.source_node.node.id, target_node.node.id)
+            # Guardar IDs antes de limpiar
+            source_id = self.source_node.node.id if self.source_node else None
+            target_id = target_node.node.id if target_node else None
             
-            # Limpiar estado
+            # Limpiar estado ANTES de emitir señal (evita crash si la señal limpia la escena)
+            if self.temp_line:
+                if self.temp_line.scene() == self.scene:
+                    self.scene.removeItem(self.temp_line)
+                self.temp_line = None
+            
             self.is_connecting = False
             self.source_node = None
-            if self.temp_line:
-                self.scene.removeItem(self.temp_line)
-                self.temp_line = None
+            
+            # Emitir señal
+            if source_id and target_id:
+                self.connection_created.emit(source_id, target_id)
                 
         super().mouseReleaseEvent(event)
 
