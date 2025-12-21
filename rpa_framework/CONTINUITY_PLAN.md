@@ -33,32 +33,29 @@ rpa_framework/
 
 ---
 
-## 🚀 Próximas Tareas Prioritarias
+## 🚀 Hoja de Ruta Priorizada
 
-### 1. Unificación de Estructura de Grabaciones
-> [!IMPORTANT]
-> **Problema**: Actualmente las grabaciones y scripts están dispersos en varias carpetas (`scripts/`, `recordings/`, `quick_scripts/`).
-- **Tarea**: Centralizar toda la salida de los grabadores (py, json, meta) en una única estructura de carpetas ordenada dentro del framework.
-- **Alcance**: Modificar `main_gui_simple.py` y todos los módulos de grabación para que escriban en esta carpeta central.
-- **Vista**: Asegurar que todas las listas de selección de la GUI lean exclusivamente de esta nueva estructura unificada.
+### 🔴 PRIORIDAD ALTA: Estabilidad y Estructura
+#### 1. Refactorización de Arquitectura
+- **Problema**: `main_gui_simple.py` supera las 1000 líneas.
+- **Tarea**: Desacoplar el archivo en módulos (`tabs/`, `widgets/`, `utils/`). Es crítico realizar esto **antes** de seguir agregando funcionalidades para evitar deuda técnica técnica.
 
-### 2. Rediseño del Editor de Nodos
-- **Visualización Dinámica**: El editor de la derecha debe ser contextual. Si es un nodo `ACTION`, solo muestra el campo `Script`. Si es `DECISION`, muestra `Condición`, etc.
-- **Iconografía de Nodos**: Agregar iconos representativos a los tipos de nodo en el dropdown y en el panel de propiedades.
-- **Mejora de Iconos de Zoom**: Reemplazar los caracteres Unicode de acercar/alejar por iconos más descriptivos o botones con mejor feedback visual.
+#### 2. Unificación de Estructura de Grabaciones
+- **Tarea**: Centralizar toda la salida de los grabadores (py, json, meta) en una única estructura de carpetas organizada.
+- **Impacto**: Asegura que todas las pestañas de la GUI lean de la misma fuente de verdad y facilita el despliegue del software.
 
-### 3. Integración con Bases de Datos (MySQL)
-- **Nuevo Nodo de Consulta**: Implementar un tipo de nodo especializado en operaciones SQL.
-- **Operaciones**: Soporte para `SELECT`, `INSERT`, `UPDATE` y `DELETE`.
-- **Configuración**: Crear un diálogo o sección en propiedades para definir la conexión (Host, User, Pass, DB, Port).
-- **Manejo de Resultados**: Los datos de un `SELECT` deben inyectarse automáticamente en el contexto de variables del workflow para que nodos posteriores puedan usarlos.
+### 🟡 PRIORIDAD MEDIA: Funcionalidad Core
+#### 3. Nodo de Base de Datos (MySQL)
+- **Tarea**: Implementar un nodo especializado en operaciones SQL (CRUD).
+- **Alcance**: Definición de conexión al servidor y inyección automática de resultados de `SELECT` en las variables del workflow.
 
-### 4. Pendientes de Edición de Flujo
-- **Portapapeles**: Implementar Copy/Paste (`Ctrl+C` / `Ctrl+V`) para nodos individuales o grupos de nodos.
-- **Alineación Inteligente**: Implementar `Snap-to-grid` para que los nodos se alineen automáticamente al ser soltados en el canvas.
+### 🟢 PRIORIDAD BAJA: UX y Pulido
+#### 4. Rediseño del Editor de Nodos
+- **Tarea**: Hacer el panel de propiedades dinámico (solo campos relevantes por tipo) e iconografía mejorada para zoom y tipos de nodo.
 
-### 5. Refactorización de Arquitectura
-- **Desacoplamiento de main_gui_simple.py**: El archivo principal ha superado las 1000 líneas. Se recomienda dividirlo en módulos más pequeños (ej. `tabs/`, `widgets/`, `utils/`) para facilitar el mantenimiento y la extensibilidad por parte de otros equipos.
+#### 5. Facilidad de Edición
+- **Portapapeles**: Implementar Copy/Paste (`Ctrl+C` / `Ctrl+V`).
+- **Alineación Inteligente**: `Snap-to-grid`.
 
 ---
 
