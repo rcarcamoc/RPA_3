@@ -57,6 +57,9 @@ rpa_framework/
 - **Portapapeles**: Implementar Copy/Paste (`Ctrl+C` / `Ctrl+V`) para nodos individuales o grupos de nodos.
 - **Alineación Inteligente**: Implementar `Snap-to-grid` para que los nodos se alineen automáticamente al ser soltados en el canvas.
 
+### 5. Refactorización de Arquitectura
+- **Desacoplamiento de main_gui_simple.py**: El archivo principal ha superado las 1000 líneas. Se recomienda dividirlo en módulos más pequeños (ej. `tabs/`, `widgets/`, `utils/`) para facilitar el mantenimiento y la extensibilidad por parte de otros equipos.
+
 ---
 
 ## 🛠️ Notas para el Equipo
