@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QGroupBox, QFormLayout, QLineEdit, QComboBox,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
     QGraphicsPathItem, QGraphicsEllipseItem, QMessageBox, QFileDialog, QApplication,
-    QInputDialog
+    QInputDialog, QStyle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
 from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence, QAction
@@ -594,16 +594,18 @@ class WorkflowPanel(QWidget):
         header_layout.addStretch()
         
         # Botones Undo/Redo
-        self.btn_undo = QPushButton("↺")
+        self.btn_undo = QPushButton()
         self.btn_undo.setToolTip("Deshacer (Ctrl+Z)")
         self.btn_undo.setFixedWidth(30)
+        self.btn_undo.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
         self.btn_undo.clicked.connect(self.undo_stack.undo)
         self.btn_undo.setEnabled(False)
         header_layout.addWidget(self.btn_undo)
         
-        self.btn_redo = QPushButton("↻")
+        self.btn_redo = QPushButton()
         self.btn_redo.setToolTip("Rehacer (Ctrl+Y)")
         self.btn_redo.setFixedWidth(30)
+        self.btn_redo.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
         self.btn_redo.clicked.connect(self.undo_stack.redo)
         self.btn_redo.setEnabled(False)
         header_layout.addWidget(self.btn_redo)
@@ -624,7 +626,7 @@ class WorkflowPanel(QWidget):
         header_layout.addSpacing(10)
         
         # Zoom Controls
-        self.btn_zoom_out = QPushButton("−")
+        self.btn_zoom_out = QPushButton("➖")
         self.btn_zoom_out.setToolTip("Alejar (Ctrl + Rueda)")
         self.btn_zoom_out.setFixedWidth(30)
         header_layout.addWidget(self.btn_zoom_out)
@@ -634,7 +636,7 @@ class WorkflowPanel(QWidget):
         self.btn_zoom_reset.setFixedWidth(35)
         header_layout.addWidget(self.btn_zoom_reset)
         
-        self.btn_zoom_in = QPushButton("+")
+        self.btn_zoom_in = QPushButton("➕")
         self.btn_zoom_in.setToolTip("Acercar (Ctrl + Rueda)")
         self.btn_zoom_in.setFixedWidth(30)
         header_layout.addWidget(self.btn_zoom_in)
@@ -644,13 +646,15 @@ class WorkflowPanel(QWidget):
         btn_new.clicked.connect(self.create_new_workflow)
         header_layout.addWidget(btn_new)
         
-        self.btn_save = QPushButton("Guardar")
+        self.btn_save = QPushButton(" Guardar")
+        self.btn_save.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         self.btn_save.setStyleSheet("background-color: #6c757d; color: white; font-weight: bold; padding: 5px 15px;")
         self.btn_save.clicked.connect(self.save_workflow)
         self.btn_save.setEnabled(False)
         header_layout.addWidget(self.btn_save)
         
-        self.btn_validate = QPushButton("Validar")
+        self.btn_validate = QPushButton(" Validar")
+        self.btn_validate.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         self.btn_validate.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 5px 15px;")
         self.btn_validate.clicked.connect(self.validate_workflow)
         self.btn_validate.setEnabled(False) # Habilitar al cargar workflow
@@ -673,7 +677,8 @@ class WorkflowPanel(QWidget):
         self.workflow_list.itemClicked.connect(self.on_workflow_selected)
         list_layout.addWidget(self.workflow_list)
         
-        btn_refresh = QPushButton("Recargar")
+        btn_refresh = QPushButton(" Recargar")
+        btn_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         btn_refresh.clicked.connect(self.load_workflow_list)
         list_layout.addWidget(btn_refresh)
         
@@ -686,13 +691,15 @@ class WorkflowPanel(QWidget):
         
         btn_layout = QHBoxLayout()
         
-        self.btn_execute = QPushButton("Ejecutar")
+        self.btn_execute = QPushButton(" Ejecutar")
+        self.btn_execute.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.btn_execute.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
         self.btn_execute.clicked.connect(self.execute_workflow)
         self.btn_execute.setEnabled(False)
         btn_layout.addWidget(self.btn_execute)
         
-        self.btn_stop = QPushButton("Detener")
+        self.btn_stop = QPushButton(" Detener")
+        self.btn_stop.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
         self.btn_stop.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold;")
         self.btn_stop.clicked.connect(self.stop_workflow)
         self.btn_stop.setEnabled(False)
@@ -714,19 +721,22 @@ class WorkflowPanel(QWidget):
         # Botones de gestion de nodos
         node_btn_layout = QHBoxLayout()
         
-        self.btn_add_node = QPushButton("+ Agregar")
+        self.btn_add_node = QPushButton(" Agregar")
+        self.btn_add_node.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         self.btn_add_node.setStyleSheet("background-color: #28a745; color: white;")
         self.btn_add_node.clicked.connect(self.add_node)
         self.btn_add_node.setEnabled(False)
         node_btn_layout.addWidget(self.btn_add_node)
         
-        self.btn_delete_node = QPushButton("- Eliminar")
+        self.btn_delete_node = QPushButton(" Eliminar")
+        self.btn_delete_node.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
         self.btn_delete_node.setStyleSheet("background-color: #dc3545; color: white;")
         self.btn_delete_node.clicked.connect(self.delete_node)
         self.btn_delete_node.setEnabled(False)
         node_btn_layout.addWidget(self.btn_delete_node)
         
-        self.btn_apply = QPushButton("Aplicar")
+        self.btn_apply = QPushButton(" Aplicar")
+        self.btn_apply.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         self.btn_apply.setStyleSheet("background-color: #007bff; color: white;")
         self.btn_apply.clicked.connect(self.apply_node_changes)
         self.btn_apply.setEnabled(False)
@@ -755,7 +765,8 @@ class WorkflowPanel(QWidget):
         self.prop_script.setMinimumWidth(150)
         script_layout.addWidget(self.prop_script)
         
-        btn_refresh_scripts = QPushButton("...")
+        btn_refresh_scripts = QPushButton()
+        btn_refresh_scripts.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         btn_refresh_scripts.setMaximumWidth(30)
         btn_refresh_scripts.setToolTip("Actualizar lista de scripts")
         btn_refresh_scripts.clicked.connect(self.load_script_list)
