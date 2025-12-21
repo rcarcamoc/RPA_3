@@ -10,10 +10,11 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QLabel, 
     QTextEdit, QGroupBox, QFormLayout, QLineEdit, QComboBox,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
-    QGraphicsPathItem, QMessageBox, QFileDialog, QApplication
+    QGraphicsPathItem, QGraphicsEllipseItem, QMessageBox, QFileDialog, QApplication,
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
-from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter
+from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker
 from pathlib import Path
 from datetime import datetime
 import json
@@ -84,6 +85,38 @@ class WorkflowExecutorWorker(QThread):
             self.executor.stop()
 
 
+
+class OutputPortItem(QGraphicsEllipseItem):
+    """Puerto de salida visual para crear conexiones."""
+    
+    def __init__(self, parent=None):
+        super().__init__(-6, -6, 12, 12, parent)
+        self.setBrush(QBrush(QColor("#ffffff")))
+        self.setPen(QPen(QColor("#333333"), 1.5))
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+    
+    def hoverEnterEvent(self, event):
+        self.setBrush(QBrush(QColor("#ff0000"))) # Red on hover
+        super().hoverEnterEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QBrush(QColor("#ffffff")))
+        super().hoverLeaveEvent(event)
+    
+    def mousePressEvent(self, event):
+        # Iniciar arrastre de conexión
+        views = self.scene().views()
+        if views:
+            view = views[0]
+            if hasattr(view, 'start_connection_drag'):
+                # Start drag from parent Node center-right
+                view.start_connection_drag(self.parentItem(), self.mapToScene(self.rect().center()))
+                event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
 class NodeGraphicsItem(QGraphicsRectItem):
     """Item grafico para representar un nodo en el canvas (con drag-drop)"""
     
@@ -120,6 +153,11 @@ class NodeGraphicsItem(QGraphicsRectItem):
         
         # Cursor de arrastre
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+        
+        # Agregar puerto de salida (si no es END)
+        if node.type != NodeType.END:
+            self.output_port = OutputPortItem(self)
+            self.output_port.setPos(150, 30)  # Lado derecho, centro vertical
     
     def get_center(self) -> QPointF:
         return QPointF(self.pos().x() + 75, self.pos().y() + 30)
@@ -149,6 +187,21 @@ class NodeGraphicsItem(QGraphicsRectItem):
     
     def mouseReleaseEvent(self, event):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+        
+        # Detectar si se soltó sobre un edge (para insertar nodo)
+        if self.scene():
+            # Buscar intersecciones con edges
+            colliding = self.scene().collidingItems(self)
+            for item in colliding:
+                if isinstance(item, EdgeGraphicsItem):
+                    # Solicitar división del edge
+                    views = self.scene().views()
+                    if views:
+                        view = views[0]
+                        if hasattr(view, 'request_split_edge'):
+                            view.request_split_edge(self, item)
+                            break
+        
         super().mouseReleaseEvent(event)
     
     def mouseDoubleClickEvent(self, event):
@@ -210,12 +263,20 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         path.lineTo(end)
         
         self.setPath(path)
+    
+    def shape(self):
+        """Area de colision mas ancha para facilitar seleccion."""
+        path_stroker = QPainterPathStroker()
+        path_stroker.setWidth(20) # Ancho de deteccion
+        return path_stroker.createStroke(self.path())
 
 
 class WorkflowCanvas(QGraphicsView):
     """Canvas para visualizar workflows"""
     
     node_selected = pyqtSignal(object)  # Node
+    connection_created = pyqtSignal(str, str) # from_id, to_id
+    edge_split_requested = pyqtSignal(object, str, str) # node_item, from_id, to_id
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -231,6 +292,11 @@ class WorkflowCanvas(QGraphicsView):
         
         self.node_items = {}
         self.edge_items = []
+        
+        # Estado de conexión visual
+        self.is_connecting = False
+        self.temp_line = None
+        self.source_node = None
     
     def load_workflow(self, workflow: Workflow):
         self.scene.clear()
@@ -260,6 +326,60 @@ class WorkflowCanvas(QGraphicsView):
         for item in self.node_items.values():
             item.highlight(False)
     
+    def start_connection_drag(self, source_node, start_pos):
+        """Inicia el arrastre de una nueva conexión."""
+        self.is_connecting = True
+        self.source_node = source_node
+        
+        self.temp_line = QGraphicsPathItem()
+        self.temp_line.setPen(QPen(QColor("#666666"), 2, Qt.PenStyle.DashLine))
+        self.scene.addItem(self.temp_line)
+        
+        # Iniciar linea
+        path = QPainterPath(start_pos)
+        path.lineTo(start_pos)
+        self.temp_line.setPath(path)
+    
+    def mouseMoveEvent(self, event):
+        if self.is_connecting and self.temp_line:
+            # Actualizar linea temporal
+            start_pos = self.temp_line.path().elementAt(0)
+            end_pos = self.mapToScene(event.pos())
+            
+            path = QPainterPath(QPointF(start_pos.x, start_pos.y))
+            path.lineTo(end_pos)
+            self.temp_line.setPath(path)
+            
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if self.is_connecting:
+            # Finalizar conexión
+            end_pos = self.mapToScene(event.pos())
+            items = self.scene.items(end_pos)
+            
+            target_node = None
+            for item in items:
+                if isinstance(item, NodeGraphicsItem) and item != self.source_node:
+                    target_node = item
+                    break
+                elif isinstance(item, QGraphicsTextItem) and item.parentItem() != self.source_node:
+                    if isinstance(item.parentItem(), NodeGraphicsItem):
+                         target_node = item.parentItem()
+                         break
+            
+            if target_node:
+                self.connection_created.emit(self.source_node.node.id, target_node.node.id)
+            
+            # Limpiar estado
+            self.is_connecting = False
+            self.source_node = None
+            if self.temp_line:
+                self.scene.removeItem(self.temp_line)
+                self.temp_line = None
+                
+        super().mouseReleaseEvent(event)
+
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         item = self.itemAt(event.pos())
@@ -333,6 +453,12 @@ class WorkflowCanvas(QGraphicsView):
         scene_pos = self.mapToScene(pos)
         # Por ahora solo loggeamos, la implementacion real conectara con el panel
         print(f"[Canvas] Agregar nodo {node_type} en ({scene_pos.x()}, {scene_pos.y()})")
+        
+    def request_split_edge(self, node_item, edge_item):
+        """Solicita dividir un edge con un nodo."""
+        from_id = edge_item.from_item.node.id
+        to_id = edge_item.to_item.node.id
+        self.edge_split_requested.emit(node_item.node, from_id, to_id)
 
 
 class WorkflowPanel(QWidget):
@@ -532,6 +658,8 @@ class WorkflowPanel(QWidget):
         self.canvas = WorkflowCanvas()
         self.canvas.setMinimumSize(400, 300)
         self.canvas.node_selected.connect(self.on_node_selected)
+        self.canvas.connection_created.connect(self.on_connection_created)
+        self.canvas.edge_split_requested.connect(self.on_edge_split_requested)
         center_layout.addWidget(self.canvas)
         
         splitter.addWidget(center_widget)
@@ -1136,6 +1264,113 @@ class WorkflowPanel(QWidget):
                 self.current_workflow.edges.append(Edge(from_node=node.id, to_node=next_node_id))
         
         # Actualizar canvas
+        # Actualizar canvas
         self.canvas.load_workflow(self.current_workflow)
         self.log(f"Nodo actualizado: {node.label}")
+
+    def on_connection_created(self, from_id: str, to_id: str):
+        """Maneja la creación visual de conexiones."""
+        if not self.current_workflow:
+            return
+            
+        from_node = self.current_workflow.get_node(from_id)
+        if not from_node:
+            return
+
+        # Prevenir auto-conexión
+        if from_id == to_id:
+            QMessageBox.warning(self, "Acción inválida", "No puedes conectar un nodo consigo mismo.")
+            return
+
+        # Lógica para DecisionNode
+        if isinstance(from_node, DecisionNode):
+            # Preguntar camino
+            items = []
+            if not from_node.true_path: items.append("TRUE")
+            if not from_node.false_path: items.append("FALSE")
+            
+            # Si caminos están ocupados, permitir reescribir? Si.
+            items = ["TRUE", "FALSE"]
+            
+            path, ok = QInputDialog.getItem(self, "Conexión de Decisión", 
+                f"Conectar '{from_node.label}' -> '{to_id}' como:", items, 0, False)
+            
+            if not ok or not path:
+                return
+            
+            # Actualizar modelo
+            if path == "TRUE":
+                from_node.true_path = to_id
+            else:
+                from_node.false_path = to_id
+            
+            # Reconstruir edges para asegurar consistencia
+            # Eliminar edges antiguos de este nodo que coincidan con el path si es necesario
+            # Simplificación: Agregar el nuevo edge. El canvas redibujará todo.
+            # Nota: Si ya existía edge visual para ese path, deberíamos limpiarlo.
+            # Pero Workflow.edges es lista simple. 
+            pass # Se agrega abajo
+            
+        else:
+            # Action/Loop/Start -> Solo 1 salida normal
+            # Eliminar conexiones salientes previas
+            self.current_workflow.edges = [e for e in self.current_workflow.edges if e.from_node != from_id]
+            
+            # Si estamos editando el nodo seleccionado, actualizar UI text
+            if hasattr(self, 'selected_node') and self.selected_node and self.selected_node.id == from_id:
+                self.prop_next_node.setText(to_id)
+        
+        # Eliminar cualquier edge duplicado exacto
+        self.current_workflow.edges = [e for e in self.current_workflow.edges 
+                                     if not (e.from_node == from_id and e.to_node == to_id)]
+                                     
+        # Agregar nueva conexión
+        self.current_workflow.edges.append(Edge(from_node=from_id, to_node=to_id))
+        
+        # Recargar canvas
+        self.canvas.load_workflow(self.current_workflow)
+        self.log(f"Conexión creada: {from_id} -> {to_id}")
+
+    def on_edge_split_requested(self, node: Node, from_id: str, to_id: str):
+        """Maneja la inserción de un nodo en una conexión existente."""
+        if not self.current_workflow: return
+        
+        reply = QMessageBox.question(
+            self, "Insertar Nodo",
+            f"¿Insertar nodo '{node.label}' entre '{from_id}' y '{to_id}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 1. Eliminar edge viejo
+        self.current_workflow.edges = [e for e in self.current_workflow.edges 
+            if not (e.from_node == from_id and e.to_node == to_id)]
+            
+        # Si era DecisionNode (A), actualizar path
+        from_node = self.current_workflow.get_node(from_id)
+        if isinstance(from_node, DecisionNode):
+            if from_node.true_path == to_id:
+                from_node.true_path = node.id
+            if from_node.false_path == to_id:
+                from_node.false_path = node.id
+        
+        # 2. Crear edge (A->Nodo)
+        self.current_workflow.edges.append(Edge(from_node=from_id, to_node=node.id))
+        
+        # 3. Crear edge (Nodo->B)
+        if not isinstance(node, DecisionNode):
+            self.current_workflow.edges.append(Edge(from_node=node.id, to_node=to_id))
+            # Actualizar next_node visualmente si seleccionamos el nodo insertado
+            if hasattr(self, 'selected_node') and self.selected_node and self.selected_node.id == node.id:
+                 self.prop_next_node.setText(to_id)
+        else:
+             # Si insertamos DecisionNode, conectamos true_path por defecto
+             node.true_path = to_id
+             self.current_workflow.edges.append(Edge(from_node=node.id, to_node=to_id))
+        
+        # Recargar
+        self.canvas.load_workflow(self.current_workflow)
+        self.log(f"Nodo insertado: {from_id} -> {node.id} -> {to_id}")
 
