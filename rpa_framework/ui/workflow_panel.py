@@ -150,6 +150,41 @@ class NodeGraphicsItem(QGraphicsRectItem):
     def mouseReleaseEvent(self, event):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().mouseReleaseEvent(event)
+    
+    def mouseDoubleClickEvent(self, event):
+        """Abre el script asociado al hacer doble click"""
+        script_path = None
+        
+        # Obtener script segun tipo de nodo
+        if hasattr(self.node, 'script') and self.node.script:
+            script_path = self.node.script
+        
+        if script_path:
+            # Construir ruta absoluta
+            from pathlib import Path
+            import subprocess
+            
+            full_path = Path(script_path)
+            if not full_path.is_absolute():
+                full_path = Path.cwd() / script_path
+            
+            if full_path.exists():
+                # Abrir con el programa predeterminado del sistema
+                try:
+                    os.startfile(str(full_path))
+                except Exception as e:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(None, "Error", f"No se pudo abrir el archivo:\n{e}")
+            else:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(None, "Archivo no encontrado", 
+                    f"El script no existe:\n{full_path}\n\nCrealo primero.")
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(None, "Sin script", 
+                f"Este nodo ({self.node.type.value}) no tiene script asociado.")
+        
+        super().mouseDoubleClickEvent(event)
 
 
 class EdgeGraphicsItem(QGraphicsPathItem):
