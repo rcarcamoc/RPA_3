@@ -11,10 +11,10 @@ from PyQt6.QtWidgets import (
     QTextEdit, QGroupBox, QFormLayout, QLineEdit, QComboBox,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
     QGraphicsPathItem, QGraphicsEllipseItem, QMessageBox, QFileDialog, QApplication,
-    QInputDialog, QAction
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
-from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence
+from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence, QAction
 from pathlib import Path
 from datetime import datetime
 import json
@@ -318,6 +318,10 @@ class WorkflowCanvas(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
+        # Mejorar UX de zoom
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        
         self.setStyleSheet("background-color: #f5f5f5; border: 1px solid #ccc;")
         
         self.node_items = {}
@@ -327,6 +331,45 @@ class WorkflowCanvas(QGraphicsView):
         self.is_connecting = False
         self.temp_line = None
         self.source_node = None
+        
+        # Estado Navegación
+        self._zoom = 1.0
+        self._panning = False
+        self._pan_start = None
+
+    def wheelEvent(self, event):
+        """Zoom con Ctrl + Rueda"""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self.zoom_in()
+            else:
+                self.zoom_out()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+            
+    def zoom_in(self):
+        self.scale_view(1.2)
+        
+    def zoom_out(self):
+        self.scale_view(1 / 1.2)
+        
+    def zoom_reset_view(self):
+        self._zoom = 1.0
+        self.resetTransform()
+        
+    def scale_view(self, factor):
+        new_zoom = self._zoom * factor
+        # Limitar zoom (0.2x a 5.0x)
+        if new_zoom < 0.2: 
+            factor = 0.2 / self._zoom
+            new_zoom = 0.2
+        elif new_zoom > 5.0:
+            factor = 5.0 / self._zoom
+            new_zoom = 5.0
+            
+        self._zoom = new_zoom
+        self.scale(factor, factor)
     
     def load_workflow(self, workflow: Workflow):
         self.scene.clear()
@@ -371,6 +414,16 @@ class WorkflowCanvas(QGraphicsView):
         self.temp_line.setPath(path)
     
     def mouseMoveEvent(self, event):
+        if self._panning:
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            delta = event.pos() - self._pan_start
+            h_bar.setValue(h_bar.value() - delta.x())
+            v_bar.setValue(v_bar.value() - delta.y())
+            self._pan_start = event.pos()
+            event.accept()
+            return
+            
         if self.is_connecting and self.temp_line:
             # Actualizar linea temporal
             start_pos = self.temp_line.path().elementAt(0)
@@ -383,6 +436,12 @@ class WorkflowCanvas(QGraphicsView):
         super().mouseMoveEvent(event)
     
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton and self._panning:
+            self._panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+
         if self.is_connecting:
             # Finalizar conexión
             end_pos = self.mapToScene(event.pos())
@@ -418,12 +477,20 @@ class WorkflowCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        item = self.itemAt(event.pos())
-        if isinstance(item, QGraphicsTextItem):
-            item = item.parentItem()
-        if isinstance(item, NodeGraphicsItem):
-            self.node_selected.emit(item.node)
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+            
+            # Detectar selección de nodo
+            item = self.itemAt(event.pos())
+            if isinstance(item, QGraphicsTextItem):
+                item = item.parentItem()
+            if isinstance(item, NodeGraphicsItem):
+                self.node_selected.emit(item.node)
     
     def contextMenuEvent(self, event):
         """Menu contextual con click derecho"""
@@ -553,6 +620,24 @@ class WorkflowPanel(QWidget):
         redo_action = self.undo_stack.createRedoAction(self, "Rehacer")
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.addAction(redo_action)
+        
+        header_layout.addSpacing(10)
+        
+        # Zoom Controls
+        self.btn_zoom_out = QPushButton("−")
+        self.btn_zoom_out.setToolTip("Alejar (Ctrl + Rueda)")
+        self.btn_zoom_out.setFixedWidth(30)
+        header_layout.addWidget(self.btn_zoom_out)
+        
+        self.btn_zoom_reset = QPushButton("1:1")
+        self.btn_zoom_reset.setToolTip("Resetear Zoom")
+        self.btn_zoom_reset.setFixedWidth(35)
+        header_layout.addWidget(self.btn_zoom_reset)
+        
+        self.btn_zoom_in = QPushButton("+")
+        self.btn_zoom_in.setToolTip("Acercar (Ctrl + Rueda)")
+        self.btn_zoom_in.setFixedWidth(30)
+        header_layout.addWidget(self.btn_zoom_in)
         
         btn_new = QPushButton("+ Nuevo")
         btn_new.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 5px 15px;")
@@ -735,6 +820,12 @@ class WorkflowPanel(QWidget):
         self.canvas.node_selected.connect(self.on_node_selected)
         self.canvas.connection_created.connect(self.on_connection_created)
         self.canvas.edge_split_requested.connect(self.on_edge_split_requested)
+        
+        # Conectar controles de Zoom
+        self.btn_zoom_in.clicked.connect(self.canvas.zoom_in)
+        self.btn_zoom_out.clicked.connect(self.canvas.zoom_out)
+        self.btn_zoom_reset.clicked.connect(self.canvas.zoom_reset_view)
+        
         center_layout.addWidget(self.canvas)
         
         splitter.addWidget(center_widget)
