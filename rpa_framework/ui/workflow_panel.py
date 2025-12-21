@@ -189,12 +189,22 @@ class NodeGraphicsItem(QGraphicsRectItem):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().mouseReleaseEvent(event)
         
+        # Solo intentar split si hubo arrastre (evita activarse con click simple o doble click)
+        start_pos = event.buttonDownScenePos(Qt.MouseButton.LeftButton)
+        end_pos = event.scenePos()
+        if (start_pos - end_pos).manhattanLength() < 5:
+            return
+        
         # Detectar si se soltó sobre un edge (para insertar nodo)
         if self.scene():
             # Buscar intersecciones con edges
             colliding = self.scene().collidingItems(self)
             for item in colliding:
                 if isinstance(item, EdgeGraphicsItem):
+                    # Ignorar propios edges conectadas
+                    if item.from_item == self or item.to_item == self:
+                        continue
+                        
                     # Solicitar división del edge
                     views = self.scene().views()
                     if views:
