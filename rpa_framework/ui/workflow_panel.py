@@ -461,9 +461,24 @@ class WorkflowPanel(QWidget):
         self.prop_type.currentTextChanged.connect(self.on_type_changed)
         props_layout.addRow("Tipo:", self.prop_type)
         
-        self.prop_script = QLineEdit()
-        self.prop_script.setPlaceholderText("scripts/mi_script.py")
-        props_layout.addRow("Script:", self.prop_script)
+        # Script selector con combo y boton de refrescar
+        script_layout = QHBoxLayout()
+        self.prop_script = QComboBox()
+        self.prop_script.setEditable(True)  # Permite escribir si es necesario
+        self.prop_script.setPlaceholderText("Seleccionar script...")
+        self.prop_script.setMinimumWidth(150)
+        script_layout.addWidget(self.prop_script)
+        
+        btn_refresh_scripts = QPushButton("...")
+        btn_refresh_scripts.setMaximumWidth(30)
+        btn_refresh_scripts.setToolTip("Actualizar lista de scripts")
+        btn_refresh_scripts.clicked.connect(self.load_script_list)
+        script_layout.addWidget(btn_refresh_scripts)
+        
+        props_layout.addRow("Script:", script_layout)
+        
+        # Cargar lista inicial de scripts
+        self.load_script_list()
         
         self.prop_condition = QLineEdit()
         self.prop_condition.setPlaceholderText("variable == 'valor'")
@@ -574,6 +589,128 @@ class WorkflowPanel(QWidget):
             except Exception as e:
                 self.log(f"Error cargando {p.name}: {e}")
     
+    def load_script_list(self):
+        """Carga lista de scripts disponibles para el combo."""
+        current_text = self.prop_script.currentText()
+        
+        # Desconectar señal temporalmente para evitar triggers
+        try:
+            self.prop_script.currentTextChanged.disconnect(self.on_script_selected)
+        except:
+            pass
+        
+        self.prop_script.clear()
+        
+        # Directorios donde buscar scripts
+        script_dirs = ["scripts", "recordings", "quick_scripts"]
+        scripts_found = []
+        
+        for dir_name in script_dirs:
+            dir_path = Path(dir_name)
+            if dir_path.exists():
+                for py_file in sorted(dir_path.glob("*.py")):
+                    rel_path = str(py_file).replace("\\", "/")
+                    scripts_found.append(rel_path)
+        
+        # Agregar al combo
+        if scripts_found:
+            self.prop_script.addItems(scripts_found)
+        
+        # Agregar opcion para examinar archivos externos
+        self.prop_script.addItem("📁 Examinar...")
+        
+        # Reconectar señal
+        self.prop_script.currentTextChanged.connect(self.on_script_selected)
+        
+        # Restaurar texto anterior si existe
+        if current_text and current_text != "📁 Examinar...":
+            self.prop_script.setCurrentText(current_text)
+    
+    def on_script_selected(self, text: str):
+        """Maneja la selección de script, incluyendo 'Examinar...'"""
+        if text == "📁 Examinar...":
+            self.browse_for_script()
+    
+    def browse_for_script(self):
+        """Abre el selector de archivos para elegir un script externo."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Seleccionar Script Python",
+            "", "Python Files (*.py);;All Files (*.*)"
+        )
+        
+        if not file_path:
+            # Usuario canceló, deseleccionar
+            self.prop_script.setCurrentIndex(-1)
+            return
+        
+        file_path = Path(file_path)
+        scripts_dir = Path("scripts")
+        
+        # Verificar si ya está en la carpeta de scripts
+        try:
+            file_path.relative_to(scripts_dir.resolve())
+            # Ya está en scripts, usar directamente
+            rel_path = str(file_path).replace("\\", "/")
+            self.prop_script.setCurrentText(rel_path)
+            return
+        except ValueError:
+            pass
+        
+        # Preguntar si quiere copiar
+        reply = QMessageBox.question(
+            self, "Copiar Script",
+            f"El archivo está fuera de la carpeta 'scripts/'.\n\n"
+            f"¿Deseas copiarlo a la carpeta de scripts?\n\n"
+            f"Archivo: {file_path.name}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+        )
+        
+        if reply == QMessageBox.StandardButton.Cancel:
+            self.prop_script.setCurrentIndex(-1)
+            return
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Copiar archivo
+            import shutil
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = scripts_dir / file_path.name
+            
+            # Si ya existe, preguntar
+            if dest_path.exists():
+                overwrite = QMessageBox.question(
+                    self, "Archivo existente",
+                    f"Ya existe '{file_path.name}' en scripts/.\n¿Sobrescribir?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if overwrite != QMessageBox.StandardButton.Yes:
+                    self.prop_script.setCurrentIndex(-1)
+                    return
+            
+            shutil.copy2(file_path, dest_path)
+            self.log(f"Script copiado: {dest_path}")
+            
+            # Recargar lista y seleccionar el copiado
+            self.load_script_list()
+            self.prop_script.setCurrentText(str(dest_path).replace("\\", "/"))
+        else:
+            # Usar ruta externa directamente
+            self.prop_script.setCurrentText(str(file_path).replace("\\", "/"))
+    
+    def generate_node_id(self) -> str:
+        """Genera un ID único para un nuevo nodo."""
+        if not self.current_workflow:
+            return "n1"
+        
+        # Buscar el número más alto existente
+        max_num = 0
+        for node in self.current_workflow.nodes:
+            if node.id.startswith("n") and node.id[1:].isdigit():
+                num = int(node.id[1:])
+                if num > max_num:
+                    max_num = num
+        
+        return f"n{max_num + 1}"
+    
     def on_node_selected(self, node: Node):
         """Muestra info del nodo seleccionado en el panel de propiedades."""
         self.selected_node = node
@@ -596,13 +733,13 @@ class WorkflowPanel(QWidget):
         
         # Llenar segun tipo
         if isinstance(node, ActionNode):
-            self.prop_script.setText(node.script)
+            self.prop_script.setCurrentText(node.script)
         elif isinstance(node, DecisionNode):
             self.prop_condition.setText(node.condition)
             self.prop_true_path.setText(node.true_path or "")
             self.prop_false_path.setText(node.false_path or "")
         elif isinstance(node, LoopNode):
-            self.prop_script.setText(node.script)
+            self.prop_script.setCurrentText(node.script)
             self.prop_iterations.setText(node.iterations)
         
         # Buscar conexion siguiente (para nodos no-decision)
@@ -832,9 +969,15 @@ class WorkflowPanel(QWidget):
     
     def clear_node_fields(self):
         """Limpia todos los campos del editor de nodos."""
-        self.prop_id.clear()
+        # Generar ID automatico para el proximo nodo
+        if self.current_workflow:
+            next_id = self.generate_node_id()
+            self.prop_id.setText(next_id)
+        else:
+            self.prop_id.clear()
+        
         self.prop_label.clear()
-        self.prop_script.clear()
+        self.prop_script.setCurrentIndex(-1)  # Deseleccionar combo
         self.prop_condition.clear()
         self.prop_true_path.clear()
         self.prop_false_path.clear()
@@ -866,12 +1009,12 @@ class WorkflowPanel(QWidget):
         node_label = self.prop_label.text().strip()
         node_type = self.prop_type.currentText()
         
+        # Auto-generar ID si está vacío
         if not node_id:
-            QMessageBox.warning(self, "Error", "Ingresa un ID para el nodo")
-            return
+            node_id = self.generate_node_id()
         
         if not node_label:
-            node_label = node_id
+            node_label = f"Nodo {node_id}"
         
         # Verificar ID unico
         if self.current_workflow.get_node(node_id):
@@ -888,7 +1031,7 @@ class WorkflowPanel(QWidget):
             new_node = object.__new__(ActionNode)
             new_node.id = node_id
             new_node.label = node_label
-            new_node.script = self.prop_script.text().strip()
+            new_node.script = self.prop_script.currentText().strip()
             new_node.type = NodeType.ACTION
             new_node.position = new_pos
         elif node_type == "decision":
@@ -904,7 +1047,7 @@ class WorkflowPanel(QWidget):
             new_node = object.__new__(LoopNode)
             new_node.id = node_id
             new_node.label = node_label
-            new_node.script = self.prop_script.text().strip()
+            new_node.script = self.prop_script.currentText().strip()
             new_node.iterations = self.prop_iterations.text().strip() or "1"
             new_node.loop_var = "_loop_index"
             new_node.type = NodeType.LOOP
