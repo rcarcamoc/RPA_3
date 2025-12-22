@@ -111,12 +111,6 @@ class WorkflowExecutor:
     def _execute_node(self, node: Node) -> Optional[str]:
         """
         Ejecuta un nodo individual y devuelve el ID del siguiente nodo.
-        
-        Args:
-            node: Nodo a ejecutar
-            
-        Returns:
-            ID del siguiente nodo a ejecutar, o None si no hay siguiente
         """
         # Skip annotation nodes (they're just for documentation)
         if node.type == NodeType.ANNOTATION:
@@ -131,14 +125,61 @@ class WorkflowExecutor:
             return self._execute_loop(node)
         elif node.type == NodeType.DATABASE:
             return self._execute_database(node)
+        elif node.type == NodeType.DELAY:
+            return self._execute_delay(node)
+        elif node.type == NodeType.END:
+             self.logger.log("⏹️ Nodo Final alcanzado.")
+             return None
         else:
             # Nodos START u otros: solo continuar al siguiente
             return self.workflow.get_next_node(node.id)
+            
+    def _execute_delay(self, node) -> Optional[str]:
+        import time
+        from core.delay_node import DelayNode
+        if isinstance(node, DelayNode):
+            sec = node.delay_seconds
+            self.logger.log(f"⏳ Pausando por {sec} segundos...")
+            time.sleep(sec)
+        return self.workflow.get_next_node(node.id)
     
     def _execute_action(self, node: ActionNode) -> Optional[str]:
-        """Ejecuta un nodo de acción (script Python)"""
+        """Ejecuta un nodo de acción (script Python o comando)"""
+        
+        # 1. Ejecución de Comando de Sistema
+        if node.command:
+             self.logger.log(f"💻 Ejecutando comando: {node.command}")
+             try:
+                # Preparar entorno
+                env = os.environ.copy()
+                for key, value in self.context.items():
+                    env[f"VAR_{key}"] = str(value)
+                
+                # Ejecutar comando en Shell
+                result = subprocess.run(
+                    node.command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=env
+                )
+                
+                if result.returncode == 0:
+                     self.logger.log(f"✅ Comando ejecutado exitosamente")
+                     if result.stdout: self.logger.log(f"   Salida: {result.stdout.strip()[:200]}")
+                else:
+                     self.logger.log(f"❌ Error en comando (código {result.returncode})")
+                     if result.stderr: self.logger.log(f"   Error: {result.stderr.strip()[:200]}")
+                     
+             except Exception as e:
+                 self.logger.log(f"❌ Error ejecutando comando: {e}")
+             
+             return self.workflow.get_next_node(node.id)
+
+        # 2. Ejecución de Script Python
         if not node.script:
-            self.logger.log("⚠️ Nodo sin script, saltando")
+            self.logger.log("⚠️ Nodo sin script ni comando, saltando")
             return self.workflow.get_next_node(node.id)
         
         self.logger.log(f"🐍 Ejecutando script: {node.script}")

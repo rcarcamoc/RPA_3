@@ -1,0 +1,66 @@
+[2025-12-21 23:30:38] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-21 23:30:38] [INFO]    Variables iniciales: {}
+[2025-12-21 23:30:38] [INFO] ============================================================
+[2025-12-21 23:30:38] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-21 23:30:38] [INFO] ============================================================
+[2025-12-21 23:30:38] [INFO] 
+📍 Nodo actual: System Command (action)
+[2025-12-21 23:30:38] [INFO] 🐍 Ejecutando script: echo "Hello"
+[2025-12-21 23:30:38] [INFO] ❌ Error en script (código 2)
+[2025-12-21 23:30:38] [INFO]    Error: python: can't open file 'c:\\Desarrollo\\RPA_3\\rpa_framework\\echo "Hello"': [Errno 22] Invalid argument
+
+[2025-12-21 23:30:38] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-21 23:30:38] [INFO] ============================================================
+[2025-12-21 23:30:38] [INFO] ✅ Ejecución completada: success
+[2025-12-21 23:30:38] [INFO]    Variables finales: {}
+[2025-12-21 23:30:38] [INFO] ============================================================
+[2025-12-21 23:30:48] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-21 23:30:48] [INFO]    Variables iniciales: {}
+[2025-12-21 23:30:48] [INFO] ============================================================
+[2025-12-21 23:30:48] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-21 23:30:48] [INFO] ============================================================
+[2025-12-21 23:30:48] [INFO] 
+📍 Nodo actual: System Command (action)
+[2025-12-21 23:30:48] [INFO] 🐍 Ejecutando script: echo "Hello"
+[2025-12-21 23:30:48] [INFO] ❌ Error en script (código 2)
+[2025-12-21 23:30:48] [INFO]    Error: python: can't open file 'c:\\Desarrollo\\RPA_3\\rpa_framework\\echo "Hello"': [Errno 22] Invalid argument
+
+[2025-12-21 23:30:48] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-21 23:30:48] [INFO] ============================================================
+[2025-12-21 23:30:48] [INFO] ✅ Ejecución completada: success
+[2025-12-21 23:30:48] [INFO]    Variables finales: {}
+[2025-12-21 23:30:48] [INFO] ============================================================
+[2025-12-21 23:37:23] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-21 23:37:23] [INFO]    Variables iniciales: {}
+[2025-12-21 23:37:23] [INFO] ============================================================
+[2025-12-21 23:37:23] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-21 23:37:23] [INFO] ============================================================
+[2025-12-21 23:37:23] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-21 23:37:23] [INFO] 🐍 Ejecutando script: doctor_matcher.py
+[2025-12-21 23:37:23] [INFO] ❌ Error en script (código 1)
+[2025-12-21 23:37:23] [INFO]    Error: Traceback (most recent call last):
+  File "c:\Desarrollo\RPA_3\rpa_framework\doctor_matcher.py", line 20, in <module>
+    import mysql.connector
+ModuleNotFoundError: No module named 'mysql'
+
+[2025-12-21 23:37:23] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-21 23:37:23] [INFO] ============================================================
+[2025-12-21 23:37:23] [INFO] ✅ Ejecución completada: success
+[2025-12-21 23:37:23] [INFO]    Variables finales: {}
+[2025-12-21 23:37:23] [INFO] ============================================================
+[2025-12-21 23:42:22] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-21 23:42:23] [INFO]    Variables iniciales: {}
+[2025-12-21 23:42:23] [INFO] ============================================================
+[2025-12-21 23:42:23] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-21 23:42:23] [INFO] ============================================================
+[2025-12-21 23:42:23] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-21 23:42:23] [INFO] 
+📍 Nodo actual: Delay (delay)
+[2025-12-21 23:42:23] [INFO] ⏳ Pausando por 5 segundos...
+[2025-12-21 23:42:28] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-21 23:42:28] [INFO] ============================================================
+[2025-12-21 23:42:28] [INFO] ✅ Ejecución completada: success
+[2025-12-21 23:42:28] [INFO]    Variables finales: {}
+[2025-12-21 23:42:28] [INFO] ============================================================

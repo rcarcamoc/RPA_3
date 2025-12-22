@@ -53,7 +53,7 @@ class PropertiesPanel(QWidget):
         
         self.prop_script = QComboBox()
         self.prop_script.setEditable(True)
-        self.prop_script.setPlaceholderText("Seleccionar o escribir script...")
+        self.prop_script.setPlaceholderText("Seleccionar o escribir script Python...")
         script_layout.addWidget(self.prop_script)
         
         btn_browse = QPushButton("...")
@@ -61,11 +61,34 @@ class PropertiesPanel(QWidget):
         btn_browse.clicked.connect(self.browse_script)
         script_layout.addWidget(btn_browse)
         
-        form_layout.addRow("Script:", self.script_container)
+        form_layout.addRow("Script Python:", self.script_container)
+        
+        self.prop_command = QLineEdit()
+        self.prop_command.setPlaceholderText("Ej: echo 'Hello' >> log.txt")
+        form_layout.addRow("Comando:", self.prop_command)
+
+        # Presets combo
+        self.cmd_presets = QComboBox()
+        self.cmd_presets.addItem("--- Predefinidos ---")
+        self.cmd_presets.addItems([
+            "Abrir Notepad: start notepad",
+            "Abrir Chrome: start chrome",
+            "Abrir URL: start https://google.com",
+            "Ping Google: ping google.com",
+            "Listar Archivos: dir",
+            "Info Sistema: systeminfo",
+            "Maximizar (PowerShell): powershell -c (New-Object -ComObject WScript.Shell).SendKeys('% x')"
+        ])
+        self.cmd_presets.currentIndexChanged.connect(self.apply_preset)
+        form_layout.addRow("Presets:", self.cmd_presets)
         
         self.prop_iterations = QLineEdit()
         self.prop_iterations.setPlaceholderText("Ej: 5, o variable")
         form_layout.addRow("Iteraciones:", self.prop_iterations)
+        
+        self.prop_delay = QLineEdit()
+        self.prop_delay.setPlaceholderText("Segundos (ej: 5)")
+        form_layout.addRow("Delay (s):", self.prop_delay)
         
         # --- Campos Decision ---
         self.prop_condition = QLineEdit()
@@ -137,15 +160,11 @@ class PropertiesPanel(QWidget):
         
         # 1. Resetear visibilidad
         self.input_widgets = [
-            self.script_container, self.prop_iterations, self.prop_condition,
-            self.db_group, self.note_group
+            self.script_container, self.prop_command, self.cmd_presets, self.prop_iterations, self.prop_delay, 
+            self.prop_condition, self.db_group, self.note_group
         ]
         for w in self.input_widgets:
-            # En QFormLayout, ocultar el widget oculta la fila generalmente, 
-            # pero a veces queda la label. Vamos a intentar setVisible.
             w.setVisible(False)
-            
-            # Hack para ocultar la label asociada en el FormLayout
             if self.group.layout().labelForField(w):
                 self.group.layout().labelForField(w).setVisible(False)
 
@@ -158,14 +177,27 @@ class PropertiesPanel(QWidget):
         t = node.type
         
         if t == NodeType.ACTION or t == NodeType.LOOP:
-            self._show_field(self.script_container)
-            if hasattr(node, 'script'):
-                self.prop_script.setCurrentText(node.script)
+            # Mostrar Script por defecto, pero si tiene comando mostrar comando
+            # Permitir ambos? Generalmente es uno u otro.
+            if hasattr(node, 'command') and node.command:
+                self._show_field(self.prop_command)
+                self._show_field(self.cmd_presets)
+                self.prop_command.setText(node.command)
+            else:
+                 self._show_field(self.script_container)
+                 if hasattr(node, 'script'):
+                    self.prop_script.setCurrentText(node.script)
                 
         if t == NodeType.LOOP:
              self._show_field(self.prop_iterations)
              if hasattr(node, 'iterations'):
                  self.prop_iterations.setText(str(node.iterations))
+        
+        if t == NodeType.DELAY:
+             self._show_field(self.prop_delay)
+             from core.delay_node import DelayNode
+             if isinstance(node, DelayNode):
+                 self.prop_delay.setText(str(node.delay_seconds))
                  
         if t == NodeType.DECISION:
             self._show_field(self.prop_condition)
@@ -215,11 +247,24 @@ class PropertiesPanel(QWidget):
         node.label = self.prop_label.text()
         
         t = node.type
-        if t == NodeType.ACTION or t == NodeType.LOOP:
-            node.script = self.prop_script.currentText()
-        
+        if t == NodeType.ACTION:
+            # Si el campo comando esta visible y tiene texto, usarlo
+            if self.prop_command.isVisible() and self.prop_command.text():
+                node.command = self.prop_command.text()
+                node.script = "" # Prioridad a comando? O mantener ambos? Limpiamos script para evitar confusion
+            else:
+                node.script = self.prop_script.currentText()
+                node.command = ""
+
         if t == NodeType.LOOP:
+            node.script = self.prop_script.currentText()
             node.iterations = self.prop_iterations.text()
+            
+        if t == NodeType.DELAY:
+            try:
+                node.delay_seconds = int(self.prop_delay.text())
+            except:
+                node.delay_seconds = 5
             
         if t == NodeType.DECISION:
             node.condition = self.prop_condition.text()
@@ -260,3 +305,10 @@ class PropertiesPanel(QWidget):
         if fname:
             path = Path(fname)
             self.prop_script.setCurrentText(path.name)
+
+    def apply_preset(self, index):
+        if index <= 0: return
+        text = self.cmd_presets.currentText()
+        if ":" in text:
+            cmd = text.split(":", 1)[1].strip()
+            self.prop_command.setText(cmd)

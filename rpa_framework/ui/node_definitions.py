@@ -15,42 +15,37 @@ class NodeDefinition:
 
 # Catalog of available nodes
 NODE_CATALOG = {
-    'Ejecuta un programa': [
-         NodeDefinition(
-            id='run_python_script',
-            category='Ejecuta un programa',
-            icon='🐍',
-            name='Python Script',
-            description='Ejecuta un script de Python',
-            node_type_enum='action',
-            fields=['script'],
+    'Control Flow': [
+        NodeDefinition(
+            id='start_node',
+            category='Control Flow',
+            icon='▶',
+            name='Start',
+            description='Punto de inicio del workflow',
+            node_type_enum='start',
+            fields=[],
             default_values={}
         ),
-         NodeDefinition(
-            id='run_command',
-            category='Ejecuta un programa',
-            icon='💻',
-            name='System Command',
-            description='Ejecuta un comando del sistema (cmd/powershell)',
-            node_type_enum='action',
-            fields=['script'], # Assuming we reuse script field for now or add a new one distinct for commands if needed
-            default_values={'script': 'echo "Hello"'}
-        ),
-    ],
-    'Database': [
         NodeDefinition(
-            id='mysql_query',
-            category='Database',
-            icon='🗄',
-            name='MySQL Query',
-            description='Ejecuta consultas en MySQL',
-            node_type_enum='database',
-            fields=['host', 'port', 'user', 'password', 'database', 'query', 'operation', 'result_var'],
-            default_values={'port': 3306, 'host': 'localhost', 'operation': 'SELECT'}
+            id='end_node',
+            category='Control Flow',
+            icon='⏹',
+            name='End',
+            description='Termina la ejecución',
+            node_type_enum='end',
+            fields=[],
+            default_values={}
         ),
-        # Placeholder for other DBs if implemented later
-    ],
-    'Control Flow': [
+        NodeDefinition(
+            id='delay_node',
+            category='Control Flow',
+            icon='⏳',
+            name='Delay',
+            description='Pausa la ejecución',
+            node_type_enum='delay',
+            fields=['delay_seconds'],
+            default_values={'delay_seconds': 5}
+        ),
         NodeDefinition(
             id='if_condition',
             category='Control Flow',
@@ -72,8 +67,41 @@ NODE_CATALOG = {
             default_values={'iterations': '1'}
         ),
     ],
+    'Ejecuta un programa': [
+         NodeDefinition(
+            id='run_python_script',
+            category='Ejecuta un programa',
+            icon='🐍',
+            name='Python Script',
+            description='Ejecuta un script de Python',
+            node_type_enum='action',
+            fields=['script'],
+            default_values={}
+        ),
+         NodeDefinition(
+            id='run_command',
+            category='Ejecuta un programa',
+            icon='💻',
+            name='System Command',
+            description='Ejecuta un comando del sistema (cmd/powershell)',
+            node_type_enum='action',
+            fields=['command'],
+            default_values={'command': 'echo "Hello"'}
+        ),
+    ],
+    'Database': [
+        NodeDefinition(
+            id='mysql_query',
+            category='Database',
+            icon='🗄',
+            name='MySQL Query',
+            description='Ejecuta consultas en MySQL',
+            node_type_enum='database',
+            fields=['host', 'port', 'user', 'password', 'database', 'query', 'operation', 'result_var'],
+            default_values={'port': 3306, 'host': 'localhost', 'operation': 'SELECT'}
+        ),
+    ],
     'Transform': [
-        # Mapping to generic 'action' for now, but conceptually distinct
          NodeDefinition(
             id='json_parse',
             category='Transform',
@@ -86,14 +114,13 @@ NODE_CATALOG = {
         ),
     ],
     'Integrations': [
-        # Placeholders mapping to generic 'action' or specialized nodes if available
          NodeDefinition(
             id='http_request',
             category='Integrations',
             icon='🌐',
             name='HTTP Request',
             description='Realiza una petición HTTP',
-            node_type_enum='action', # Currently reusing action, ideally distinct type
+            node_type_enum='action', 
             fields=['script'],
             default_values={'script': '# requests.get("...")'}
         ),

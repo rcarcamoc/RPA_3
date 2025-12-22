@@ -27,14 +27,26 @@ class WorkflowPanelV2(QWidget):
         self.init_ui()
         
         # Setup signals
+        # Setup signals
         self.canvas.node_selected.connect(self.on_node_selected)
-        # self.canvas.connection_created is emitted by canvas but we need to handle logic
-        # Ideally canvas emits intent, panel executes command
+        self.canvas.connection_created.connect(self.on_connection_created)
         
         # For drag and drop creation -> Canvas needs to call parent
         # We'll monkey patch or ensure canvas calls 'create_node_from_palette'
         
         self.load_workflow_list() # Dummy implementation or reuse logic
+
+    def on_connection_created(self, from_id, to_id):
+        """Handle link creation from Canvas"""
+        if not self.current_workflow: return
+        
+        # Command
+        cmd = ConnectionCommand(self.current_workflow, from_id, to_id, self, is_add=True)
+        self.undo_stack.push(cmd)
+        
+        # Note: Canvas usually draws the line temporarily. 
+        # The command execution will call load_workflow which redraws everything properly.
+
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -47,9 +59,9 @@ class WorkflowPanelV2(QWidget):
         toolbar.setMovable(False)
         
         # File Actions
-        # btn_new = QAction("➕ Nuevo", self)
-        # btn_new.triggered.connect(self.create_new_workflow)
-        # toolbar.addAction(btn_new)
+        btn_new = QAction("➕ Nuevo", self)
+        btn_new.triggered.connect(self.create_new_workflow)
+        toolbar.addAction(btn_new)
         
         btn_save = QAction("💾 Guardar", self)
         btn_save.triggered.connect(self.save_workflow)
@@ -177,8 +189,12 @@ class WorkflowPanelV2(QWidget):
             'decision': NodeType.DECISION,
             'loop': NodeType.LOOP,
             'database': NodeType.DATABASE,
-            'annotation': NodeType.ANNOTATION
+            'annotation': NodeType.ANNOTATION,
+            'delay': NodeType.DELAY,
+            'start': NodeType.START,
+            'end': NodeType.END
         }
+
         
         ntype = node_type_map.get(node_def.node_type_enum, NodeType.ACTION)
         
@@ -194,8 +210,18 @@ class WorkflowPanelV2(QWidget):
              node = DecisionNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
         elif ntype == NodeType.LOOP:
              node = LoopNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
+        elif ntype == NodeType.DELAY:
+             from core.delay_node import DelayNode
+             node = DelayNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
+        elif ntype == NodeType.START:
+             node = Node(id=new_id, type=NodeType.START, label="Inicio", position={"x": pos.x(), "y": pos.y()})
+        elif ntype == NodeType.END:
+             node = Node(id=new_id, type=NodeType.END, label="Fin", position={"x": pos.x(), "y": pos.y()})
         else:
+             # Action (Python or Command)
              node = ActionNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
+             # If default has 'command', ActionNode handles it via **defaults linkage? 
+             # ActionNode definition has 'command' field now. Yes.
              
         # Execute Command
         cmd = AddNodeCommand(self.current_workflow, node, self)

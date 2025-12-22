@@ -19,6 +19,7 @@ class NodeType(Enum):
     LOOP = "loop"
     DATABASE = "database"
     ANNOTATION = "annotation"
+    DELAY = "delay"
     START = "start"
     END = "end"
 
@@ -27,8 +28,8 @@ class NodeType(Enum):
 class Node:
     """Clase base para nodos de workflow"""
     id: str
-    type: NodeType
     label: str
+    type: NodeType
     position: Dict[str, float] = field(default_factory=lambda: {"x": 0, "y": 0})
     
     def to_dict(self) -> Dict[str, Any]:
@@ -54,6 +55,10 @@ class Node:
             from core.annotation_node import AnnotationNode
             return AnnotationNode.from_dict(data)
         
+        if node_type == NodeType.DELAY:
+            from core.delay_node import DelayNode
+            return DelayNode.from_dict(data)
+        
         if node_type == NodeType.ACTION:
             return ActionNode.from_dict(data)
         elif node_type == NodeType.DECISION:
@@ -71,22 +76,24 @@ class Node:
 
 @dataclass
 class ActionNode(Node):
-    """Nodo de acción que ejecuta un script"""
+    """Nodo de acción que ejecuta un script o comando"""
     script: str = ""
+    command: str = "" # Nuevo campo para comandos de sistema
     type: NodeType = field(default=NodeType.ACTION, init=False)
     
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data["script"] = self.script
+        data["command"] = self.command
         return data
     
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> 'ActionNode':
-        # Don't pass type since it's not in __init__
         node = object.__new__(ActionNode)
         node.id = data["id"]
         node.label = data["label"]
         node.script = data.get("script", "")
+        node.command = data.get("command", "")
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.ACTION
         return node
