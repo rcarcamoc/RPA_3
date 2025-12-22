@@ -1,5 +1,5 @@
 from PyQt6.QtGui import QUndoCommand
-from rpa_framework.core.models import Node, Edge
+from core.models import Node, Edge
 
 class AddNodeCommand(QUndoCommand):
     def __init__(self, workflow, node, panel):

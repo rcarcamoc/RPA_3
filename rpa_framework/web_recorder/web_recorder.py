@@ -698,14 +698,12 @@ class WebRecorder:
 
     def export_to_json(self, output_dir: Optional[str] = None) -> str:
         try:
-            # --- PATH CORRECTION START ---
-            if output_dir is None:
-                # Default to ../recordings relative to this file
-                base_dir = Path(__file__).resolve().parent.parent # rpa_framework/
-                output_dir = base_dir / "recordings"
+            # Use centralized path management
+            from utils.paths import get_web_recording_path
             
-            os.makedirs(output_dir, exist_ok=True)
-            # --- PATH CORRECTION END ---
+            if output_dir is None:
+                # Will use default WEB_RECORDINGS_DIR
+                pass
 
             session_dict = asdict(self.session) if self.session else {}
             output_data = {
@@ -724,7 +722,10 @@ class WebRecorder:
             }
 
             name = session_dict.get("name", "session")
-            output_file = os.path.join(output_dir, f"{name}_steps.json")
+            if output_dir:
+                output_file = os.path.join(output_dir, f"{name}_steps.json")
+            else:
+                output_file = str(get_web_recording_path(f"{name}_steps.json"))
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
 
@@ -736,14 +737,12 @@ class WebRecorder:
 
     def export_to_python(self, output_dir: Optional[str] = None) -> str:
         try:
-            # --- PATH CORRECTION START ---
+            # Use centralized path management
+            from utils.paths import get_web_recording_path
+            
             if output_dir is None:
-                # Default to ../modules relative to this file
-                base_dir = Path(__file__).resolve().parent.parent # rpa_framework/
-                output_dir = base_dir / "modules"
-
-            os.makedirs(output_dir, exist_ok=True)
-            # --- PATH CORRECTION END ---
+                # Will use default WEB_RECORDINGS_DIR
+                pass
 
             session_name = self.session.name if self.session else "session"
             url = self.session.url if self.session else "https://example.com"
@@ -839,7 +838,10 @@ if __name__ == "__main__":
 
             code = header + body + footer
 
-            output_file = os.path.join(output_dir, f"{session_name}_automation.py")
+            if output_dir:
+                output_file = os.path.join(output_dir, f"{session_name}_automation.py")
+            else:
+                output_file = str(get_web_recording_path(f"{session_name}_automation.py"))
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(code)
 
@@ -851,16 +853,12 @@ if __name__ == "__main__":
 
     def export_to_n8n(self, output_dir: Optional[str] = None) -> str:
         try:
-            # --- PATH CORRECTION START ---
+            # Use centralized path management
+            from utils.paths import get_web_recording_path
+            
             if output_dir is None:
-                base_dir = Path(__file__).resolve().parent.parent # rpa_framework/
-                output_dir = base_dir / "modules" # N8N also in modules/ or maybe a new one? Let's use modules/ for now or recordings/
-                # Actually, JSON workflows often go with recordings, but modules is for code.
-                # Let's put n8n in recordings/ since it's a definition file, not executable python
-                output_dir = base_dir / "recordings"
-
-            os.makedirs(output_dir, exist_ok=True)
-            # --- PATH CORRECTION END ---
+                # Will use default WEB_RECORDINGS_DIR
+                pass
 
             session_name = self.session.name if self.session else "session"
             url = self.session.url if self.session else "https://example.com"
@@ -900,7 +898,10 @@ if __name__ == "__main__":
                     }
                 )
 
-            output_file = os.path.join(output_dir, f"{session_name}_workflow.json")
+            if output_dir:
+                output_file = os.path.join(output_dir, f"{session_name}_workflow.json")
+            else:
+                output_file = str(get_web_recording_path(f"{session_name}_workflow.json"))
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(workflow, f, indent=2)
 

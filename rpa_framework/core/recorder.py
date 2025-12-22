@@ -227,15 +227,13 @@ class RPARecorder:
     
     def save(self, filename: str) -> str:
         """Guarda grabación a JSON."""
-        # Use absolute path relative to this file to ensure it goes to rpa_framework/recordings
-        base_dir = Path(__file__).resolve().parent.parent
-        output_dir = base_dir / "recordings"
-        output_dir.mkdir(exist_ok=True)
+        # Use centralized path management
+        from utils.paths import get_ui_recording_path
         
         if not filename.endswith(".json"):
             filename = f"{filename}.json"
         
-        output_path = output_dir / filename
+        output_path = get_ui_recording_path(filename)
         
         # Calcular estadísticas
         start_time = datetime.fromisoformat(self.actions[0]["timestamp"]) if self.actions else datetime.now()

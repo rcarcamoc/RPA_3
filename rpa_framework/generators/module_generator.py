@@ -13,7 +13,10 @@ class ModuleGenerator:
     
     def generate(self) -> Path:
         """Genera módulo independiente sin dependencias externas."""
-        module_dir = Path("modules") / self.module_name
+        # Use centralized path management
+        from utils.paths import UI_RECORDINGS_DIR
+        
+        module_dir = UI_RECORDINGS_DIR / self.module_name
         module_dir.mkdir(parents=True, exist_ok=True)
         
         # Leer JSON original

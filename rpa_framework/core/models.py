@@ -9,12 +9,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 
+# Forward declaration - DatabaseNode will be imported after NodeType is defined
+
 
 class NodeType(Enum):
     """Tipos de nodos soportados"""
     ACTION = "action"
     DECISION = "decision"
     LOOP = "loop"
+    DATABASE = "database"
+    ANNOTATION = "annotation"
     START = "start"
     END = "end"
 
@@ -40,6 +44,15 @@ class Node:
     def from_dict(data: Dict[str, Any]) -> 'Node':
         """Crea un nodo desde un diccionario"""
         node_type = NodeType(data["type"])
+        
+        # Import here to avoid circular dependency
+        if node_type == NodeType.DATABASE:
+            from core.database_node import DatabaseNode
+            return DatabaseNode.from_dict(data)
+        
+        if node_type == NodeType.ANNOTATION:
+            from core.annotation_node import AnnotationNode
+            return AnnotationNode.from_dict(data)
         
         if node_type == NodeType.ACTION:
             return ActionNode.from_dict(data)

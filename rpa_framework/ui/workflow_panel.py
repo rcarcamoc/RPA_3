@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QStyle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
-from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence, QAction
+from PyQt6.QtGui import QFont, QColor, QBrush, QPen, QPainterPath, QPolygonF, QPainter, QPainterPathStroker, QUndoStack, QKeySequence, QAction, QLinearGradient
 from pathlib import Path
 from datetime import datetime
 import json
@@ -22,16 +22,16 @@ import os
 import sys
 
 # Importar comandos
-try:
-    from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
-except ImportError:
-    pass # Se intentará resolver después si es necesario
+from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
+
 
 # Añadir path para importar módulos core
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, Edge
 from core.workflow_executor import WorkflowExecutor
+from .node_palette import NodePalette
+from .node_definitions import NodeDefinition
 from core.logger import WorkflowLogger
 from core.validator import WorkflowValidator
 
@@ -127,50 +127,131 @@ class OutputPortItem(QGraphicsEllipseItem):
 class NodeGraphicsItem(QGraphicsRectItem):
     """Item grafico para representar un nodo en el canvas (con drag-drop)"""
     
-    COLORS = {
-        NodeType.ACTION: QColor("#007bff"),
-        NodeType.DECISION: QColor("#ffc107"),
-        NodeType.LOOP: QColor("#28a745"),
-        NodeType.START: QColor("#6c757d"),
-        NodeType.END: QColor("#dc3545")
+    # Enhanced color scheme with gradients
+    NODE_STYLES = {
+        NodeType.ACTION: {
+            'color1': QColor("#4facfe"),
+            'color2': QColor("#00f2fe"),
+            'icon': "▶️",  # Play
+            'shadow': QColor(79, 172, 254, 100)
+        },
+        NodeType.DECISION: {
+            'color1': QColor("#f093fb"),
+            'color2': QColor("#f5576c"),
+            'icon': "◆",  # Diamond
+            'shadow': QColor(240, 147, 251, 100)
+        },
+        NodeType.LOOP: {
+            'color1': QColor("#43cea2"),
+            'color2': QColor("#185a9d"),
+            'icon': "↻",  # Circular arrows
+            'shadow': QColor(67, 206, 162, 100)
+        },
+        NodeType.DATABASE: {
+            'color1': QColor("#fa709a"),
+            'color2': QColor("#fee140"),
+            'icon': "🗄",  # Database
+            'shadow': QColor(250, 112, 154, 100)
+        },
+        NodeType.ANNOTATION: {
+            'color1': QColor("#ffffcc"),
+            'color2': QColor("#fff9c4"),
+            'icon': "📝",  # Note
+            'shadow': QColor(255, 249, 196, 120),
+            'dashed': True
+        },
+        NodeType.START: {
+            'color1': QColor("#6c757d"),
+            'color2': QColor("#95a5a6"),
+            'icon': "🏁",  # Flag
+            'shadow': QColor(108, 117, 125, 100)
+        },
+        NodeType.END: {
+            'color1': QColor("#dc3545"),
+            'color2': QColor("#c82333"),
+            'icon': "✔️",  # Checkmark
+            'shadow': QColor(220, 53, 69, 100)
+        }
     }
     
     def __init__(self, node: Node, parent=None):
-        super().__init__(0, 0, 150, 60, parent)
+        # Variable size based on node type
+        from core.annotation_node import AnnotationNode
+        if isinstance(node, AnnotationNode):
+            width = node.width
+            height = node.height
+        else:
+            width = 180
+            height = 80
+        
+        super().__init__(0, 0, width, height, parent)
         self.node = node
+        self.node_width = width
+        self.node_height = height
         
         self.is_highlighted = False
         self.has_warning = False
+        self.execution_state = None  # 'running', 'success', 'error'
         
-        self.setBrush(QBrush(self.COLORS.get(node.type, QColor("#999999"))))
-        self.setPen(QPen(QColor("#333333"), 2))
+        # Get style for this node type
+        style = self.NODE_STYLES.get(node.type, self.NODE_STYLES[NodeType.ACTION])
+        
+        # Create gradient brush
+        gradient = QLinearGradient(0, 0, 0, height)
+        gradient.setColorAt(0, style['color1'])
+        gradient.setColorAt(1, style['color2'])
+        self.setBrush(QBrush(gradient))
+        
+        # Pen style (dashed for annotations)
+        pen_style = Qt.PenStyle.DashLine if style.get('dashed') else Qt.PenStyle.SolidLine
+        self.setPen(QPen(QColor("#333333"), 2, pen_style))
         
         # Habilitar seleccion y arrastre
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         
+        # Icon text
+        self.icon_item = QGraphicsTextItem(self)
+        self.icon_item.setPlainText(style['icon'])
+        icon_font = QFont("Segoe UI Emoji", 16)
+        self.icon_item.setFont(icon_font)
+        self.icon_item.setDefaultTextColor(Qt.GlobalColor.white)
+        self.icon_item.setPos(10, (height - 20) / 2)
+        
+        # Label text
         self.text_item = QGraphicsTextItem(self)
         self.text_item.setPlainText(node.label)
+        label_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        self.text_item.setFont(label_font)
         self.text_item.setDefaultTextColor(Qt.GlobalColor.white)
         
         text_rect = self.text_item.boundingRect()
-        text_x = (150 - text_rect.width()) / 2
-        text_y = (60 - text_rect.height()) / 2
+        text_x = 40  # After icon
+        text_y = (height - text_rect.height()) / 2
         self.text_item.setPos(text_x, text_y)
+        
+        # For annotations, show text content below label
+        if isinstance(node, AnnotationNode) and node.text:
+            self.annotation_text = QGraphicsTextItem(self)
+            self.annotation_text.setPlainText(node.text[:100])  # Truncate
+            anno_font = QFont("Segoe UI", 8)
+            self.annotation_text.setFont(anno_font)
+            self.annotation_text.setDefaultTextColor(QColor("#666666"))
+            self.annotation_text.setPos(10, 35)
         
         self.setPos(node.position.get("x", 0), node.position.get("y", 0))
         
         # Cursor de arrastre
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         
-        # Agregar puerto de salida (si no es END)
-        if node.type != NodeType.END:
+        # Agregar puerto de salida (si no es END ni ANNOTATION)
+        if node.type not in [NodeType.END, NodeType.ANNOTATION]:
             self.output_port = OutputPortItem(self)
-            self.output_port.setPos(150, 30)  # Lado derecho, centro vertical
+            self.output_port.setPos(width, height / 2)  # Lado derecho, centro vertical
     
     def get_center(self) -> QPointF:
-        return QPointF(self.pos().x() + 75, self.pos().y() + 30)
+        return QPointF(self.pos().x() + self.node_width / 2, self.pos().y() + self.node_height / 2)
     
     def highlight(self, active: bool = True):
         self.is_highlighted = active
@@ -279,7 +360,11 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         self.to_item = to_item
         
         self.setPen(QPen(QColor("#666666"), 2))
+        self.setAcceptHoverEvents(True)  # Enable hover for insert button
         self.update_path()
+        
+        # Insert button (created on demand)
+        self.insert_button = None
     
     def update_path(self):
         start = self.from_item.get_center()
@@ -293,6 +378,45 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         path.lineTo(end)
         
         self.setPath(path)
+    
+    def hoverEnterEvent(self, event):
+        # Show insert button
+        if not self.insert_button:
+            # Import here to avoid circular dependency
+            from ui.insert_node_button import InsertNodeButton
+            self.insert_button = InsertNodeButton(self, self)
+        
+        # Position button at hover point
+        self.insert_button.setPos(event.pos())
+        self.insert_button.setVisible(True)
+        
+        # Highlight edge
+        self.setPen(QPen(QColor("#28a745"), 3))
+        super().hoverEnterEvent(event)
+    
+    def hoverMoveEvent(self, event):
+        # Move button with cursor
+        if self.insert_button:
+            self.insert_button.setPos(event.pos())
+        super().hoverMoveEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        # Hide button
+        if self.insert_button:
+            self.insert_button.setVisible(False)
+        
+        # Un-highlight edge
+        self.setPen(QPen(QColor("#666666"), 2))
+        super().hoverLeaveEvent(event)
+    
+    def on_insert_requested(self, click_pos):
+        """Called when user clicks the + button"""
+        # Get the view to show node type selector
+        views = self.scene().views()
+        if views:
+            view = views[0]
+            if hasattr(view, 'show_insert_node_menu'):
+                view.show_insert_node_menu(self, click_pos)
     
     def shape(self):
         """Area de colision mas ancha para facilitar seleccion."""
@@ -322,20 +446,31 @@ class WorkflowCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         
+        # Habilitar Drop
+        self.setAcceptDrops(True)
+        
+        # Variables de estado
+        self.is_connecting = False
+        self.source_node = None
+        self.temp_line = None
+        
+        self.scene.selectionChanged.connect(self.on_selection_changed)
+        
         self.setStyleSheet("background-color: #f5f5f5; border: 1px solid #ccc;")
         
         self.node_items = {}
         self.edge_items = []
         
-        # Estado de conexión visual
-        self.is_connecting = False
-        self.temp_line = None
-        self.source_node = None
-        
         # Estado Navegación
         self._zoom = 1.0
         self._panning = False
         self._pan_start = None
+
+    def on_selection_changed(self):
+        """Notifica cambio de seleccion"""
+        items = self.scene.selectedItems()
+        if items and isinstance(items[0], NodeGraphicsItem):
+            self.node_selected.emit(items[0].node)
 
     def wheelEvent(self, event):
         """Zoom con Ctrl + Rueda"""
@@ -510,35 +645,89 @@ class WorkflowCanvas(QGraphicsView):
             edit_action = menu.addAction("Editar propiedades")
             edit_action.triggered.connect(lambda: self.node_selected.emit(node))
             
-            menu.addSeparator()
-            
-            highlight_action = menu.addAction("Resaltar")
-            highlight_action.triggered.connect(lambda: item.highlight(True))
-            
-            unhighlight_action = menu.addAction("Quitar resaltado")
-            unhighlight_action.triggered.connect(lambda: item.highlight(False))
-            
-            menu.addSeparator()
-            
-            delete_action = menu.addAction("Eliminar nodo")
-            delete_action.triggered.connect(lambda: self._request_delete(node))
+            # Menu de nodo
+            action = menu.addAction("Eliminar Nodo")
+            action.triggered.connect(lambda: self._request_delete(item.node)) # Changed to _request_delete
         else:
-            # Menu para canvas vacio
-            add_action = menu.addAction("Agregar nodo ACTION")
-            add_action.triggered.connect(lambda: self._request_add_node("action", event.pos()))
+            # Menu de canvas
+            add_menu = menu.addMenu("Agregar Nodo")
             
-            add_decision = menu.addAction("Agregar nodo DECISION")
-            add_decision.triggered.connect(lambda: self._request_add_node("decision", event.pos()))
+            action = add_menu.addAction("▶️ ACTION")
+            action.triggered.connect(lambda: self._request_add_node("action", event.pos()))
             
-            add_loop = menu.addAction("Agregar nodo LOOP")
-            add_loop.triggered.connect(lambda: self._request_add_node("loop", event.pos()))
+            decision = add_menu.addAction("◆ DECISION")
+            decision.triggered.connect(lambda: self._request_add_node("decision", event.pos()))
             
-            menu.addSeparator()
+            loop = add_menu.addAction("↻ LOOP")
+            loop.triggered.connect(lambda: self._request_add_node("loop", event.pos()))
             
-            clear_action = menu.addAction("Limpiar resaltados")
-            clear_action.triggered.connect(self.clear_highlights)
-        
+            db = add_menu.addAction("🗄 DATABASE")
+            db.triggered.connect(lambda: self._request_add_node("database", event.pos()))
+            
+            note = add_menu.addAction("📝 ANNOTATION")
+            note.triggered.connect(lambda: self._request_add_node("annotation", event.pos()))
+
         menu.exec(event.globalPos())
+        
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+            
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+            
+    def dropEvent(self, event):
+        node_id_type = event.mimeData().text()
+        drop_pos = self.mapToScene(event.position().toPoint())
+        
+        # Create node via parent panel
+        # Necesitamos comunicar esto al WorkflowPanel para que use su logica centralizada (undo, etc)
+        # O emitimos una señal
+        self.create_node_from_drop(node_id_type, drop_pos)
+        event.acceptProposedAction()
+        
+    def create_node_from_drop(self, node_def_id, pos):
+        """Crea nodo desde drop de paleta"""
+        # Buscar definicion
+        from .node_definitions import get_all_nodes
+        
+        node_def = next((n for n in get_all_nodes() if n.id == node_def_id), None)
+        if not node_def:
+            return
+            
+        # Delegar creacion al padre (WorkflowPanel) si es posible para usar AddNodeCommand
+        # O emitir señal. WorkflowPanel tiene 'add_node_at_pos(type, pos, props)'?
+        # WorkflowPanel tiene `add_node` pero usa props UI.
+        
+        # Vamos a emitir una señal nueva para solicitar creacion
+        # Pero WorkflowCanvas no tiene señal definida para esto aun, vamos a usar una referencia al padre o emitir
+        # Hack: self.parentWidget() es el layout container, seguimos subiendo
+        
+        # Mejor opcion: Agregar nueva señal a WorkflowCanvas
+        parent = self.parentWidget()
+        while parent and not hasattr(parent, 'create_node_from_palette'):
+            parent = parent.parentWidget()
+            
+        if parent:
+            parent.create_node_from_palette(node_def, pos)
+
+    def _request_add_node(self, node_type, pos):
+        """Solicita agregar nodo en posicion (desde context menu)"""
+        scene_pos = self.mapToScene(pos)
+        # Emit signal to parent (WorkflowPanel) to add node
+        # Hack: access parent directly for now as per existing pattern
+        # El codigo original usaba signals o direct calls?
+        # Revisando contextMenuEvent original... llamaba a metodos que no vi completos.
+        # Vamos a asumir que WorkflowPanel maneja esto.
+        
+        # Para mantener compatibilidad con el codigo existente, vamos a usar la referencia al panel padre
+        views_parent = self.parentWidget()
+        while views_parent and not hasattr(views_parent, 'add_node_interactive'):
+             views_parent = views_parent.parentWidget()
+        
+        if views_parent:
+            views_parent.add_node_interactive(node_type, scene_pos)
     
     def _request_delete(self, node: Node):
         """Emite señal para eliminar nodo"""
@@ -563,6 +752,102 @@ class WorkflowCanvas(QGraphicsView):
         from_id = edge_item.from_item.node.id
         to_id = edge_item.to_item.node.id
         self.edge_split_requested.emit(node_item.node, from_id, to_id)
+    
+    def show_insert_node_menu(self, edge_item, scene_pos):
+        """Muestra menu para insertar nodo en edge"""
+        from PyQt6.QtWidgets import QMenu
+        
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { font-size: 10pt; }")
+        
+        # Node type options
+        action_option = menu.addAction("▶️ ACTION")
+        decision_option = menu.addAction("◆ DECISION")  
+        loop_option = menu.addAction("↻ LOOP")
+        db_option = menu.addAction("🗄 DATABASE")
+        menu.addSeparator()
+        annotation_option = menu.addAction("📝 ANNOTATION")
+        
+        # Show menu at cursor position  
+        view_pos = self.mapFromScene(scene_pos)
+        global_pos = self.mapToGlobal(view_pos)
+        
+        selected_action = menu.exec(global_pos)
+        
+        if selected_action:
+            # Determine node type
+            node_type_map = {
+                action_option: NodeType.ACTION,
+                decision_option: NodeType.DECISION,
+                loop_option: NodeType.LOOP,
+                db_option: NodeType.DATABASE,
+                annotation_option: NodeType.ANNOTATION
+            }
+            
+            node_type = node_type_map.get(selected_action)
+            if node_type:
+                self.insert_node_in_edge(edge_item, scene_pos, node_type)
+    
+    def insert_node_in_edge(self, edge_item, scene_pos, node_type):
+        """Inserta un nodo en medio de un edge"""
+        import uuid
+        from core.models import ActionNode, DecisionNode, LoopNode
+        from core.database_node import DatabaseNode
+        from core.annotation_node import AnnotationNode
+        
+        # Get workflow from parent panel
+        views_parent = self.parentWidget()
+        while views_parent and not hasattr(views_parent, 'current_workflow'):
+            views_parent = views_parent.parentWidget()
+        
+        if not views_parent or not views_parent.current_workflow:
+            return
+        
+        workflow = views_parent.current_workflow
+        
+        # Create new node
+        node_id = str(uuid.uuid4())[:8]
+        
+        if node_type == NodeType.ACTION:
+            new_node = ActionNode(id=node_id, label=f"Action {node_id[:4]}", script="")
+        elif node_type == NodeType.DECISION:
+            new_node = DecisionNode(id=node_id, label=f"Decision {node_id[:4]}", condition="")
+        elif node_type == NodeType.LOOP:
+            new_node = LoopNode(id=node_id, label=f"Loop {node_id[:4]}", iterations="1")
+        elif node_type == NodeType.DATABASE:
+            new_node = DatabaseNode(id=node_id, label=f"Database {node_id[:4]}")
+        elif node_type == NodeType.ANNOTATION:
+            new_node = AnnotationNode(id=node_id, label=f"Note {node_id[:4]}", text="")
+        else:
+            return
+        
+        # Set position at click location
+        new_node.position = {"x": scene_pos.x(), "y": scene_pos.y()}
+        
+        # Find and remove old edge
+        old_edge = None
+        for edge in workflow.edges:
+            if edge.from_node == edge_item.from_item.node.id and edge.to_node == edge_item.to_item.node.id:
+                old_edge = edge
+                break
+        
+        if old_edge:
+            workflow.edges.remove(old_edge)
+        
+        # Add new node
+        workflow.nodes.append(new_node)
+        
+        # Create two new edges
+        from core.models import Edge
+        edge1 = Edge(from_node=edge_item.from_item.node.id, to_node=new_node.id)
+        edge2 = Edge(from_node=new_node.id, to_node=edge_item.to_item.node.id)
+        workflow.edges.append(edge1)
+        workflow.edges.append(edge2)
+        
+        # Refresh view
+        if hasattr(views_parent, 'refresh_canvas'):
+            views_parent.refresh_canvas()
+
 
 
 class WorkflowPanel(QWidget):
@@ -665,6 +950,10 @@ class WorkflowPanel(QWidget):
         # Splitter principal
         splitter = QSplitter(Qt.Orientation.Horizontal)
         
+        # Paleta de Nodos (Nuevo)
+        self.node_palette = NodePalette()
+        splitter.addWidget(self.node_palette)
+        
         # Panel izquierdo (Lista + Propiedades)
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -753,7 +1042,7 @@ class WorkflowPanel(QWidget):
         props_layout.addRow("Nombre:", self.prop_label)
         
         self.prop_type = QComboBox()
-        self.prop_type.addItems(["action", "decision", "loop", "start", "end"])
+        self.prop_type.addItems(["action", "decision", "loop", "database", "annotation", "start", "end"])
         self.prop_type.currentTextChanged.connect(self.on_type_changed)
         props_layout.addRow("Tipo:", self.prop_type)
         
@@ -774,30 +1063,92 @@ class WorkflowPanel(QWidget):
         
         props_layout.addRow("Script:", script_layout)
         
+        
         # Cargar lista inicial de scripts
         self.load_script_list()
         
+        # DECISION fields
         self.prop_condition = QLineEdit()
         self.prop_condition.setPlaceholderText("variable == 'valor'")
-        props_layout.addRow("Condicion:", self.prop_condition)
+        self.prop_condition_label = QLabel("Condicion:")
+        props_layout.addRow(self.prop_condition_label, self.prop_condition)
         
-        # Campos para Decision path
         self.prop_true_path = QLineEdit()
         self.prop_true_path.setPlaceholderText("ID nodo si TRUE")
-        props_layout.addRow("TRUE ->:", self.prop_true_path)
+        self.prop_true_path_label = QLabel("TRUE ->:")
+        props_layout.addRow(self.prop_true_path_label, self.prop_true_path)
         
         self.prop_false_path = QLineEdit()
         self.prop_false_path.setPlaceholderText("ID nodo si FALSE")
-        props_layout.addRow("FALSE ->:", self.prop_false_path)
+        self.prop_false_path_label = QLabel("FALSE ->:")
+        props_layout.addRow(self.prop_false_path_label, self.prop_false_path)
         
+        # LOOP fields
         self.prop_iterations = QLineEdit()
         self.prop_iterations.setPlaceholderText("3 o nombre_variable")
-        props_layout.addRow("Iteraciones:", self.prop_iterations)
+        self.prop_iterations_label = QLabel("Iteraciones:")
+        props_layout.addRow(self.prop_iterations_label, self.prop_iterations)
+        
+        # DATABASE fields
+        self.prop_db_host = QLineEdit()
+        self.prop_db_host.setPlaceholderText("localhost")
+        self.prop_db_host_label = QLabel("DB Host:")
+        props_layout.addRow(self.prop_db_host_label, self.prop_db_host)
+        
+        self.prop_db_port = QLineEdit()
+        self.prop_db_port.setPlaceholderText("3306")
+        self.prop_db_port_label = QLabel("DB Port:")
+        props_layout.addRow(self.prop_db_port_label, self.prop_db_port)
+        
+        self.prop_db_user = QLineEdit()
+        self.prop_db_user.setPlaceholderText("root")
+        self.prop_db_user_label = QLabel("DB User:")
+        props_layout.addRow(self.prop_db_user_label, self.prop_db_user)
+        
+        self.prop_db_password = QLineEdit()
+        self.prop_db_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.prop_db_password.setPlaceholderText("password")
+        self.prop_db_password_label = QLabel("DB Password:")
+        props_layout.addRow(self.prop_db_password_label, self.prop_db_password)
+        
+        self.prop_db_database = QLineEdit()
+        self.prop_db_database.setPlaceholderText("my_database")
+        self.prop_db_database_label = QLabel("Database:")
+        props_layout.addRow(self.prop_db_database_label, self.prop_db_database)
+        
+        self.prop_db_query = QTextEdit()
+        self.prop_db_query.setMaximumHeight(80)
+        self.prop_db_query.setPlaceholderText("SELECT * FROM users WHERE id = {user_id}")
+        self.prop_db_query_label = QLabel("SQL Query:")
+        props_layout.addRow(self.prop_db_query_label, self.prop_db_query)
+        
+        self.prop_db_operation = QComboBox()
+        self.prop_db_operation.addItems(["SELECT", "INSERT", "UPDATE", "DELETE"])
+        self.prop_db_operation_label = QLabel("Operation:")
+        props_layout.addRow(self.prop_db_operation_label, self.prop_db_operation)
+        
+        self.prop_db_result_var = QLineEdit()
+        self.prop_db_result_var.setPlaceholderText("db_result")
+        self.prop_db_result_var_label = QLabel("Result Var:")
+        props_layout.addRow(self.prop_db_result_var_label, self.prop_db_result_var)
+        
+        # ANNOTATION fields
+        self.prop_annotation_text = QTextEdit()
+        self.prop_annotation_text.setMaximumHeight(100)
+        self.prop_annotation_text.setPlaceholderText("Nota de documentación...")
+        self.prop_annotation_text_label = QLabel("Texto:")
+        props_layout.addRow(self.prop_annotation_text_label, self.prop_annotation_text)
+        
+        self.prop_annotation_color = QComboBox()
+        self.prop_annotation_color.addItems(["Amarillo", "Azul", "Rosa", "Verde"])
+        self.prop_annotation_color_label = QLabel("Color:")
+        props_layout.addRow(self.prop_annotation_color_label, self.prop_annotation_color)
         
         # Campo para conectar al siguiente nodo
         self.prop_next_node = QLineEdit()
         self.prop_next_node.setPlaceholderText("ID del siguiente nodo")
-        props_layout.addRow("Siguiente:", self.prop_next_node)
+        self.prop_next_node_label = QLabel("Siguiente:")
+        props_layout.addRow(self.prop_next_node_label, self.prop_next_node)
         
         props_group.setLayout(props_layout)
         left_layout.addWidget(props_group)
@@ -906,20 +1257,16 @@ class WorkflowPanel(QWidget):
         
         self.prop_script.clear()
         
-        # Directorios donde buscar scripts
-        script_dirs = ["scripts", "recordings", "quick_scripts"]
-        scripts_found = []
+        # Use centralized path management with recursive discovery
+        from utils.paths import get_all_scripts
+        scripts_found = get_all_scripts(include_subdirs=True)
         
-        for dir_name in script_dirs:
-            dir_path = Path(dir_name)
-            if dir_path.exists():
-                for py_file in sorted(dir_path.glob("*.py")):
-                    rel_path = str(py_file).replace("\\", "/")
-                    scripts_found.append(rel_path)
+        # Convert to relative paths for display
+        script_paths = [str(script).replace("\\", "/") for script in scripts_found]
         
         # Agregar al combo
-        if scripts_found:
-            self.prop_script.addItems(scripts_found)
+        if script_paths:
+            self.prop_script.addItems(script_paths)
         
         # Agregar opcion para examinar archivos externos
         self.prop_script.addItem("📁 Examinar...")
@@ -1046,9 +1393,33 @@ class WorkflowPanel(QWidget):
         elif isinstance(node, LoopNode):
             self.prop_script.setCurrentText(node.script)
             self.prop_iterations.setText(node.iterations)
+        elif node.type == NodeType.DATABASE:
+            from core.database_node import DatabaseNode
+            if isinstance(node, DatabaseNode):
+                self.prop_db_host.setText(node.host)
+                self.prop_db_port.setText(str(node.port))
+                self.prop_db_user.setText(node.user)
+                self.prop_db_password.setText(node.password)
+                self.prop_db_database.setText(node.database)
+                self.prop_db_query.setPlainText(node.query)
+                self.prop_db_operation.setCurrentText(node.operation)
+                self.prop_db_result_var.setText(node.result_var)
+        elif node.type == NodeType.ANNOTATION:
+            from core.annotation_node import AnnotationNode
+            if isinstance(node, AnnotationNode):
+                self.prop_annotation_text.setPlainText(node.text)
+                # Map color to dropdown
+                color_map_reverse = {
+                    "#ffffcc": "Amarillo",
+                    "#cce5ff": "Azul",
+                    "#ffccf2": "Rosa",
+                    "#ccffcc": "Verde"
+                }
+                color_name = color_map_reverse.get(node.color, "Amarillo")
+                self.prop_annotation_color.setCurrentText(color_name)
         
-        # Buscar conexion siguiente (para nodos no-decision)
-        if self.current_workflow and not isinstance(node, DecisionNode):
+        # Buscar conexion siguiente (para nodos no-decision y no-annotation)
+        if self.current_workflow and not isinstance(node, DecisionNode) and node.type != NodeType.ANNOTATION:
             next_node_id = self.current_workflow.get_next_node(node.id)
             if next_node_id:
                 self.prop_next_node.setText(next_node_id)
@@ -1307,18 +1678,97 @@ class WorkflowPanel(QWidget):
         self.prop_iterations.setEnabled(is_loop)
         self.prop_next_node.setEnabled(not is_decision)
     
+    def create_node_from_palette(self, node_def, pos):
+        """Crea un nodo desde la paleta (Drag & Drop)"""
+        node_id = self.generate_node_id()
+        
+        # Determine type map
+        type_map = {
+            'action': NodeType.ACTION,
+            'decision': NodeType.DECISION,
+            'loop': NodeType.LOOP,
+            'database': NodeType.DATABASE,
+            'annotation': NodeType.ANNOTATION
+        }
+        
+        node_type = type_map.get(node_def.node_type_enum, NodeType.ACTION)
+        
+        # Create node instance based on type
+        if node_type == NodeType.DATABASE:
+            from core.database_node import DatabaseNode
+            new_node = DatabaseNode(
+                id=node_id,
+                label=node_def.name,
+                position={"x": pos.x(), "y": pos.y()},
+                **node_def.default_values
+            )
+        elif node_type == NodeType.ANNOTATION:
+            from core.annotation_node import AnnotationNode
+            new_node = AnnotationNode(
+                id=node_id,
+                label=node_def.name,
+                position={"x": pos.x(), "y": pos.y()},
+                **node_def.default_values
+            )
+        elif node_type == NodeType.ACTION:
+            # Check for specific actions like run_script
+            script = node_def.default_values.get('script', '')
+            new_node = ActionNode(
+                id=node_id,
+                label=node_def.name,
+                script=script,
+                position={"x": pos.x(), "y": pos.y()}
+            )
+        elif node_type == NodeType.DECISION:
+            condition = node_def.default_values.get('condition', '')
+            new_node = DecisionNode(
+                id=node_id,
+                label=node_def.name,
+                condition=condition,
+                position={"x": pos.x(), "y": pos.y()}
+            )
+        elif node_type == NodeType.LOOP:
+            new_node = LoopNode(
+                id=node_id,
+                label=node_def.name,
+                iterations=node_def.default_values.get('iterations', '1'),
+                position={"x": pos.x(), "y": pos.y()}
+            )
+        else:
+            return
+
+        # Use Undo stack
+        self.undo_stack.beginMacro(f"Agregar {node_def.name}")
+        self.undo_stack.push(AddNodeCommand(self.current_workflow, new_node, self))
+        self.undo_stack.endMacro()
+        
+        # Select the new node
+        self.on_node_selected(new_node)
+        self.canvas.scene.clearSelection()
+        # Find item and select it? (Canvas reload makes this tricky unless we find item)
+        
+    def add_node_interactive(self, node_type_str, pos):
+        """Called from context menu"""
+        # Create a dummy node def
+        class DummyDef:
+            pass
+        
+        d = DummyDef()
+        d.node_type_enum = node_type_str
+        d.name = node_type_str.capitalize()
+        d.default_values = {}
+        
+        self.create_node_from_palette(d, pos)
+
     def add_node(self):
-        """Agrega un nuevo nodo al workflow."""
+        """Agrega un nodo desde el panel de propiedades (Boton Agregar)."""
         if not self.current_workflow:
             return
         
-        node_id = self.prop_id.text().strip()
-        node_label = self.prop_label.text().strip()
+        node_id = self.prop_id.text().strip() or self.generate_node_id()
+        node_label = self.prop_label.text().strip() or f"Node {node_id}"
         node_type = self.prop_type.currentText()
         
-        # Auto-generar ID si está vacío
-        if not node_id:
-            node_id = self.generate_node_id()
         
         if not node_label:
             node_label = f"Nodo {node_id}"
@@ -1359,6 +1809,36 @@ class WorkflowPanel(QWidget):
             new_node.loop_var = "_loop_index"
             new_node.type = NodeType.LOOP
             new_node.position = new_pos
+        elif node_type == "database":
+            from core.database_node import DatabaseNode
+            new_node = DatabaseNode(
+                id=node_id,
+                label=node_label,
+                host=self.prop_db_host.text().strip() or "localhost",
+                port=int(self.prop_db_port.text().strip() or "3306"),
+                user=self.prop_db_user.text().strip() or "root",
+                password=self.prop_db_password.text().strip(),
+                database=self.prop_db_database.text().strip(),
+                query=self.prop_db_query.toPlainText().strip(),
+                operation=self.prop_db_operation.currentText(),
+                result_var=self.prop_db_result_var.text().strip() or "db_result",
+                position=new_pos
+            )
+        elif node_type == "annotation":
+            from core.annotation_node import AnnotationNode
+            color_map = {
+                "Amarillo": "#ffffcc",
+                "Azul": "#cce5ff",
+                "Rosa": "#ffccf2",
+                "Verde": "#ccffcc"
+            }
+            new_node = AnnotationNode(
+                id=node_id,
+                label=node_label,
+                text=self.prop_annotation_text.toPlainText().strip(),
+                color=color_map.get(self.prop_annotation_color.currentText(), "#ffffcc"),
+                position=new_pos
+            )
         else:
             new_node = Node(id=node_id, type=NodeType(node_type), label=node_label, position=new_pos)
         

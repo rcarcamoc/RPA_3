@@ -23,5 +23,5 @@ mss>=9.0.1
 playwright>=1.40.0
 
 # Database & Matching
-mysql-connector-python>=8.0.0
+mysql-connector-python>=9.0.0
 rapidfuzz>=3.0.0

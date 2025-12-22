@@ -13,8 +13,14 @@ class QuickScriptGenerator:
     
     def generate(self, output: str = None) -> str:
         """Genera script."""
+        # Use centralized path management
+        from utils.paths import get_ui_recording_path
+        
         if not output:
             output = f"{self.recording_path.stem}_script.py"
+        
+        # Get full path using centralized management
+        output_path = get_ui_recording_path(output)
         
         script = '''#!/usr/bin/env python
 # -*- coding: utf-8 -*-
@@ -34,7 +40,7 @@ if __name__ == "__main__":
     print(results)
 '''
         
-        with open(output, "w", encoding="utf-8") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(script)
         
-        return output
+        return str(output_path)

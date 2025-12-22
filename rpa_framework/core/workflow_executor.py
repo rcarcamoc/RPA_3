@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode
 from core.logger import WorkflowLogger
+import mysql.connector
+from mysql.connector import Error as MySQLError
 
 
 class WorkflowExecutor:
@@ -26,14 +28,12 @@ class WorkflowExecutor:
             log_dir: Directorio para guardar logs
         """
         self.workflow = workflow
+        self.logger = WorkflowLogger(log_dir)
         self.context: Dict[str, Any] = workflow.variables.copy()
-        self.is_running = False
         self.should_stop = False
         
-        # Crear logger
-        log_filename = f"{workflow.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        log_path = os.path.join(log_dir, log_filename)
-        self.logger = WorkflowLogger(log_path)
+        self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
+        self.logger.log(f"   Variables iniciales: {self.context}")
     
     def execute(self) -> Dict[str, Any]:
         """
@@ -48,82 +48,65 @@ class WorkflowExecutor:
                 "error": mensaje de error (si hubo)
             }
         """
-        self.is_running = True
-        self.should_stop = False
-        self.logger.info(f"Iniciando workflow: {self.workflow.name}")
-        
         try:
-            # Obtener nodo de inicio
-            start_node = self.workflow.get_start_node()
-            if not start_node:
+            self.logger.log("=" * 60)
+            self.logger.log(f"▶️ Iniciando ejecución: {self.workflow.name}")
+            self.logger.log("=" * 60)
+            
+            # Obtener nodo inicial
+            current_node = self.workflow.get_start_node()
+            
+            if not current_node:
                 raise ValueError("No se encontró nodo de inicio")
             
-            # Ejecutar desde el primer nodo después del START
-            current_node_id = self.workflow.get_next_node(start_node.id)
-            if not current_node_id:
-                current_node_id = start_node.id
-            
-            visited = set()
-            max_iterations = 1000  # Prevenir loops infinitos
-            iteration_count = 0
-            
             # Ejecutar nodos secuencialmente
-            while current_node_id and not self.should_stop:
-                iteration_count += 1
-                if iteration_count > max_iterations:
-                    raise RuntimeError("Se excedió el límite de iteraciones (posible loop infinito)")
+            while current_node and not self.should_stop:
+                self.logger.log(f"\n📍 Nodo actual: {current_node.label} ({current_node.type.value})")
                 
-                node = self.workflow.get_node(current_node_id)
-                if not node:
-                    self.logger.error(f"Nodo no encontrado: {current_node_id}")
+                # Ejecutar nodo y obtener siguiente
+                next_node_id = self._execute_node(current_node)
+                
+                if not next_node_id:
+                    self.logger.log("✅ Fin del workflow (no hay más nodos)")
                     break
                 
-                # Nodo END termina la ejecución
-                if node.type == NodeType.END:
-                    self.logger.info("Workflow completado (nodo END)")
+                # Obtener siguiente nodo
+                current_node = self.workflow.get_node(next_node_id)
+                
+                if not current_node:
+                    self.logger.log(f"⚠️ Nodo no encontrado: {next_node_id}")
                     break
-                
-                # Evitar ciclos infinitos excepto en LOOP
-                if node.type != NodeType.LOOP and current_node_id in visited:
-                    self.logger.warning(f"Ciclo detectado en nodo {current_node_id}")
-                    break
-                
-                visited.add(current_node_id)
-                
-                # Ejecutar nodo según su tipo
-                self.logger.info(f"Ejecutando nodo: {node.label} ({node.type.value})")
-                current_node_id = self._execute_node(node)
             
             # Resultado final
-            if self.should_stop:
-                self.logger.info("Workflow detenido manualmente")
-                status = "stopped"
-            else:
-                self.logger.info("Workflow completado exitosamente")
-                status = "success"
+            status = "stopped" if self.should_stop else "success"
+            
+            self.logger.log("=" * 60)
+            self.logger.log(f"✅ Ejecución completada: {status}")
+            self.logger.log(f"   Variables finales: {self.context}")
+            self.logger.log("=" * 60)
             
             return {
                 "status": status,
                 "context": self.context,
-                "logs": self.logger.get_logs()
+                "logs": self.logger.get_logs(),
+                "error": None
             }
-        
+            
         except Exception as e:
-            self.logger.error(f"Error ejecutando workflow: {str(e)}")
+            error_msg = f"Error en ejecución: {str(e)}"
+            self.logger.log(f"❌ {error_msg}")
+            
             return {
                 "status": "error",
                 "context": self.context,
                 "logs": self.logger.get_logs(),
-                "error": str(e)
+                "error": error_msg
             }
-        
-        finally:
-            self.is_running = False
     
     def stop(self):
         """Detiene la ejecución del workflow"""
         self.should_stop = True
-        self.logger.warning("Solicitud de detención recibida")
+        self.logger.log("⏹️ Deteniendo workflow...")
     
     def _execute_node(self, node: Node) -> Optional[str]:
         """
@@ -135,12 +118,19 @@ class WorkflowExecutor:
         Returns:
             ID del siguiente nodo a ejecutar, o None si no hay siguiente
         """
+        # Skip annotation nodes (they're just for documentation)
+        if node.type == NodeType.ANNOTATION:
+            self.logger.log(f"📝 Anotación: {node.label} (saltando)")
+            return self.workflow.get_next_node(node.id)
+        
         if node.type == NodeType.ACTION:
             return self._execute_action(node)
         elif node.type == NodeType.DECISION:
             return self._execute_decision(node)
         elif node.type == NodeType.LOOP:
             return self._execute_loop(node)
+        elif node.type == NodeType.DATABASE:
+            return self._execute_database(node)
         else:
             # Nodos START u otros: solo continuar al siguiente
             return self.workflow.get_next_node(node.id)
@@ -148,17 +138,18 @@ class WorkflowExecutor:
     def _execute_action(self, node: ActionNode) -> Optional[str]:
         """Ejecuta un nodo de acción (script Python)"""
         if not node.script:
-            self.logger.warning(f"Nodo {node.label} no tiene script asignado")
+            self.logger.log("⚠️ Nodo sin script, saltando")
             return self.workflow.get_next_node(node.id)
+        
+        self.logger.log(f"🐍 Ejecutando script: {node.script}")
         
         try:
             # Preparar entorno con variables del contexto
             env = os.environ.copy()
             for key, value in self.context.items():
-                env[key] = str(value)
+                env[f"VAR_{key}"] = str(value)
             
             # Ejecutar script
-            self.logger.info(f"Ejecutando script: {node.script}")
             result = subprocess.run(
                 ['python', node.script],
                 capture_output=True,
@@ -167,102 +158,86 @@ class WorkflowExecutor:
                 env=env
             )
             
-            # Verificar resultado
             if result.returncode == 0:
-                self.logger.info(f"[OK] Script completado: {node.label}")
+                self.logger.log(f"✅ Script ejecutado exitosamente")
                 
-                # Intentar parsear output JSON para actualizar contexto
-                # Buscar líneas JSON válidas (puede haber prints antes)
-                if result.stdout.strip():
-                    json_found = False
-                    for line in reversed(result.stdout.strip().split('\n')):
-                        line = line.strip()
-                        if line.startswith('{') and line.endswith('}'):
-                            try:
-                                output_data = json.loads(line)
-                                if isinstance(output_data, dict):
-                                    self.context.update(output_data)
-                                    self.logger.info(f"Variables actualizadas: {list(output_data.keys())}")
-                                    json_found = True
-                                    break
-                            except json.JSONDecodeError:
-                                continue
-                    
-                    if not json_found:
-                        self.logger.warning(f"No se encontro JSON valido en output")
+                # Intentar parsear salida como JSON para actualizar contexto
+                try:
+                    output_data = json.loads(result.stdout)
+                    if isinstance(output_data, dict):
+                        self.context.update(output_data)
+                        self.logger.log(f"   Variables actualizadas: {list(output_data.keys())}")
+                except json.JSONDecodeError:
+                    # Si no es JSON, solo loguear la salida
+                    if result.stdout:
+                        self.logger.log(f"   Salida: {result.stdout[:200]}")
             else:
-                self.logger.error(f"[ERR] Script falló: {node.label}")
-                self.logger.error(f"Error: {result.stderr}")
+                self.logger.log(f"❌ Error en script (código {result.returncode})")
+                if result.stderr:
+                    self.logger.log(f"   Error: {result.stderr[:200]}")
             
-            return self.workflow.get_next_node(node.id)
-        
         except subprocess.TimeoutExpired:
-            self.logger.error(f"Timeout ejecutando script: {node.script}")
-            return self.workflow.get_next_node(node.id)
+            self.logger.log("❌ Timeout ejecutando script")
         except Exception as e:
-            self.logger.error(f"Error ejecutando script {node.script}: {str(e)}")
-            return self.workflow.get_next_node(node.id)
+            self.logger.log(f"❌ Error: {str(e)}")
+        
+        return self.workflow.get_next_node(node.id)
     
     def _execute_decision(self, node: DecisionNode) -> Optional[str]:
         """Ejecuta un nodo de decisión (IF/ELSE)"""
         if not node.condition:
-            self.logger.warning(f"Nodo {node.label} no tiene condición definida")
-            return node.true_path if node.true_path else self.workflow.get_next_node(node.id)
+            self.logger.log("⚠️ Decisión sin condición, tomando rama TRUE")
+            return node.true_path or self.workflow.get_next_node(node.id)
         
-        try:
-            # Evaluar condición de forma segura
-            result = self._eval_condition(node.condition)
-            self.logger.info(f"Condición '{node.condition}' = {result}")
-            
-            # Decidir siguiente nodo según resultado
-            if result:
-                next_id = node.true_path
-                self.logger.info(f"Rama TRUE: {next_id}")
-            else:
-                next_id = node.false_path
-                self.logger.info(f"Rama FALSE: {next_id}")
-            
-            return next_id if next_id else self.workflow.get_next_node(node.id)
+        self.logger.log(f"🔀 Evaluando condición: {node.condition}")
         
-        except Exception as e:
-            self.logger.error(f"Error evaluando condición '{node.condition}': {str(e)}")
-            # En caso de error, tomar rama FALSE
-            return node.false_path if node.false_path else self.workflow.get_next_node(node.id)
+        result = self._eval_condition(node.condition)
+        
+        if result:
+            self.logger.log("   ✅ Condición TRUE")
+            return node.true_path or self.workflow.get_next_node(node.id)
+        else:
+            self.logger.log("   ❌ Condición FALSE")
+            return node.false_path or self.workflow.get_next_node(node.id)
     
     def _execute_loop(self, node: LoopNode) -> Optional[str]:
         """Ejecuta un nodo de loop"""
-        try:
-            # Determinar número de iteraciones
-            iterations = self._get_loop_count(node.iterations)
-            self.logger.info(f"Ejecutando loop {node.label}: {iterations} iteraciones")
-            
-            # Ejecutar script N veces
-            for i in range(iterations):
-                if self.should_stop:
-                    break
-                
-                self.logger.info(f"Loop iteración {i+1}/{iterations}")
-                self.context[node.loop_var] = i
-                
-                # Ejecutar el script del loop
-                if node.script:
-                    # Crear ActionNode temporal usando object.__new__ para evitar problemas con __init__
-                    temp_action = object.__new__(ActionNode)
-                    temp_action.id = f"{node.id}_iter_{i}"
-                    temp_action.label = f"{node.label} (iter {i+1})"
-                    temp_action.script = node.script
-                    temp_action.type = NodeType.ACTION
-                    temp_action.position = {"x": 0, "y": 0}
-                    self._execute_action(temp_action)
-            
-            #Limpiar variable de loop
-            self.context.pop(node.loop_var, None)
-            
-            return self.workflow.get_next_node(node.id)
+        iterations = self._get_loop_count(node.iterations)
         
-        except Exception as e:
-            self.logger.error(f"Error ejecutando loop {node.label}: {str(e)}")
-            return self.workflow.get_next_node(node.id)
+        self.logger.log(f"🔁 Iniciando loop: {iterations} iteraciones")
+        
+        for i in range(iterations):
+            if self.should_stop:
+                break
+            
+            self.logger.log(f"   Iteración {i + 1}/{iterations}")
+            
+            # Actualizar variable de loop
+            self.context[node.loop_var] = i
+            
+            # Ejecutar script del loop si existe
+            if node.script:
+                try:
+                    env = os.environ.copy()
+                    for key, value in self.context.items():
+                        env[f"VAR_{key}"] = str(value)
+                    
+                    result = subprocess.run(
+                        ['python', node.script],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        env=env
+                    )
+                    
+                    if result.returncode != 0:
+                        self.logger.log(f"   ⚠️ Error en iteración {i + 1}")
+                        
+                except Exception as e:
+                    self.logger.log(f"   ❌ Error: {str(e)}")
+        
+        self.logger.log(f"✅ Loop completado")
+        return self.workflow.get_next_node(node.id)
     
     def _eval_condition(self, condition: str) -> bool:
         """
@@ -275,14 +250,21 @@ class WorkflowExecutor:
             Resultado booleano de la evaluación
         """
         try:
-            # Crear entorno seguro con solo operadores básicos
-            safe_dict = {
-                "__builtins__": {},
-                "True": True,
-                "False": False,
-                "None": None
-            }
-            safe_dict.update(self.context)
+            # Crear un diccionario seguro con solo las variables del contexto
+            safe_dict = self.context.copy()
+            
+            # Agregar operadores seguros
+            safe_dict.update({
+                '__builtins__': {
+                    'True': True,
+                    'False': False,
+                    'None': None,
+                    'len': len,
+                    'str': str,
+                    'int': int,
+                    'float': float
+                }
+            })
             
             result = eval(condition, safe_dict, {})
             return bool(result)
@@ -310,5 +292,102 @@ class WorkflowExecutor:
             try:
                 return int(value)
             except (ValueError, TypeError):
-                self.logger.warning(f"No se pudo obtener iteraciones de '{iterations}', usando 1")
+                self.logger.log(f"⚠️ Iteraciones inválidas: {iterations}, usando 1")
                 return 1
+    
+    def _execute_database(self, node) -> Optional[str]:
+        """
+        Ejecuta un nodo de base de datos.
+        
+        Args:
+            node: DatabaseNode a ejecutar
+            
+        Returns:
+            ID del siguiente nodo
+        """
+        from core.database_node import DatabaseNode
+        
+        if not isinstance(node, DatabaseNode):
+            self.logger.log(f"❌ Nodo no es DatabaseNode: {node.id}")
+            return self.workflow.get_next_node(node.id)
+        
+        self.logger.log(f"🗄️ Ejecutando nodo DB: {node.label}")
+        self.logger.log(f"   Operación: {node.operation}")
+        self.logger.log(f"   Host: {node.host}:{node.port}")
+        self.logger.log(f"   Database: {node.database}")
+        
+        connection = None
+        try:
+            # Conectar a MySQL
+            connection = mysql.connector.connect(
+                host=node.host,
+                port=node.port,
+                user=node.user,
+                password=node.password,
+                database=node.database
+            )
+            
+            if connection.is_connected():
+                self.logger.log(f"✅ Conectado a MySQL")
+                
+                cursor = connection.cursor(dictionary=True)
+                
+                # Reemplazar variables en la query
+                query = node.query
+                for var_name, var_value in self.context.items():
+                    placeholder = f"{{{var_name}}}"
+                    if placeholder in query:
+                        # Escapar valores para prevenir SQL injection
+                        if isinstance(var_value, str):
+                            var_value = var_value.replace("'", "''")
+                            query = query.replace(placeholder, f"'{var_value}'")
+                        else:
+                            query = query.replace(placeholder, str(var_value))
+                
+                self.logger.log(f"   Query: {query[:100]}...")
+                
+                # Ejecutar query
+                cursor.execute(query)
+                
+                if node.operation.upper() == "SELECT":
+                    # Para SELECT, obtener resultados
+                    results = cursor.fetchall()
+                    
+                    # Inyectar resultados en contexto
+                    if results:
+                        if len(results) == 1:
+                            # Un solo resultado: dict
+                            self.context[node.result_var] = results[0]
+                            self.logger.log(f"✅ Resultado guardado en '{node.result_var}': {results[0]}")
+                        else:
+                            # Múltiples resultados: lista de dicts
+                            self.context[node.result_var] = results
+                            self.logger.log(f"✅ {len(results)} resultados guardados en '{node.result_var}'")
+                    else:
+                        self.context[node.result_var] = None
+                        self.logger.log(f"⚠️ No se encontraron resultados")
+                else:
+                    # Para INSERT/UPDATE/DELETE, hacer commit
+                    connection.commit()
+                    affected_rows = cursor.rowcount
+                    self.logger.log(f"✅ {node.operation} ejecutado. Filas afectadas: {affected_rows}")
+                    self.context[node.result_var] = {"affected_rows": affected_rows}
+                
+                cursor.close()
+                
+        except MySQLError as e:
+            error_msg = f"Error MySQL: {str(e)}"
+            self.logger.log(f"❌ {error_msg}")
+            self.context[node.result_var] = {"error": str(e)}
+            
+        except Exception as e:
+            error_msg = f"Error ejecutando DB: {str(e)}"
+            self.logger.log(f"❌ {error_msg}")
+            self.context[node.result_var] = {"error": str(e)}
+            
+        finally:
+            if connection and connection.is_connected():
+                connection.close()
+                self.logger.log(f"🔌 Conexión cerrada")
+        
+        return self.workflow.get_next_node(node.id)

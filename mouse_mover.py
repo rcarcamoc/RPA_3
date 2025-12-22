@@ -7,7 +7,7 @@ from datetime import datetime
 # ==========================================================
 # CONFIGURACIÓN
 # ==========================================================
-INTERVALO_SEGUNDOS = 30  # Cambia este valor para personalizar el tiempo
+INTERVALO_SEGUNDOS = 60  # Cambia este valor para personalizar el tiempo
 # ==========================================================
 
 def mover_mouse_aleatoriamente():

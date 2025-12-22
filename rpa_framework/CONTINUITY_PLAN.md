@@ -37,23 +37,55 @@ rpa_framework/
 
 ### 🔴 PRIORIDAD ALTA: Estabilidad y Estructura
 #### 1. Refactorización de Arquitectura
-- **Problema**: `main_gui_simple.py` supera las 1000 líneas.
-- **Tarea**: Desacoplar el archivo en módulos (`tabs/`, `widgets/`, `utils/`). Es crítico realizar esto **antes** de seguir agregando funcionalidades para evitar deuda técnica técnica.
+- **Estado**: ✅ COMPLETADO
+- **Detalle**: `main_gui_simple.py` ha sido refactorizado en módulos (`ui/panels/`, `ui/workers.py`, `ui/styles.py`).
+- **Problema Anterior**: `main_gui_simple.py` superaba las 1000 líneas.
 
 #### 2. Unificación de Estructura de Grabaciones
-- **Tarea**: Centralizar toda la salida de los grabadores (py, json, meta) en una única estructura de carpetas organizada.
-- **Impacto**: Asegura que todas las pestañas de la GUI lean de la misma fuente de verdad y facilita el despliegue del software.
+- **Estado**: ✅ COMPLETADO
+- **Detalle**: Implementada estructura centralizada con subdirectorios (`recordings/ui/`, `recordings/web/`, `recordings/ocr/`).
+- **Cambios**: Todos los módulos actualizados para usar `utils/paths.py`. Workflows ahora busca scripts recursivamente.
 
 ### 🟡 PRIORIDAD MEDIA: Funcionalidad Core
 #### 3. Nodo de Base de Datos (MySQL)
-- **Tarea**: Implementar un nodo especializado en operaciones SQL (CRUD).
-- **Alcance**: Definición de conexión al servidor y inyección automática de resultados de `SELECT` en las variables del workflow.
+- **Estado**: ✅ COMPLETADO
+- **Detalle**: Implementado nodo DATABASE con soporte para operaciones CRUD (SELECT, INSERT, UPDATE, DELETE).
+- **Cambios**: 
+  - Creado `DatabaseNode` en `core/database_node.py`
+  - Integrado con `workflow_executor.py`
+  - Inyección automática de resultados SELECT en variables del workflow
+  - Soporte para reemplazo de variables en queries
+- **Pendiente**: Integración UI (panel de propiedades y canvas)
 
 ### 🟢 PRIORIDAD BAJA: UX y Pulido
-#### 4. Rediseño del Editor de Nodos
-- **Tarea**: Hacer el panel de propiedades dinámico (solo campos relevantes por tipo) e iconografía mejorada para zoom y tipos de nodo.
+#### 4. Rediseño del Editor de Nodos  
+- **Estado**: ✅ COMPLETADO (Fases 1-3)
+- **Implementado**:
+  - ✅ Nodos ANNOTATION para documentación (estilo sticky note)
+  - ✅ Gradientes y visuales modernos con íconos por tipo
+  - ✅ Inserción de nodos en edges con botón "+" interactivo
+  - ✅ Hover effects y resaltado de conexiones
+  - ✅ Panel de propiedades dinámico por tipo de nodo
+- **Pendiente** (Fase 4):
+  - Curvas Bezier, mini-map, animaciones
 
-#### 5. Facilidad de Edición
+#### 5. Paleta de Nodos Visual (N8N/UiPath Style)
+- **Estado**: 🚧 EN PROGRESO
+- **Objetivo**: Menú lateral con categorías de nodos y drag & drop
+- **Requisitos**:
+  - Categorías: Database, HTTP, Control Flow, Transform, Integrations
+  - Cada nodo: ícono profesional, nombre, tipo
+  - Drag & drop al canvas
+  - Preview on hover
+  - Grid responsivo o lista scrolleable
+- **Campos dinámicos por tipo**:
+  - Database: host, port, user, password, query, timeout
+  - HTTP: method, url, headers, body, auth
+  - Conditional: condition, operator, value
+  - Loop: variable, collection, start, end
+  - Transform: input_field, transform_type, output_field
+
+#### 6. Facilidad de Edición
 - **Portapapeles**: Implementar Copy/Paste (`Ctrl+C` / `Ctrl+V`).
 - **Alineación Inteligente**: `Snap-to-grid`.
 
