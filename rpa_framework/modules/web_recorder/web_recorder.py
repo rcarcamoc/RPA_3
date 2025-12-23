@@ -472,7 +472,7 @@ class PlaywrightLauncher:
             return self.settings.browser_firefox_win
         return self.settings.browser_chrome_win
 
-    def launch_browser(self, browser_name: str, url: str) -> Page:
+    def launch_browser(self, browser_name: str, url: str, maximized: bool = False) -> Page:
         if sync_playwright is Any:
             raise ImportError("Playwright no está instalado. Ejecute 'pip install playwright' y 'playwright install' en la terminal.")
         try:
@@ -492,6 +492,9 @@ class PlaywrightLauncher:
                     "--disable-default-apps",
                 ],
             }
+            if maximized:
+                launch_args["args"].append("--start-maximized")
+
             # Only add executable specific path if it exists, otherwise rely on default
             if os.path.exists(executable_path):
                 launch_args["executable_path"] = executable_path
@@ -558,6 +561,7 @@ class WebRecorder:
         self.session: Optional[SessionConfig] = None
         self.steps: List[StepConfig] = []
         self.is_recording = False
+        self.is_ocr_enabled = False
         self.launcher: Optional[PlaywrightLauncher] = None
         self.page: Optional[Page] = None
         self.events_processor = EventsProcessor()
@@ -582,7 +586,17 @@ class WebRecorder:
             except:
                 pass
 
-    def start_session(self, name: str, browser: str, url: str) -> None:
+    def set_ocr_state(self, is_enabled: bool):
+        """Actualiza el estado de la captura OCR."""
+        self.is_ocr_enabled = is_enabled
+        self.log(f"OCR Captura {'Activada' if is_enabled else 'Desactivada'}")
+
+    def toggle_pause(self):
+        """Pausa o reanuda la grabación."""
+        self.is_recording = not self.is_recording
+        self.log(f"Grabación {'Reanudada' if self.is_recording else 'Pausada'}")
+
+    def start_session(self, name: str, browser: str, url: str, maximized: bool = False) -> None:
         if sync_playwright is Any:
              raise ImportError("El módulo Playwright no está disponible. Por favor, instálalo con 'pip install playwright' y luego ejecuta 'playwright install'.")
         try:
@@ -594,7 +608,7 @@ class WebRecorder:
             )
 
             self.launcher = PlaywrightLauncher(self.settings)
-            self.page = self.launcher.launch_browser(browser, url)
+            self.page = self.launcher.launch_browser(browser, url, maximized=maximized)
 
             # --- SETUP RECORDING BEFORE GOTO ---
             # 1. Expose binding
@@ -750,9 +764,9 @@ class WebRecorder:
                 self.steps[-1].value = value
                 return
 
-            # Capturar screenshot para OCR si es un click
+            # Capturar screenshot para OCR si es un click y está activado
             screenshot_b64 = None
-            if action_type == 'click':
+            if action_type == 'click' and self.is_ocr_enabled:
                 screenshot_b64 = self.ocr_processor.capture_and_compress(self.page, coords)
 
             step = StepConfig(
@@ -829,45 +843,6 @@ class WebRecorder:
         except Exception as e:
             logger.error(f"Error capturando click: {e}")
 
-    def export_to_json(self, output_dir: Optional[str] = None) -> str:
-        try:
-            # Use centralized path management
-            from utils.paths import get_web_recording_path
-            
-            if output_dir is None:
-                # Will use default WEB_RECORDINGS_DIR
-                pass
-
-            session_dict = asdict(self.session) if self.session else {}
-            output_data = {
-                "session": session_dict,
-                "steps": [asdict(step) for step in self.steps],
-                "metrics": {
-                    "total_steps": len(self.steps),
-                    "total_duration": session_dict.get("total_duration", 0.0),
-                    "average_reliability": (
-                        sum(s.selector_reliability for s in self.steps) / len(self.steps)
-                        if self.steps
-                        else 0.0
-                    ),
-                    "exported_at": datetime.now().isoformat(),
-                },
-            }
-
-            name = session_dict.get("name", "session")
-            if output_dir:
-                output_file = os.path.join(output_dir, f"{name}_steps.json")
-            else:
-                output_file = str(get_web_recording_path(f"{name}_steps.json"))
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"✓ JSON exportado: {output_file}")
-            return output_file
-        except Exception as e:
-            logger.error(f"Error exportando JSON: {e}")
-            return ""
-
     def export_to_python(self, output_dir: Optional[str] = None) -> str:
         try:
             # Use centralized path management
@@ -930,6 +905,8 @@ class RPA_Automation:
                 val = str(step.value).replace('"', '\\"') if step.value else ""
                 
                 if step.action == 'click':
+                    if step.screenshot_base64:
+                        body += f'            validate_with_ocr("{step.screenshot_base64}")\n'
                     if 'text=' in sel:
                          # Playwright text selector
                          body += f'            self.page.click("{sel}")\n'
@@ -964,6 +941,12 @@ class RPA_Automation:
             self.browser.close()
             logger.info("Navegador cerrado")
 
+def validate_with_ocr(base64_string: str):
+    """Placeholder for OCR validation logic."""
+    logger.info(f"Validating element with OCR...")
+    # Here you would add your actual OCR validation logic
+    pass
+
 if __name__ == "__main__":
     rpa = RPA_Automation(slowmo={self.settings.slowmo})
     rpa.start()
@@ -983,66 +966,6 @@ if __name__ == "__main__":
             return output_file
         except Exception as e:
             logger.error(f"Error exportando Python: {e}")
-            return ""
-
-    def export_to_n8n(self, output_dir: Optional[str] = None) -> str:
-        try:
-            # Use centralized path management
-            from utils.paths import get_web_recording_path
-            
-            if output_dir is None:
-                # Will use default WEB_RECORDINGS_DIR
-                pass
-
-            session_name = self.session.name if self.session else "session"
-            url = self.session.url if self.session else "https://example.com"
-
-            workflow = {
-                "name": f"RPA - {session_name}",
-                "active": False,
-                "nodes": [],
-            }
-
-            workflow["nodes"].append(
-                {
-                    "parameters": {
-                        "url": url,
-                        "waitForNavigation": True,
-                    },
-                    "name": "HTTP Start",
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 1,
-                    "position": [250, 300],
-                }
-            )
-
-            for idx, step in enumerate(self.steps, 1):
-                workflow["nodes"].append(
-                    {
-                        "parameters": {
-                            "selector": step.selector,
-                            "action": step.action,
-                            "value": step.value or "",
-                            "waitTime": step.wait_time,
-                        },
-                        "name": f"Step {idx} - {step.action}",
-                        "type": "n8n-nodes-base.playwright",
-                        "typeVersion": 1,
-                        "position": [250 + idx * 200, 300],
-                    }
-                )
-
-            if output_dir:
-                output_file = os.path.join(output_dir, f"{session_name}_workflow.json")
-            else:
-                output_file = str(get_web_recording_path(f"{session_name}_workflow.json"))
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(workflow, f, indent=2)
-
-            logger.info(f"✓ Workflow n8n exportado: {output_file}")
-            return output_file
-        except Exception as e:
-            logger.error(f"Error exportando n8n: {e}")
             return ""
 
     def test_playback(self, slowmo: Optional[int] = None) -> bool:

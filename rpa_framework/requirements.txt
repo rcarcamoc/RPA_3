@@ -9,7 +9,6 @@ PyQt6>=6.4.0
 PyQt6-Charts>=6.4.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
-pywin32>=306
 pillow>=10.0.0
 
 # OCR Dependencies
