@@ -7,6 +7,7 @@ Plataforma: Windows
 Autor: RPA_3 Team
 """
 
+from __future__ import annotations
 import json
 import logging
 import os
@@ -27,7 +28,16 @@ try:
 except ImportError as e:
     print(f"❌ Error importando dependencias: {e}")
     print("Ejecuta: pip install playwright opencv-python pillow pytesseract numpy")
-    # exit(1) # Commented out to avoid crash if imported in GUI without dependencies fully active
+    # Fallbacks for type hints
+    sync_playwright = Any
+    Browser = Any
+    Page = Any
+    BrowserContext = Any
+    # Other potential missing imports
+    cv2 = Any
+    np = Any
+    Image = Any
+    pytesseract = Any
 
 # ============================================================================
 # CONFIGURACIÓN Y TIPOS
@@ -463,6 +473,8 @@ class PlaywrightLauncher:
         return self.settings.browser_chrome_win
 
     def launch_browser(self, browser_name: str, url: str) -> Page:
+        if sync_playwright is Any:
+            raise ImportError("Playwright no está instalado. Ejecute 'pip install playwright' y 'playwright install' en la terminal.")
         try:
             self.playwright = sync_playwright().start()
             executable_path = self._get_executable_path(browser_name)
@@ -513,15 +525,7 @@ class PlaywrightLauncher:
             )
 
             self.page = self.context.new_page()
-            if url:
-                try:
-                    if not url.startswith("http"):
-                        url = "https://" + url
-                    self.page.goto(url, wait_until="domcontentloaded") # networkidle can be too slow
-                except Exception as ex:
-                    logger.error(f"Error navigating to {url}: {ex}")
-
-            logger.info(f"✓ Navegador lanzado exitosamente: {url}")
+            logger.info(f"✓ Navegador lanzado exitosamente.")
             return self.page
 
         except Exception as e:
@@ -548,8 +552,9 @@ class PlaywrightLauncher:
 class WebRecorder:
     """Grabador web profesional RPA_3"""
 
-    def __init__(self, settings: Optional[RecorderSettings] = None):
+    def __init__(self, settings: Optional[RecorderSettings] = None, log_callback: Optional[callable] = None):
         self.settings = settings or RecorderSettings()
+        self.log_callback = log_callback
         self.session: Optional[SessionConfig] = None
         self.steps: List[StepConfig] = []
         self.is_recording = False
@@ -560,9 +565,26 @@ class WebRecorder:
         self.selectors_engine = SelectorsEngine()
         self.context_handler = ContextHandler()
 
-        logger.info("WebRecorder inicializado")
+        self.log("WebRecorder inicializado")
+
+    def log(self, message: str, level: str = "info"):
+        """Logs message to both logger and callback."""
+        if level == "error":
+            logger.error(message)
+        elif level == "warning":
+            logger.warning(message)
+        else:
+            logger.info(message)
+            
+        if self.log_callback:
+            try:
+                self.log_callback(message)
+            except:
+                pass
 
     def start_session(self, name: str, browser: str, url: str) -> None:
+        if sync_playwright is Any:
+             raise ImportError("El módulo Playwright no está disponible. Por favor, instálalo con 'pip install playwright' y luego ejecuta 'playwright install'.")
         try:
             self.session = SessionConfig(
                 name=name,
@@ -574,70 +596,181 @@ class WebRecorder:
             self.launcher = PlaywrightLauncher(self.settings)
             self.page = self.launcher.launch_browser(browser, url)
 
+            # --- SETUP RECORDING BEFORE GOTO ---
+            # 1. Expose binding
+            self.page.expose_binding("rpa_record", self._on_browser_action)
+            
+            # 2. Add Init Script (survives navigations)
+            self._inject_listener()
+
+            # 3. Now navigate
+            if url:
+                if not url.startswith("http"):
+                    url = "https://" + url
+                self.page.goto(url, wait_until="domcontentloaded")
+
             self.is_recording = True
             self.steps = []
             
-            # TODO: Inject JS recorder here ideally, but for now we use simulation or external bindings
-            # Inject listener script
-            self._inject_listener()
-
-            logger.info(f"✓ Sesión iniciada: {name} ({browser})")
+            self.log(f"✓ Sesión iniciada y listeners activos: {name}")
         except Exception as e:
-            logger.error(f"Error iniciando sesión: {e}")
+            self.log(f"Error iniciando sesión: {e}", level="error")
             raise
 
     def _inject_listener(self):
-        """Injects JS to listen for clicks/type and expose to Python."""
+        """Injects clean JS to listen for events and send to Python."""
         if not self.page: return
         
-        # This is a key part missing in the original md spec for a REAL recorder
-        # We need to expose a binding to python `on_action`
-        self.page.expose_binding("rpa_record", self._on_browser_action)
-        
         js_code = """
-        document.addEventListener('click', (e) => {
-            const path = [];
-            let el = e.target;
-            while(el) {
-                let sel = el.tagName.toLowerCase();
-                if(el.id) sel += '#' + el.id;
-                else if (el.className && typeof el.className === 'string') sel += '.' + el.className.split(' ').join('.');
-                path.push(sel);
-                el = el.parentElement;
-            }
-            const full_path = path.reverse().join(' > ');
+        (function() {
+            if (window.rpa_recording_active) return;
+            window.rpa_recording_active = true;
             
-            window.rpa_record({
-                type: 'click',
-                selector: full_path,
-                x: e.clientX,
-                y: e.clientY,
-                target_text: e.target.innerText
-            });
-        }, true);
-        
-        document.addEventListener('change', (e) => {
-             window.rpa_record({
-                type: 'type',
-                selector: e.target.tagName, # Simple fallback
-                value: e.target.value
-            });
-        }, true);
+            console.log('RPA_3: Smart Recorder Active');
+
+            // --- SMART SELECTOR ENGINE ---
+            const getSmartSelector = (el) => {
+                // 1. Prioridad: ID
+                if (el.id) return `#${el.id}`;
+                
+                // 2. Prioridad: Atributos clave de testing/form
+                const keyAttrs = ['data-testid', 'data-test', 'name', 'placeholder', 'aria-label', 'role'];
+                for (let attr of keyAttrs) {
+                    if (el.hasAttribute(attr)) {
+                         return `${el.tagName.toLowerCase()}[${attr}="${el.getAttribute(attr)}"]`;
+                    }
+                }
+
+                // 3. Prioridad: Texto Visible (solo para botones y links cortos)
+                if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SPAN' || el.tagName === 'DIV') && 
+                    el.innerText && el.innerText.length < 30) {
+                    const text = el.innerText.trim();
+                    if (text) return `text="${text}"`;
+                }
+
+                // 4. Prioridad: Clases únicas (si no son genéricas)
+                if (el.className && typeof el.className === 'string' && el.className.trim() !== '') {
+                    const classes = el.className.split(' ').filter(c => !c.match(/^[a-z0-9]{10,}$/)); // Filtrar hashes
+                    if (classes.length > 0) {
+                        return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
+                    }
+                }
+
+                // 5. Fallback: Ruta CSS limpia
+                let path = [];
+                let current = el;
+                while (current && current.nodeType === Node.ELEMENT_NODE) {
+                    let selector = current.nodeName.toLowerCase();
+                    if (current.id) {
+                        selector = `#${current.id}`;
+                        path.unshift(selector);
+                        break;
+                    } 
+                    if (current.parentNode) {
+                        let siblings = Array.from(current.parentNode.children).filter(e => e.nodeName === current.nodeName);
+                        if (siblings.length > 1) {
+                            selector += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+                        }
+                    }
+                    path.unshift(selector);
+                    current = current.parentNode;
+                }
+                return path.join(' > ');
+            };
+
+            const recordAction = (data) => {
+                if (typeof window.rpa_record === 'function') {
+                    window.rpa_record(data);
+                }
+            };
+
+            // CLICK LISTENER (mousedown para capturar antes de cambios de pagina)
+            document.addEventListener('mousedown', (e) => {
+                try {
+                    // Ignorar clicks en el debugger overlay si existiera
+                    if (e.target.id === 'rpa-debug-indicator') return;
+
+                    const selector = getSmartSelector(e.target);
+                    
+                    // Visual Highlighting (Feedback Rojo)
+                    const originalOutline = e.target.style.outline;
+                    e.target.style.outline = '3px solid rgba(255, 0, 0, 0.7)';
+                    setTimeout(() => { e.target.style.outline = originalOutline; }, 300);
+
+                    recordAction({
+                        type: 'click',
+                        selector: selector,
+                        x: e.clientX,
+                        y: e.clientY,
+                        text: e.target.innerText?.slice(0, 50),
+                        tagName: e.target.tagName
+                    });
+                } catch(err) { console.error('RPA Click error:', err); }
+            }, { capture: true, passive: true });
+
+            // INPUT LISTENER (Detectar 'change' para valores finales)
+            document.addEventListener('change', (e) => {
+                try {
+                    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+                        const selector = getSmartSelector(e.target);
+                        // Visual Feedback Azul
+                        e.target.style.border = '2px solid blue';
+                        
+                        recordAction({
+                            type: 'type',
+                            selector: selector,
+                            value: e.target.value,
+                            tagName: e.target.tagName
+                        });
+                    }
+                } catch(err) { console.error('RPA Type error:', err); }
+            }, { capture: true, passive: true });
+        })();
         """
         try:
             self.page.add_init_script(js_code)
-            self.page.evaluate(js_code) # Also run now
+            self.page.evaluate(js_code) # Force run immediately
         except Exception as e:
-            logger.warning(f"Could not inject listener: {e}")
+            self.log(f"Error injecting init script: {e}", level="warning")
 
-    def _on_browser_action(self, source, data):
+    def _on_browser_action(self, source, data: dict):
         """Callback from browser JS."""
-        if not self.is_recording: return
-        logger.info(f"Browser Action: {data}")
-        # Convert to StepConfig
-        # This is a bit advanced for the current 'simulated' requested scope but good to have prepared
-        # For now, rely on manual simulate calls or this callback
-        pass
+        if not self.is_recording or not self.page: return
+        
+        try:
+            action_type = data.get('type')
+            selector = data.get('selector', 'unknown')
+            coords = [data.get('x', 0), data.get('y', 0)]
+            value = data.get('value', '')
+            
+            self.log(f"🔵 Browser Action: {action_type} en {selector}")
+            
+            # Evitar duplicados rápidos de escritura si el valor no cambió (opcional)
+            if action_type == 'type' and self.steps and self.steps[-1].action == 'type' and self.steps[-1].selector == selector:
+                self.steps[-1].value = value
+                return
+
+            # Capturar screenshot para OCR si es un click
+            screenshot_b64 = None
+            if action_type == 'click':
+                screenshot_b64 = self.ocr_processor.capture_and_compress(self.page, coords)
+
+            step = StepConfig(
+                id=f"step_{len(self.steps) + 1:03d}",
+                action=action_type,
+                selector=selector,
+                coords=coords,
+                timestamp=time.time(),
+                value=value,
+                screenshot_base64=screenshot_b64,
+                selector_reliability=0.8
+            )
+            
+            self.steps.append(step)
+            self.log(f"✅ Paso guardado: {action_type.upper()} [{len(self.steps)}]")
+            
+        except Exception as e:
+            self.log(f"Error procesando acción del navegador: {e}", level="error")
 
     def stop_session(self) -> None:
         try:
@@ -747,15 +880,15 @@ class WebRecorder:
             session_name = self.session.name if self.session else "session"
             url = self.session.url if self.session else "https://example.com"
 
-            header = f'''#!/usr/bin/env python3
+            header = f"""#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+\"\"\"
 Script RPA Autogenerado desde WebRecorder
 Sesión: {session_name}
 Navegador: chromium
 URL Original: {url}
 Generado: {datetime.now().isoformat()}
-"""
+\"\"\"
 
 from playwright.sync_api import sync_playwright
 import time
@@ -784,44 +917,47 @@ class RPA_Automation:
 
     def run(self):
         try:
-            logger.info("Navegando a: {url}")
-            self.page.goto("{url}", wait_until="domcontentloaded")
-'''
+            logger.info(f"Navegando a: {url}")
+            self.page.goto(f"{url}", wait_until="domcontentloaded")
+"""
 
             body = ""
             for idx, step in enumerate(self.steps, 1):
-                body += f"\n            # Paso {idx}: {step.action.upper()}\n"
-                if step.action == ActionType.CLICK.value:
+                body += f"\n            # Paso {idx}: {step.action.upper()} en {step.selector}\n"
+                
+                # Sanitize selector and value from quotes
+                sel = step.selector.replace('"', "'")
+                val = str(step.value).replace('"', '\\"') if step.value else ""
+                
+                if step.action == 'click':
+                    if 'text=' in sel:
+                         # Playwright text selector
+                         body += f'            self.page.click("{sel}")\n'
+                    else:
+                         # Standard CSS
+                         body += f'            self.page.click("{sel}")\n'
+                    
+                    # Smart wait after clicks (often triggers navigation)
+                    body += '            self.page.wait_for_load_state("networkidle", timeout=3000)\n'
+                    body += f'            logger.info("✓ Click en {sel}")\n'
+
+                elif step.action == 'type':
                     body += (
-                        f'            self.page.click("{step.selector}")\n'
-                        f'            logger.info("✓ Click ejecutado")\n'
-                    )
-                elif step.action == ActionType.TYPE.value:
-                    body += (
-                        f'            self.page.fill("{step.selector}", "{step.value or ""}")\n'
-                        f'            logger.info("✓ Texto ingresado")\n'
-                    )
-                elif step.action == ActionType.HOVER.value:
-                    body += (
-                        f'            self.page.hover("{step.selector}")\n'
-                        f'            logger.info("✓ Hover ejecutado")\n'
-                    )
-                elif step.action == ActionType.SCROLL.value:
-                    body += (
-                        f'            self.page.evaluate("window.scrollTo(0, {step.coords[1]})")\n'
-                        f'            logger.info("✓ Scroll ejecutado")\n'
-                    )
-                elif step.action == ActionType.WAIT.value:
-                    body += (
-                        f'            self.page.wait_for_selector("{step.selector}", timeout=5000)\n'
-                        f'            logger.info("✓ Elemento aparición esperado")\n'
+                        f'            self.page.fill("{sel}", "{val}")\n'
+                        f'            logger.info("✓ Escribir \'{val}\' en {sel}")\n'
                     )
 
-            footer = '''
+                elif step.action == 'hover':
+                    body += f'            self.page.hover("{sel}")\n'
+                
+                elif step.action == 'wait':
+                    body += f'            self.page.wait_for_selector("{sel}", state="visible", timeout=5000)\n'
+
+            footer = f'''
             logger.info("✓ Automatización completada")
 
         except Exception as e:
-            logger.error(f"❌ Error: {str(e)}")
+            logger.error(f"❌ Error: {{str(e)}}")
             raise
         finally:
             time.sleep(1)
@@ -829,12 +965,10 @@ class RPA_Automation:
             logger.info("Navegador cerrado")
 
 if __name__ == "__main__":
-    rpa = RPA_Automation(slowmo={slowmo})
+    rpa = RPA_Automation(slowmo={self.settings.slowmo})
     rpa.start()
     rpa.run()
-'''.format(
-                slowmo=self.settings.slowmo
-            )
+'''
 
             code = header + body + footer
 

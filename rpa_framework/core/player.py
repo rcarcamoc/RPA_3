@@ -72,10 +72,20 @@ class RecordingPlayer:
         if not self.setup():
             return {"status": "FAILED", "reason": "Setup failed"}
         
+        # Detección de tipo de grabación
+        is_web = "steps" in self.data and "session" in self.data
+        actions_list = self.data.get("actions") or self.data.get("steps")
+        
+        if actions_list is None:
+            return {"status": "FAILED", "reason": "Formato de grabación no reconocido (falta 'actions' o 'steps')"}
+
+        if is_web:
+            logger.info("Detectada grabación WEB. Nota: El reproductor actual está optimizado para Desktop.")
+
         results = {
             "session_id": self.session_id,
             "status": "RUNNING",
-            "total_actions": len(self.data["actions"]),
+            "total_actions": len(actions_list),
             "completed": 0,
             "failed": 0,
             "errors": [],
@@ -84,10 +94,19 @@ class RecordingPlayer:
         
         logger.info(f"Iniciando: {results['total_actions']} acciones")
         
-        for idx, action_data in enumerate(self.data["actions"], 1):
-            action = Action.from_dict(action_data)
-            
+        for idx, action_data in enumerate(actions_list, 1):
             try:
+                # Si es web, mapear a objeto Action si es posible o fallar controlado
+                if is_web:
+                    # Mapeo básico para no crash
+                    action_type = action_data.get("action", "unknown")
+                    logger.warning(f"[{idx}] Saltando acción WEB (reproducción nativa web no implementada en este player): {action_type}")
+                    results["failed"] += 1
+                    results["errors"].append({"action_idx": idx, "reason": "Acción web no soportada en player Desktop"})
+                    continue
+
+                action = Action.from_dict(action_data)
+            
                 logger.info(f"[{idx}/{results['total_actions']}] {action.type.value}")
                 success = self.executor.execute(action)
                 
@@ -106,11 +125,14 @@ class RecordingPlayer:
                         
             except Exception as e:
                 results["failed"] += 1
-                results["errors"].append({
+                error_info = {
                     "action_idx": idx,
-                    "type": action.type.value,
                     "reason": str(e)
-                })
+                }
+                if 'action' in locals() and action:
+                    error_info["type"] = action.type.value
+                
+                results["errors"].append(error_info)
                 logger.error(f"Error en acción {idx}: {e}")
                 
                 if self.config.get("stop_on_error", False):

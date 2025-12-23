@@ -64,3 +64,39 @@ ModuleNotFoundError: No module named 'mysql'
 [2025-12-21 23:42:28] [INFO] ✅ Ejecución completada: success
 [2025-12-21 23:42:28] [INFO]    Variables finales: {}
 [2025-12-21 23:42:28] [INFO] ============================================================
+[2025-12-22 22:14:13] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-22 22:14:13] [INFO]    Variables iniciales: {}
+[2025-12-22 22:14:13] [INFO] ============================================================
+[2025-12-22 22:14:13] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-22 22:14:13] [INFO] ============================================================
+[2025-12-22 22:14:13] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-22 22:14:13] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-22 22:14:13] [INFO] 🐍 Ejecutando script: demo_web_automation.py
+[2025-12-22 22:14:13] [INFO] ❌ Error en script (código 2)
+[2025-12-22 22:14:13] [INFO]    Error: python: can't open file 'c:\\Desarrollo\\RPA_3\\rpa_framework\\demo_web_automation.py': [Errno 2] No such file or directory
+
+[2025-12-22 22:14:13] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-22 22:14:13] [INFO] ============================================================
+[2025-12-22 22:14:13] [INFO] ✅ Ejecución completada: success
+[2025-12-22 22:14:13] [INFO]    Variables finales: {}
+[2025-12-22 22:14:13] [INFO] ============================================================
+[2025-12-22 22:14:54] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-22 22:14:54] [INFO]    Variables iniciales: {}
+[2025-12-22 22:14:54] [INFO] ============================================================
+[2025-12-22 22:14:54] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-22 22:14:54] [INFO] ============================================================
+[2025-12-22 22:14:54] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-22 22:14:54] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-22 22:14:54] [INFO] 🐍 Ejecutando script: demo_web_automation.py
+[2025-12-22 22:14:54] [INFO] ❌ Error en script (código 2)
+[2025-12-22 22:14:54] [INFO]    Error: python: can't open file 'c:\\Desarrollo\\RPA_3\\rpa_framework\\demo_web_automation.py': [Errno 2] No such file or directory
+
+[2025-12-22 22:14:54] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-22 22:14:54] [INFO] ============================================================
+[2025-12-22 22:14:54] [INFO] ✅ Ejecución completada: success
+[2025-12-22 22:14:54] [INFO]    Variables finales: {}
+[2025-12-22 22:14:54] [INFO] ============================================================

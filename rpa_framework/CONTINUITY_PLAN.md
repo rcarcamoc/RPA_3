@@ -73,17 +73,17 @@ rpa_framework/
 - **Estado**: 🚧 EN PROGRESO
 - **Objetivo**: Menú lateral con categorías de nodos y drag & drop
 - **Requisitos**:
-  - Categorías: Database, HTTP, Control Flow, Transform, Integrations
+  - Categorías: Database,  Control Flow, Transform, Integrations, ejecuta un programa
   - Cada nodo: ícono profesional, nombre, tipo
   - Drag & drop al canvas
   - Preview on hover
   - Grid responsivo o lista scrolleable
 - **Campos dinámicos por tipo**:
   - Database: host, port, user, password, query, timeout
-  - HTTP: method, url, headers, body, auth
-  - Conditional: condition, operator, value
+  - HTTP: method, url, headers, body, auth  - Conditional: condition, operator, value
   - Loop: variable, collection, start, end
   - Transform: input_field, transform_type, output_field
+  - Ejecuta un programa: script 
 
 #### 6. Facilidad de Edición
 - **Portapapeles**: Implementar Copy/Paste (`Ctrl+C` / `Ctrl+V`).

@@ -1,6 +1,9 @@
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.player import RecordingPlayer
+import json
+import os
+from pathlib import Path
 
 class ReplayWorker(QThread):
     """Worker para reproducción sin bloquear UI."""
@@ -19,22 +22,51 @@ class ReplayWorker(QThread):
         # Inicializar COM para este hilo (necesario para pywinauto en QThread)
         try:
             import pythoncom
-            print("[DEBUG] ReplayWorker: Intentando CoInitialize...")
             pythoncom.CoInitialize()
             print("[DEBUG] ReplayWorker: CoInitialize OK")
-        except ImportError:
-            print("[DEBUG] ReplayWorker: pythoncom no encontrado, saltando CoInitialize")
-        except Exception as e:
-            print(f"[DEBUG] ReplayWorker: Error en CoInitialize: {e}")
+        except:
+            pass
 
         try:
-            print(f"[DEBUG] ReplayWorker: Inicializando RecordingPlayer con {self.recording_path}")
-            player = RecordingPlayer(self.recording_path, self.config)
+            from core.web_player import WebReplayer
+            ext = Path(self.recording_path).suffix.lower()
             
-            print("[DEBUG] ReplayWorker: Ejecutando player.run()...")
-            results = player.run()
+            if ext == ".py":
+                print(f"[DEBUG] ReplayWorker: Ejecutando SCRIPT PYTHON ({self.recording_path})")
+                import subprocess
+                import sys
+                
+                result = subprocess.run(
+                    [sys.executable, self.recording_path],
+                    capture_output=True,
+                    text=True
+                )
+                
+                status = "SUCCESS" if result.returncode == 0 else "FAILED"
+                results = {
+                    "status": status,
+                    "completed": 1 if result.returncode == 0 else 0,
+                    "failed": 0 if result.returncode == 0 else 1,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr
+                }
+            else:
+                print(f"[DEBUG] ReplayWorker: Cargando JSON {self.recording_path}")
+                with open(self.recording_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Detectar si es web (JSON)
+                is_web = "steps" in data and "session" in data
+                
+                if is_web:
+                    print("[DEBUG] ReplayWorker: Usando WebReplayer.")
+                    player = WebReplayer(data, self.config)
+                else:
+                    print("[DEBUG] ReplayWorker: Usando RecordingPlayer.")
+                    player = RecordingPlayer(data, self.config)
+                
+                results = player.run()
             
-            print(f"[DEBUG] ReplayWorker: Ejecución finalizada. Status: {results.get('status')}")
             self.finished.emit(results)
             
         except Exception as e:
@@ -47,13 +79,12 @@ class ReplayWorker(QThread):
             try:
                 import pythoncom
                 pythoncom.CoUninitialize()
-                print("[DEBUG] ReplayWorker: CoUninitialize OK")
             except:
                 pass
 
 class OCRInitWorker(QThread):
     """Worker para inicializar OCR en segundo plano."""
-    finished = pyqtSignal(object, object, object, object) # engine, matcher, actions, generator
+    finished = pyqtSignal(object, object, object, object) 
     error = pyqtSignal(str)
     
     def __init__(self, engine_name, lang):
@@ -63,7 +94,6 @@ class OCRInitWorker(QThread):
         
     def run(self):
         try:
-            # Importar aquí para evitar circularidad o carga temprana
             from ocr.engine import OCREngine
             from ocr.matcher import OCRMatcher
             from ocr.actions import OCRActions

@@ -117,34 +117,39 @@ def get_all_scripts(include_subdirs: bool = True) -> list[Path]:
     return sorted(unique_scripts.values(), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def get_all_json_recordings(recording_type: Optional[str] = None) -> list[Path]:
-    """Get all JSON recording files, including legacy."""
+def get_all_recordings(recording_type: Optional[str] = None) -> list[Path]:
+    """Get all JSON and Python recording files, recursively."""
     recordings = []
     
-    # Helper to scan a dir
-    def scan_dir(d):
+    # helper to scan a dir recursively for both formats
+    def scan_dir_recursive(d):
         if d.exists():
-            recordings.extend(d.glob("*.json"))
+            # Buscamos JSON (datos) y PY (scripts autogenerados)
+            recordings.extend(d.rglob("*.json"))
+            recordings.extend(d.rglob("*.py"))
 
-    # New Structure
     if recording_type == 'ui':
-        scan_dir(UI_RECORDINGS_DIR)
+        scan_dir_recursive(UI_RECORDINGS_DIR)
     elif recording_type == 'web':
-        scan_dir(WEB_RECORDINGS_DIR)
+        scan_dir_recursive(WEB_RECORDINGS_DIR)
     else:
-        # Get all
-        for subdir in [UI_RECORDINGS_DIR, WEB_RECORDINGS_DIR]:
-            scan_dir(subdir)
+        # Search everything in the main recordings folder
+        scan_dir_recursive(RECORDINGS_DIR)
             
-    # Legacy Support (Assume root recordings are UI or mixed, include in UI or All)
-    if recording_type == 'ui' or recording_type is None:
-        if LEGACY_RECORDINGS_DIR.exists() and LEGACY_RECORDINGS_DIR != RECORDINGS_DIR:
-             scan_dir(LEGACY_RECORDINGS_DIR)
+    # Legacy Support
+    if LEGACY_RECORDINGS_DIR.exists() and LEGACY_RECORDINGS_DIR.resolve() != RECORDINGS_DIR.resolve():
+         scan_dir_recursive(LEGACY_RECORDINGS_DIR)
     
-    # Deduplicate
+    # Deduplicate and sort by modification time
     unique_recs = {str(p.resolve()): p for p in recordings}
     
     return sorted(unique_recs.values(), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def get_all_json_recordings(recording_type: Optional[str] = None) -> list[Path]:
+    """Get only JSON recording files (backward compatibility)."""
+    all_recs = get_all_recordings(recording_type)
+    return [p for p in all_recs if p.suffix.lower() == ".json"]
 
 
 # Initialize directories on import

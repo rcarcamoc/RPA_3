@@ -120,7 +120,7 @@ class WebRecordPanel(QWidget):
             self.log(f"Iniciando navegador {browser} en {url}...")
             
             settings = RecorderSettings(slowmo=500) # Un poco lento para ver mejor
-            self.recorder = WebRecorder(settings)
+            self.recorder = WebRecorder(settings, log_callback=self.log)
             
             # Lanzar en Thread aparte sería ideal, pero Playwright sync debe ir en main o worker dedicado.
             # Por simplicidad en demo, lo hacemos síncrono bloqueante brevemente al inicio,

@@ -3,12 +3,15 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QPushButton,
     QComboBox, QCheckBox, QProgressBar, QTextEdit, QMessageBox
 )
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from datetime import datetime
 import json
 from utils.config_loader import load_config
 from ui.workers import ReplayWorker
-from utils.paths import get_all_json_recordings
+from utils.paths import get_all_recordings, RECORDINGS_DIR
+from pathlib import Path
+from PyQt6.QtWidgets import QListWidgetItem
 
 class ReplayPanel(QWidget):
     """Panel para reproducir."""
@@ -36,9 +39,17 @@ class ReplayPanel(QWidget):
         self.recordings_list.setMaximumHeight(150)
         layout.addWidget(self.recordings_list)
         
+        btns_top = QHBoxLayout()
         btn_refresh = QPushButton("🔄 Recargar Lista")
         btn_refresh.clicked.connect(self.load_recordings)
-        layout.addWidget(btn_refresh)
+        btns_top.addWidget(btn_refresh)
+        
+        btn_delete = QPushButton("🗑️ Eliminar")
+        btn_delete.setStyleSheet("QPushButton { color: #f44336; }")
+        btn_delete.clicked.connect(self.delete_recording)
+        btns_top.addWidget(btn_delete)
+        
+        layout.addLayout(btns_top)
         
         # Configuración
         config_layout = QHBoxLayout()
@@ -94,16 +105,24 @@ class ReplayPanel(QWidget):
         self.load_recordings()
     
     def load_recordings(self):
-        """Carga lista de grabaciones desde directorio."""
+        """Carga lista de grabaciones desde el directorio principal recursivamente."""
         self.recordings_list.clear()
         
-        # Use centralized path management
-        files = get_all_json_recordings(recording_type='ui')  # Only UI recordings
+        # Obtener todas las grabaciones (JSON y PY) recursivamente
+        files = get_all_recordings(recording_type=None)  
         
         for p in files:
-            # Mostrar nombre y fecha
+            # Calcular ruta relativa para mostrar en la lista
+            try:
+                display_path = p.relative_to(RECORDINGS_DIR)
+            except ValueError:
+                display_path = p.name # Fallback si está fuera de recordings
+                
             date_str = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            self.recordings_list.addItem(f"{p.name}  ({date_str})")
+            
+            item = QListWidgetItem(f"{display_path}  ({date_str})")
+            item.setData(Qt.ItemDataRole.UserRole, str(p)) # Guardar ruta completa
+            self.recordings_list.addItem(item)
             
     def start_replay(self):
         current_item = self.recordings_list.currentItem()
@@ -111,12 +130,9 @@ class ReplayPanel(QWidget):
             QMessageBox.warning(self, "⚠️ Advertencia", "Selecciona una grabación de la lista")
             return
             
-        # Extraer solo el nombre del archivo (antes de los paréntesis)
-        filename = current_item.text().split("  (")[0]
-        
-        # Find the file in all recordings
-        from utils.paths import UI_RECORDINGS_DIR
-        file_path = UI_RECORDINGS_DIR / filename
+        # Recuperar ruta completa desde los datos del item
+        file_path_str = current_item.data(Qt.ItemDataRole.UserRole)
+        file_path = Path(file_path_str)
         
         if not file_path.exists():
             QMessageBox.error(self, "❌ Error", f"Archivo no encontrado: {file_path}")
@@ -153,3 +169,32 @@ class ReplayPanel(QWidget):
     def on_replay_error(self, error):
         self.progress.setVisible(False)
         QMessageBox.critical(self, "❌ Error", f"Error en reproducción: {error}")
+
+    def delete_recording(self):
+        """Elimina la grabación seleccionada físicamente."""
+        current_item = self.recordings_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "⚠️ Advertencia", "Selecciona una grabación para eliminar")
+            return
+            
+        file_path_str = current_item.data(Qt.ItemDataRole.UserRole)
+        file_path = Path(file_path_str)
+        
+        reply = QMessageBox.question(
+            self, "Confirmar eliminación",
+            f"¿Estás seguro de que deseas eliminar permanentemente esta grabación?\n\nRuta: {file_path.name}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    QMessageBox.information(self, "Eliminado", "La grabación ha sido eliminada.")
+                    self.load_recordings()
+                else:
+                    QMessageBox.error(self, "Error", "El archivo ya no existe.")
+                    self.load_recordings()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo eliminar el archivo:\n{e}")

@@ -79,13 +79,22 @@ class DashboardPanel(QWidget):
             self.table.setRowCount(min(10, len(recordings)))
             for i, rec in enumerate(sorted(recordings, reverse=True)[:10]):
                 try:
-                    with open(rec) as f:
+                    with open(rec, encoding='utf-8') as f:
                         data = json.load(f)
                         self.table.setItem(i, 0, QTableWidgetItem(rec.name))
-                        self.table.setItem(i, 1, QTableWidgetItem(str(data['metadata'].get('total_actions', 0))))
-                        self.table.setItem(i, 2, QTableWidgetItem(f"{data['metadata'].get('duration_seconds', 0):.2f}"))
-                        self.table.setItem(i, 3, QTableWidgetItem(data['metadata'].get('created_at', 'N/A')[:10]))
-                except:
-                    pass
+                        
+                        # Detectar esquema (UI vs WEB)
+                        if 'metadata' in data:
+                            meta = data['metadata']
+                            self.table.setItem(i, 1, QTableWidgetItem(str(meta.get('total_actions', 0))))
+                            self.table.setItem(i, 2, QTableWidgetItem(f"{meta.get('duration_seconds', 0):.2f}"))
+                            self.table.setItem(i, 3, QTableWidgetItem(meta.get('created_at', 'N/A')[:10]))
+                        elif 'metrics' in data:
+                            metrics = data['metrics']
+                            self.table.setItem(i, 1, QTableWidgetItem(str(metrics.get('total_steps', 0))))
+                            self.table.setItem(i, 2, QTableWidgetItem(f"{metrics.get('total_duration', 0):.2f}"))
+                            self.table.setItem(i, 3, QTableWidgetItem(metrics.get('exported_at', 'N/A')[:10]))
+                except Exception as e:
+                    print(f"Error parsing {rec.name}: {e}")
         except Exception as e:
             print(f"Error cargando stats: {e}")
