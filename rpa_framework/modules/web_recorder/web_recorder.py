@@ -1,1021 +1,486 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RPA_3 WebRecorder - Módulo Principal
-Grabación de pasos web con validación OCR y exportación multi-formato
-Plataforma: Windows
-Autor: RPA_3 Team
+Web Recorder Module
+Captures web browser actions using Selenium and Javascript injection.
 """
 
-from __future__ import annotations
-import json
-import logging
-import os
-import base64
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Any
+import base64
+import threading
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, asdict
-from enum import Enum
+from queue import Queue
+from threading import Thread, Event, Lock
+import traceback
+import io
 
 try:
-    from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
-    import cv2
-    import numpy as np
-    from PIL import Image
-    import pytesseract
-except ImportError as e:
-    print(f"❌ Error importando dependencias: {e}")
-    print("Ejecuta: pip install playwright opencv-python pillow pytesseract numpy")
-    # Fallbacks for type hints
-    sync_playwright = Any
-    Browser = Any
-    Page = Any
-    BrowserContext = Any
-    # Other potential missing imports
-    cv2 = Any
-    np = Any
-    Image = Any
-    pytesseract = Any
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from selenium.webdriver.chrome.service import Service
+    from PIL import Image, ImageGrab, ImageDraw
+    HAS_DEPS = True
+except ImportError:
+    HAS_DEPS = False
 
-# ============================================================================
-# CONFIGURACIÓN Y TIPOS
-# ============================================================================
+# ==================== DATA MODELS ====================
 
-class ActionType(Enum):
-    """Tipos de acciones capturadas"""
-    CLICK = "click"
-    TYPE = "type"
-    HOVER = "hover"
-    SCROLL = "scroll"
-    WAIT = "wait"
-    DRAG = "drag"
-    SELECT = "select"
-    FOCUS = "focus"
-    BLUR = "blur"
-    RIGHT_CLICK = "right_click"
-    DOUBLE_CLICK = "double_click"
+@dataclass
+class ElementInfo:
+    """Captured element information"""
+    tag: str = ""
+    element_id: str = ""
+    class_name: str = ""
+    xpath: str = ""
+    text: str = ""
+    name: str = ""
+    placeholder: str = ""
+    value: str = ""
+    
+    def to_dict(self) -> Dict[str, str]:
+        return asdict(self)
 
 
 @dataclass
-class StepConfig:
-    """Configuración de un paso grabado"""
-    id: str
-    action: str
-    selector: str
-    coords: List[int]
+class WebAction:
+    """Structure to store a browser action"""
+    action_type: str
     timestamp: float
+    element_info: ElementInfo
+    url: str = ""
     screenshot_base64: Optional[str] = None
-    expected_text: Optional[str] = None
-    ocr_confidence: Optional[float] = None
-    selector_reliability: float = 0.0
+    screenshot_bbox: Optional[Tuple[int, int, int, int]] = None
     value: Optional[str] = None
-    wait_time: int = 0
+    x_coord: int = 0
+    y_coord: int = 0
+    duration: float = 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'action_type': self.action_type,
+            'timestamp': self.timestamp,
+            'element_info': self.element_info.to_dict(),
+            'url': self.url,
+            'screenshot_bbox': self.screenshot_bbox,
+            'value': self.value,
+            'x_coord': self.x_coord,
+            'y_coord': self.y_coord,
+            'duration': self.duration
+        }
 
 
 @dataclass
-class SessionConfig:
-    """Configuración de sesión de grabación"""
-    name: str
-    browser: str
-    url: str
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
-    total_duration: float = 0.0
-
-
-@dataclass
-class RecorderSettings:
-    """Configuración global del grabador"""
-    browser_chrome_win: str = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    browser_edge_win: str = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-    browser_firefox_win: str = r"C:\Program Files\Mozilla Firefox\firefox.exe"
-    ocr_threshold: int = 85
-    max_screenshot_size: int = 500  # KB
-    critical_poll_interval: int = 50  # ms
-    normal_poll_interval: int = 200  # ms
-    slowmo: int = 0  # ms
-    video_enabled: bool = False
-    screenshot_width: int = 400
-    screenshot_height: int = 300
-    screenshot_padding: int = 20
-
-
-# ============================================================================
-# LOGGER CONFIGURATION
-# ============================================================================
-
-def setup_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
-    """Configura logger con salida consola y archivo"""
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-
-    # Evitar múltiples handlers si se importa varias veces
-    if logger.handlers:
-        return logger
-
-    formatter = logging.Formatter(
-        '[%(asctime)s] %(levelname)-8s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    if log_file:
-        os.makedirs(os.path.dirname(log_file) if os.path.dirname(log_file) else '.', exist_ok=True)
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-
-    return logger
-
-
-logger = setup_logger("WebRecorder", log_file="logs/web_recorder.log")
-
-
-# ============================================================================
-# SELECTORES ENGINE
-# ============================================================================
-
-class SelectorsEngine:
-    """Motor de generación de selectores con 6 niveles de prioridad"""
-
-    @staticmethod
-    def generate(page: Page, element_handle) -> Dict[str, Any]:
-        """Genera selector con prioridad estricta"""
-        try:
-            # 1. data-testid / data-cy
-            testid = page.evaluate(
-                "el => el.getAttribute('data-testid') || el.getAttribute('data-cy')",
-                element_handle
-            )
-            if testid:
-                return {
-                    "selector": f"[data-testid='{testid}'], [data-cy='{testid}']",
-                    "type": "data-testid",
-                    "reliability": 0.90,
-                }
-
-            # 2. role + nombre accesible
-            role = page.evaluate("el => el.getAttribute('role')", element_handle)
-            aria_label = page.evaluate(
-                "el => el.getAttribute('aria-label') || el.getAttribute('aria-describedby') || el.textContent",
-                element_handle,
-            )
-            if role and aria_label:
-                safe_label = (aria_label or "").strip().replace('"', '\\"')
-                return {
-                    "selector": f"[role='{role}'][aria-label=\"{safe_label}\"]",
-                    "type": "role",
-                    "reliability": 0.85,
-                }
-
-            # 3. aria-label/aria-describedby
-            if aria_label:
-                safe_label = aria_label.strip().replace('"', '\\"')
-                return {
-                    "selector": f"[aria-label=\"{safe_label}\"]",
-                    "type": "aria-label",
-                    "reliability": 0.80,
-                }
-
-            # 4. CSS moderno (nth-child minimal)
-            css_selector = page.evaluate(
-                """
-                el => {
-                    if (el.id) return '#' + el.id;
-                    let path = [];
-                    while (el.parentElement) {
-                        let name = el.localName;
-                        let sibling = el;
-                        let nth = 1;
-                        while (sibling = sibling.previousElementSibling) {
-                            if (sibling.localName === el.localName) nth++;
-                        }
-                        if (nth > 1) name += ":nth-of-type(" + nth + ")";
-                        path.unshift(name);
-                        el = el.parentElement;
-                    }
-                    return path.join(" > ");
-                }
-                """,
-                element_handle,
-            )
-            if css_selector:
-                return {
-                    "selector": css_selector,
-                    "type": "css",
-                    "reliability": 0.70,
-                }
-
-            # 5. XPath relativo (NO absolute)
-            xpath = page.evaluate(
-                """
-                el => {
-                    let path = [];
-                    while (el.parentElement) {
-                        let index = 1;
-                        let sibling = el.previousElementSibling;
-                        while (sibling) {
-                            if (sibling.localName === el.localName) index++;
-                            sibling = sibling.previousElementSibling;
-                        }
-                        let name = el.localName;
-                        if (index > 1) name += '[' + index + ']';
-                        path.unshift(name);
-                        el = el.parentElement;
-                    }
-                    return './/' + path.join('/');
-                }
-                """,
-                element_handle,
-            )
-            if xpath:
-                return {
-                    "selector": xpath,
-                    "type": "xpath",
-                    "reliability": 0.60,
-                }
-
-            # 6. Fallback: text + coordenadas
-            text = page.evaluate("el => el.textContent?.slice(0, 50) || ''", element_handle)
-            return {
-                "selector": f"text='{(text or '').strip()}'",
-                "type": "text",
-                "reliability": 0.50,
-            }
-
-        except Exception as e:
-            logger.error(f"Error generando selector: {e}")
-            return {
-                "selector": "unknown",
-                "type": "unknown",
-                "reliability": 0.0,
-            }
-
-
-# ============================================================================
-# EVENTOS PROCESSOR
-# ============================================================================
-
-class EventsProcessor:
-    """Procesa eventos con waits inteligentes"""
-
-    @staticmethod
-    def wait_for_element(page: Page, selector: str, timeout: int = 5000) -> bool:
-        try:
-            page.wait_for_selector(selector, timeout=timeout)
-            logger.debug(f"Elemento encontrado: {selector}")
-            return True
-        except Exception:
-            logger.warning(f"Timeout esperando selector: {selector}")
-            return False
-
-    @staticmethod
-    def wait_for_navigation(page: Page, timeout: int = 5000) -> bool:
-        try:
-            page.wait_for_load_state("networkidle", timeout=timeout)
-            logger.debug("Navegación completada")
-            return True
-        except Exception:
-            logger.warning("Timeout en espera de navegación")
-            return False
-
-    @staticmethod
-    def detect_loaders(page: Page) -> bool:
-        try:
-            return page.evaluate(
-                """
-                () => {
-                    const loaders = document.querySelectorAll(
-                      '[class*="loader"], [class*="spinner"], [role="progressbar"]'
-                    );
-                    for (let el of loaders) {
-                        const style = window.getComputedStyle(el);
-                        if (style.display !== 'none' && style.visibility !== 'hidden') {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-                """
-            )
-        except Exception:
-            return False
-
-
-# ============================================================================
-# OCR PROCESSOR
-# ============================================================================
-
-class OCRProcessor:
-    """Validación visual OCR con fallback a pixel matching"""
-
-    def __init__(self, settings: RecorderSettings):
-        self.settings = settings
-        self.pytesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-        if not os.path.exists(self.pytesseract_path):
-            logger.warning(f"Tesseract no encontrado en {self.pytesseract_path}")
-            logger.info("Descárgalo desde: https://github.com/UB-Mannheim/tesseract/wiki")
-        else:
-            pytesseract.pytesseract.tesseract_cmd = self.pytesseract_path
-
-    def capture_and_compress(self, page: Page, coords: List[int]) -> Optional[str]:
-        """Captura screenshot, comprime y devuelve Base64"""
-        try:
-            screenshot_bytes = page.screenshot(
-                clip={
-                    "x": max(0, coords[0] - self.settings.screenshot_padding),
-                    "y": max(0, coords[1] - self.settings.screenshot_padding),
-                    "width": self.settings.screenshot_width + self.settings.screenshot_padding * 2,
-                    "height": self.settings.screenshot_height + self.settings.screenshot_padding * 2,
-                }
-            )
-
-            import io
-            image = Image.open(io.BytesIO(screenshot_bytes))
-            image = image.resize(
-                (self.settings.screenshot_width, self.settings.screenshot_height),
-                Image.Resampling.LANCZOS,
-            )
-
-            png_buffer = io.BytesIO()
-            image.save(png_buffer, format="PNG", optimize=True)
-            png_bytes = png_buffer.getvalue()
-
-            size_kb = len(png_bytes) / 1024
-            if size_kb > self.settings.max_screenshot_size:
-                logger.warning(
-                    f"Screenshot excede límite: {size_kb:.1f}KB > {self.settings.max_screenshot_size}KB"
-                )
-                return None
-
-            base64_str = base64.b64encode(png_bytes).decode("utf-8")
-            logger.debug(f"Screenshot capturado y comprimido: {size_kb:.1f}KB")
-            return base64_str
-
-        except Exception as e:
-            logger.error(f"Error capturando screenshot: {e}")
-            return None
-
-    def extract_ocr_text(self, screenshot_base64: str) -> Optional[str]:
-        try:
-            import io
-            image_bytes = base64.b64decode(screenshot_base64)
-            image = Image.open(io.BytesIO(image_bytes))
-            text = pytesseract.image_to_string(image, lang="spa+eng")
-            logger.debug(f"OCR extraído: {text[:100]}...")
-            return text
-        except Exception as e:
-            logger.warning(f"Error en OCR: {e}")
-            return None
-
-    def calculate_confidence(self, screenshot_base64: str, expected_text: str) -> float:
-        try:
-            extracted = self.extract_ocr_text(screenshot_base64)
-            if not extracted or not expected_text:
-                return 0.0
-
-            from difflib import SequenceMatcher
-
-            ratio = SequenceMatcher(
-                None, extracted.lower(), expected_text.lower()
-            ).ratio()
-            confidence = min(1.0, max(0.0, ratio))
-            logger.debug(f"Confianza OCR: {confidence * 100:.1f}%")
-            return confidence
-        except Exception as e:
-            logger.error(f"Error calculando confianza: {e}")
-            return 0.0
-
-    def pixel_matching_fallback(self, screenshot_base64: str, reference_base64: str) -> float:
-        try:
-            img1_bytes = base64.b64decode(screenshot_base64)
-            img2_bytes = base64.b64decode(reference_base64)
-
-            img1 = cv2.imdecode(np.frombuffer(img1_bytes, np.uint8), cv2.IMREAD_COLOR)
-            img2 = cv2.imdecode(np.frombuffer(img2_bytes, np.uint8), cv2.IMREAD_COLOR)
-
-            if img1.shape != img2.shape:
-                img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
-
-            mse = np.sum((img1.astype(float) - img2.astype(float)) ** 2)
-            mse /= float(img1.shape[0] * img1.shape[1])
-
-            similarity = 1.0 / (1.0 + mse / 10000.0)
-            logger.debug(f"Pixel matching similarity: {similarity * 100:.1f}%")
-            return similarity
-        except Exception as e:
-            logger.error(f"Error en pixel matching: {e}")
-            return 0.0
-
-
-# ============================================================================
-# CONTEXTOS COMPLEJOS
-# ============================================================================
-
-class ContextHandler:
-    """Maneja contextos complejos: iframes, shadow DOM, SPAs"""
-
-    @staticmethod
-    def handle_dynamic_ids(selector: str) -> str:
-        if "#" in selector:
-            parts = selector.split("#")
-            dynamic_id = parts[1].split("]")[0]
-            partial_match = dynamic_id.split("_")[0]
-            return f"{parts[0]}[id^='{partial_match}']"
-        return selector
-
-    @staticmethod
-    def validate_spa_routing(page: Page, url: str) -> bool:
-        try:
-            current_url = page.url
-            same_url = current_url.split("#")[0] == url.split("#")[0]
-            same_hash = (
-                current_url.split("#")[1] == url.split("#")[1]
-                if "#" in current_url and "#" in url
-                else True
-            )
-            logger.debug(f"SPA routing validado: {same_url and same_hash}")
-            return same_url and same_hash
-        except Exception:
-            return False
-
-
-# ============================================================================
-# PLAYWRIGHT LAUNCHER
-# ============================================================================
-
-class PlaywrightLauncher:
-    """Lanzador multi-navegador con perfiles reales"""
-
-    def __init__(self, settings: RecorderSettings):
-        self.settings = settings
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page: Optional[Page] = None
-
-    def _get_executable_path(self, browser_name: str) -> str:
-        name = browser_name.lower()
-        if name == "chrome":
-            return self.settings.browser_chrome_win
-        if name == "edge":
-            return self.settings.browser_edge_win
-        if name == "firefox":
-            return self.settings.browser_firefox_win
-        return self.settings.browser_chrome_win
-
-    def launch_browser(self, browser_name: str, url: str, maximized: bool = False) -> Page:
-        if sync_playwright is Any:
-            raise ImportError("Playwright no está instalado. Ejecute 'pip install playwright' y 'playwright install' en la terminal.")
-        try:
-            self.playwright = sync_playwright().start()
-            executable_path = self._get_executable_path(browser_name)
-
-            logger.info(f"Lanzando {browser_name} desde: {executable_path}")
-
-            launch_args = {
-                # "executable_path": executable_path, # Commented to allow default discovery if path is wrong
-                "headless": False,
-                "slow_mo": self.settings.slowmo,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-resources-cache",
-                    "--disable-sync",
-                    "--disable-default-apps",
-                ],
-            }
-            if maximized:
-                launch_args["args"].append("--start-maximized")
-
-            # Only add executable specific path if it exists, otherwise rely on default
-            if os.path.exists(executable_path):
-                launch_args["executable_path"] = executable_path
-            else:
-                 logger.warning(f"Browser path not found: {executable_path}. Using default system browser.")
-
-            name = browser_name.lower()
-            if name in ("chrome", "chromium", "edge"):
-                # Use channel for edge/chrome if not specifying executable path strictly or if we want to be safer
-                channel = "msedge" if name == "edge" else "chrome"
-                # If we provided executable_path, we don't strictly need channel, but it helps if executable path is missing
-                if "executable_path" not in launch_args:
-                    launch_args["channel"] = channel
-                
-                self.browser = self.playwright.chromium.launch(**launch_args)
-            elif name == "firefox":
-                self.browser = self.playwright.firefox.launch(**launch_args)
-            else:
-                self.browser = self.playwright.chromium.launch(**launch_args)
-
-            user_data_dir = Path.home() / f"AppData/Local/{browser_name}_RPA_Profile"
-            user_data_dir.mkdir(parents=True, exist_ok=True)
-
-            self.context = self.browser.new_context(
-                # storage_state=None, # Avoid error if file doesn't exist
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-            )
-
-            self.page = self.context.new_page()
-            logger.info(f"✓ Navegador lanzado exitosamente.")
-            return self.page
-
-        except Exception as e:
-            logger.error(f"Error lanzando navegador: {e}")
-            raise
-
-    def close(self):
-        try:
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if self.playwright:
-                self.playwright.stop()
-            logger.info("Navegador cerrado")
-        except Exception as e:
-            logger.error(f"Error cerrando navegador: {e}")
-
-
-# ============================================================================
-# WEB RECORDER MAIN CLASS
-# ============================================================================
+class RecordingStats:
+    """Recording statistics"""
+    total_actions: int = 0
+    clicks: int = 0
+    inputs: int = 0
+    selects: int = 0
+    navigations: int = 0
+    start_time: float = 0.0
+    end_time: float = 0.0
+    
+    @property
+    def elapsed_time(self) -> float:
+        end = self.end_time if self.end_time > 0 else time.time()
+        return end - self.start_time if self.start_time > 0 else 0
+    
+    @property
+    def elapsed_formatted(self) -> str:
+        elapsed = int(self.elapsed_time)
+        return f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+
+
+# ==================== WEB RECORDER ====================
 
 class WebRecorder:
-    """Grabador web profesional RPA_3"""
-
-    def __init__(self, settings: Optional[RecorderSettings] = None, log_callback: Optional[callable] = None):
-        self.settings = settings or RecorderSettings()
-        self.log_callback = log_callback
-        self.session: Optional[SessionConfig] = None
-        self.steps: List[StepConfig] = []
-        self.is_recording = False
-        self.is_ocr_enabled = False
-        self.launcher: Optional[PlaywrightLauncher] = None
-        self.page: Optional[Page] = None
-        self.events_processor = EventsProcessor()
-        self.ocr_processor = OCRProcessor(self.settings)
-        self.selectors_engine = SelectorsEngine()
-        self.context_handler = ContextHandler()
-
-        self.log("WebRecorder inicializado")
-
-    def log(self, message: str, level: str = "info"):
-        """Logs message to both logger and callback."""
-        if level == "error":
-            logger.error(message)
-        elif level == "warning":
-            logger.warning(message)
-        else:
-            logger.info(message)
-            
-        if self.log_callback:
-            try:
-                self.log_callback(message)
-            except:
-                pass
-
-    def set_ocr_state(self, is_enabled: bool):
-        """Actualiza el estado de la captura OCR."""
-        self.is_ocr_enabled = is_enabled
-        self.log(f"OCR Captura {'Activada' if is_enabled else 'Desactivada'}")
-
-    def toggle_pause(self):
-        """Pausa o reanuda la grabación."""
-        self.is_recording = not self.is_recording
-        self.log(f"Grabación {'Reanudada' if self.is_recording else 'Pausada'}")
-
-    def start_session(self, name: str, browser: str, url: str, maximized: bool = False) -> None:
-        if sync_playwright is Any:
-             raise ImportError("El módulo Playwright no está disponible. Por favor, instálalo con 'pip install playwright' y luego ejecuta 'playwright install'.")
-        try:
-            self.session = SessionConfig(
-                name=name,
-                browser=browser,
-                url=url,
-                start_time=time.time(),
-            )
-
-            self.launcher = PlaywrightLauncher(self.settings)
-            self.page = self.launcher.launch_browser(browser, url, maximized=maximized)
-
-            # --- SETUP RECORDING BEFORE GOTO ---
-            # 1. Expose binding
-            self.page.expose_binding("rpa_record", self._on_browser_action)
-            
-            # 2. Add Init Script (survives navigations)
-            self._inject_listener()
-
-            # 3. Now navigate
-            if url:
-                if not url.startswith("http"):
-                    url = "https://" + url
-                self.page.goto(url, wait_until="domcontentloaded")
-
-            self.is_recording = True
-            self.steps = []
-            
-            self.log(f"✓ Sesión iniciada y listeners activos: {name}")
-        except Exception as e:
-            self.log(f"Error iniciando sesión: {e}", level="error")
-            raise
-
-    def _inject_listener(self):
-        """Injects clean JS to listen for events and send to Python."""
-        if not self.page: return
+    """Captures web actions using Selenium"""
+    
+    INJECTION_SCRIPT = """
+    (function() {
+        if (window._rpaRecorder) return;
         
-        js_code = """
-        (function() {
-            if (window.rpa_recording_active) return;
-            window.rpa_recording_active = true;
-            
-            console.log('RPA_3: Smart Recorder Active');
-
-            // --- SMART SELECTOR ENGINE ---
-            const getSmartSelector = (el) => {
-                // 1. Prioridad: ID
-                if (el.id) return `#${el.id}`;
-                
-                // 2. Prioridad: Atributos clave de testing/form
-                const keyAttrs = ['data-testid', 'data-test', 'name', 'placeholder', 'aria-label', 'role'];
-                for (let attr of keyAttrs) {
-                    if (el.hasAttribute(attr)) {
-                         return `${el.tagName.toLowerCase()}[${attr}="${el.getAttribute(attr)}"]`;
-                    }
-                }
-
-                // 3. Prioridad: Texto Visible (solo para botones y links cortos)
-                if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SPAN' || el.tagName === 'DIV') && 
-                    el.innerText && el.innerText.length < 30) {
-                    const text = el.innerText.trim();
-                    if (text) return `text="${text}"`;
-                }
-
-                // 4. Prioridad: Clases únicas (si no son genéricas)
-                if (el.className && typeof el.className === 'string' && el.className.trim() !== '') {
-                    const classes = el.className.split(' ').filter(c => !c.match(/^[a-z0-9]{10,}$/)); // Filtrar hashes
-                    if (classes.length > 0) {
-                        return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
-                    }
-                }
-
-                // 5. Fallback: Ruta CSS limpia
-                let path = [];
-                let current = el;
-                while (current && current.nodeType === Node.ELEMENT_NODE) {
-                    let selector = current.nodeName.toLowerCase();
-                    if (current.id) {
-                        selector = `#${current.id}`;
-                        path.unshift(selector);
-                        break;
-                    } 
-                    if (current.parentNode) {
-                        let siblings = Array.from(current.parentNode.children).filter(e => e.nodeName === current.nodeName);
-                        if (siblings.length > 1) {
-                            selector += `:nth-of-type(${siblings.indexOf(current) + 1})`;
-                        }
-                    }
-                    path.unshift(selector);
-                    current = current.parentNode;
-                }
-                return path.join(' > ');
-            };
-
-            const recordAction = (data) => {
-                if (typeof window.rpa_record === 'function') {
-                    window.rpa_record(data);
-                }
-            };
-
-            // CLICK LISTENER (mousedown para capturar antes de cambios de pagina)
-            document.addEventListener('mousedown', (e) => {
-                try {
-                    // Ignorar clicks en el debugger overlay si existiera
-                    if (e.target.id === 'rpa-debug-indicator') return;
-
-                    const selector = getSmartSelector(e.target);
-                    
-                    // Visual Highlighting (Feedback Rojo)
-                    const originalOutline = e.target.style.outline;
-                    e.target.style.outline = '3px solid rgba(255, 0, 0, 0.7)';
-                    setTimeout(() => { e.target.style.outline = originalOutline; }, 300);
-
-                    recordAction({
-                        type: 'click',
-                        selector: selector,
-                        x: e.clientX,
-                        y: e.clientY,
-                        text: e.target.innerText?.slice(0, 50),
-                        tagName: e.target.tagName
-                    });
-                } catch(err) { console.error('RPA Click error:', err); }
-            }, { capture: true, passive: true });
-
-            // INPUT LISTENER (Detectar 'change' para valores finales)
-            document.addEventListener('change', (e) => {
-                try {
-                    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
-                        const selector = getSmartSelector(e.target);
-                        // Visual Feedback Azul
-                        e.target.style.border = '2px solid blue';
-                        
-                        recordAction({
-                            type: 'type',
-                            selector: selector,
-                            value: e.target.value,
-                            tagName: e.target.tagName
-                        });
-                    }
-                } catch(err) { console.error('RPA Type error:', err); }
-            }, { capture: true, passive: true });
-        })();
-        """
-        try:
-            self.page.add_init_script(js_code)
-            self.page.evaluate(js_code) # Force run immediately
-        except Exception as e:
-            self.log(f"Error injecting init script: {e}", level="warning")
-
-    def _on_browser_action(self, source, data: dict):
-        """Callback from browser JS."""
-        if not self.is_recording or not self.page: return
-        
-        try:
-            action_type = data.get('type')
-            selector = data.get('selector', 'unknown')
-            coords = [data.get('x', 0), data.get('y', 0)]
-            value = data.get('value', '')
-            
-            self.log(f"🔵 Browser Action: {action_type} en {selector}")
-            
-            # Evitar duplicados rápidos de escritura si el valor no cambió (opcional)
-            if action_type == 'type' and self.steps and self.steps[-1].action == 'type' and self.steps[-1].selector == selector:
-                self.steps[-1].value = value
-                return
-
-            # Capturar screenshot para OCR si es un click y está activado
-            screenshot_b64 = None
-            if action_type == 'click' and self.is_ocr_enabled:
-                screenshot_b64 = self.ocr_processor.capture_and_compress(self.page, coords)
-
-            step = StepConfig(
-                id=f"step_{len(self.steps) + 1:03d}",
-                action=action_type,
-                selector=selector,
-                coords=coords,
-                timestamp=time.time(),
-                value=value,
-                screenshot_base64=screenshot_b64,
-                selector_reliability=0.8
-            )
-            
-            self.steps.append(step)
-            self.log(f"✅ Paso guardado: {action_type.upper()} [{len(self.steps)}]")
-            
-        except Exception as e:
-            self.log(f"Error procesando acción del navegador: {e}", level="error")
-
-    def stop_session(self) -> None:
-        try:
-            self.is_recording = False
-            if self.session and self.session.start_time:
-                self.session.end_time = time.time()
-                self.session.total_duration = (
-                    self.session.end_time - self.session.start_time
-                )
-
-            if self.launcher:
-                self.launcher.close()
-
-            logger.info(
-                f"✓ Sesión detenida. Pasos: {len(self.steps)}, "
-                f"Duración: {self.session.total_duration:.1f}s"
-            )
-        except Exception as e:
-            logger.error(f"Error deteniendo sesión: {e}")
-
-    def simulate_capture_click(self, selector: str, coords: List[int]) -> None:
-        """Simula captura de click (para integración con GUI)"""
-        if not self.is_recording or not self.page:
-            logger.warning("Grabación no iniciada o página no disponible")
-            return
-
-        try:
-            selector_info = {
-                "selector": selector,
-                "type": "simulated",
-                "reliability": 0.85,
+        window._rpaRecorder = {
+            actions: [],
+            addAction: function(action) {
+                this.actions.push(action);
+            },
+            getActions: function() {
+                return this.actions;
+            },
+            clearActions: function() {
+                this.actions = [];
             }
-
-            screenshot_b64 = self.ocr_processor.capture_and_compress(self.page, coords)
-
-            ocr_conf = None
-            if screenshot_b64:
-                ocr_conf = self.ocr_processor.calculate_confidence(
-                    screenshot_b64, "Click"
-                )
-
-            step = StepConfig(
-                id=f"step_{len(self.steps) + 1:03d}",
-                action=ActionType.CLICK.value,
-                selector=selector,
-                coords=coords,
-                timestamp=time.time(),
-                screenshot_base64=screenshot_b64,
-                expected_text="Click",
-                ocr_confidence=ocr_conf,
-                selector_reliability=selector_info["reliability"],
-            )
-
-            self.steps.append(step)
-            logger.info(f"✓ Paso capturado: CLICK [{len(self.steps)}]")
-        except Exception as e:
-            logger.error(f"Error capturando click: {e}")
-
-    def export_to_python(self, output_dir: Optional[str] = None) -> str:
-        try:
-            # Use centralized path management
-            from utils.paths import get_web_recording_path
+        };
+        
+        window.getXPath = function(element) {
+            if (element.id !== '')
+                return "//*[@id='" + element.id + "']";
+            if (element === document.body)
+                return element.tagName.toLowerCase();
             
-            if output_dir is None:
-                # Will use default WEB_RECORDINGS_DIR
-                pass
-
-            session_name = self.session.name if self.session else "session"
-            url = self.session.url if self.session else "https://example.com"
-
-            header = f"""#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-\"\"\"
-Script RPA Autogenerado desde WebRecorder
-Sesión: {session_name}
-Navegador: chromium
-URL Original: {url}
-Generado: {datetime.now().isoformat()}
-\"\"\"
-
-from playwright.sync_api import sync_playwright
-import time
-import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-class RPA_Automation:
-    def __init__(self, slowmo={self.settings.slowmo}):
-        self.slowmo = slowmo
-        self.browser = None
-        self.page = None
-
-    def start(self):
-        playwright = sync_playwright().start()
-        self.browser = playwright.chromium.launch(
-            headless=False,
-            slow_mo=self.slowmo
-        )
-        self.page = self.browser.new_page()
-        logger.info("✓ Navegador iniciado")
-
-    def run(self):
+            var ix = 0;
+            var siblings = element.parentNode.childNodes;
+            for (var i = 0; i < siblings.length; i++) {
+                var sibling = siblings[i];
+                if (sibling === element)
+                    return window.getXPath(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';
+                if (sibling.nodeType === 1 && sibling.tagName.toLowerCase() === element.tagName.toLowerCase())
+                    ix++;
+            }
+            return '';
+        };
+        
+        document.addEventListener('click', function(e) {
+            if (e.target !== document.body && e.target !== document.documentElement) {
+                var element = e.target;
+                window._rpaRecorder.addAction({
+                    type: 'click',
+                    tag: element.tagName,
+                    id: element.id || '',
+                    className: element.className || '',
+                    xpath: window.getXPath(element),
+                    text: (element.innerText || element.textContent || '').substring(0, 100),
+                    timestamp: Date.now(),
+                    x: e.clientX,
+                    y: e.clientY,
+                    url: window.location.href
+                });
+            }
+        }, true);
+        
+        document.addEventListener('input', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                window._rpaRecorder.addAction({
+                    type: 'input',
+                    tag: e.target.tagName,
+                    id: e.target.id || '',
+                    className: e.target.className || '',
+                    xpath: window.getXPath(e.target),
+                    name: e.target.name || '',
+                    placeholder: e.target.placeholder || '',
+                    value: e.target.value || '',
+                    timestamp: Date.now(),
+                    url: window.location.href
+                });
+            }
+        }, true);
+        
+        document.addEventListener('change', function(e) {
+            if (e.target.tagName === 'SELECT') {
+                var selected = e.target.options[e.target.selectedIndex];
+                window._rpaRecorder.addAction({
+                    type: 'select',
+                    tag: 'SELECT',
+                    id: e.target.id || '',
+                    className: e.target.className || '',
+                    xpath: window.getXPath(e.target),
+                    name: e.target.name || '',
+                    value: e.target.value || '',
+                    text: selected ? selected.text : '',
+                    timestamp: Date.now(),
+                    url: window.location.href
+                });
+            }
+        }, true);
+        
+        console.log('RPA Recorder injected successfully');
+    })();
+    """
+    
+    def __init__(self, capture_screenshots: bool = False):
+        if not HAS_DEPS:
+            raise ImportError("Missing dependencies: selenium, pillow")
+            
+        self.driver: Optional[webdriver.Chrome] = None
+        self.actions: List[WebAction] = []
+        self.stats = RecordingStats()
+        self.is_recording = False
+        self.is_paused = False
+        self.capture_screenshots = capture_screenshots
+        self.current_url = ""
+        self.lock = Lock()
+        self.action_queue = Queue()
+        self.monitor_thread: Optional[Thread] = None
+        self.stop_event = Event()
+        
+    def start_browser(self, url: str = "about:blank", maximize: bool = True) -> bool:
+        """Starts Chrome browser"""
         try:
-            logger.info(f"Navegando a: {url}")
-            self.page.goto(f"{url}", wait_until="domcontentloaded")
-"""
-
-            body = ""
-            for idx, step in enumerate(self.steps, 1):
-                body += f"\n            # Paso {idx}: {step.action.upper()} en {step.selector}\n"
-                
-                # Sanitize selector and value from quotes
-                sel = step.selector.replace('"', "'")
-                val = str(step.value).replace('"', '\\"') if step.value else ""
-                
-                if step.action == 'click':
-                    if step.screenshot_base64:
-                        body += f'            validate_with_ocr("{step.screenshot_base64}")\n'
-                    if 'text=' in sel:
-                         # Playwright text selector
-                         body += f'            self.page.click("{sel}")\n'
-                    else:
-                         # Standard CSS
-                         body += f'            self.page.click("{sel}")\n'
-                    
-                    # Smart wait after clicks (often triggers navigation)
-                    body += '            self.page.wait_for_load_state("networkidle", timeout=3000)\n'
-                    body += f'            logger.info("✓ Click en {sel}")\n'
-
-                elif step.action == 'type':
-                    body += (
-                        f'            self.page.fill("{sel}", "{val}")\n'
-                        f'            logger.info("✓ Escribir \'{val}\' en {sel}")\n'
-                    )
-
-                elif step.action == 'hover':
-                    body += f'            self.page.hover("{sel}")\n'
-                
-                elif step.action == 'wait':
-                    body += f'            self.page.wait_for_selector("{sel}", state="visible", timeout=5000)\n'
-
-            footer = f'''
-            logger.info("✓ Automatización completada")
-
-        except Exception as e:
-            logger.error(f"❌ Error: {{str(e)}}")
-            raise
-        finally:
-            time.sleep(1)
-            self.browser.close()
-            logger.info("Navegador cerrado")
-
-def validate_with_ocr(base64_string: str):
-    """Placeholder for OCR validation logic."""
-    logger.info(f"Validating element with OCR...")
-    # Here you would add your actual OCR validation logic
-    pass
-
-if __name__ == "__main__":
-    rpa = RPA_Automation(slowmo={self.settings.slowmo})
-    rpa.start()
-    rpa.run()
-'''
-
-            code = header + body + footer
-
-            if output_dir:
-                output_file = os.path.join(output_dir, f"{session_name}_automation.py")
-            else:
-                output_file = str(get_web_recording_path(f"{session_name}_automation.py"))
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(code)
-
-            logger.info(f"✓ Script Python exportado: {output_file}")
-            return output_file
-        except Exception as e:
-            logger.error(f"Error exportando Python: {e}")
-            return ""
-
-    def test_playback(self, slowmo: Optional[int] = None) -> bool:
-        try:
-            delay = (slowmo or self.settings.slowmo or 0) / 1000.0
-            logger.info(f"Iniciando test playback (SlowMo: {delay * 1000:.0f}ms)...")
-
-            for idx, step in enumerate(self.steps, 1):
-                logger.info(f"[{idx}/{len(self.steps)}] Ejecutando: {step.action}")
-                time.sleep(delay + 0.1)
-
-            logger.info("✓ Test playback completado")
+            print(f"[WebRecorder] Starting browser: {url}")
+            
+            chrome_options = ChromeOptions()
+            
+            if maximize:
+                chrome_options.add_argument("--start-maximized")
+            
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            
+            self.driver = webdriver.Chrome(options=chrome_options)
+            
+            self.driver.implicitly_wait(10)
+            
+            self.driver.get(url)
+            self.current_url = url
+            
+            self.driver.execute_script(self.INJECTION_SCRIPT)
+            
+            print("[WebRecorder] Browser started successfully")
             return True
+            
         except Exception as e:
-            logger.error(f"Error en test playback: {e}")
+            print(f"[ERROR] Could not start browser: {e}")
+            traceback.print_exc()
             return False
-
-
-# ============================================================================
-# MAIN - EJEMPLO DE USO
-# ============================================================================
-
-if __name__ == "__main__":
-    settings = RecorderSettings(
-        browser_chrome_win=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        ocr_threshold=85,
-        slowmo=500,
-    )
-
-    recorder = WebRecorder(settings)
-
-    try:
-        recorder.start_session(
-            name="demo-grabacion-001",
-            browser="chrome",
-            url="https://www.example.com",
-        )
-
-        recorder.simulate_capture_click("button[type='submit']", [400, 300])
+    
+    def start_recording(self):
+        """Starts recording actions"""
+        with self.lock:
+            self.is_recording = True
+            self.is_paused = False
+            self.actions = []
+            self.stats = RecordingStats()
+            self.stats.start_time = time.time()
+        
+        print("[WebRecorder] Recording started")
+        
+        # Add initial page load action
+        self._add_action(WebAction(
+            action_type='page_load',
+            timestamp=time.time(),
+            element_info=ElementInfo(tag="PAGE"),
+            url=self.current_url
+        ))
+        
+        self.stop_event.clear()
+        self.monitor_thread = Thread(target=self._monitor_actions, daemon=True)
+        self.monitor_thread.start()
+    
+    def pause_recording(self):
+        """Pauses recording"""
+        self.is_paused = True
+        print("[WebRecorder] Recording paused")
+    
+    def resume_recording(self):
+        """Resumes recording"""
+        self.is_paused = False
+        print("[WebRecorder] Recording resumed")
+    
+    def stop_recording(self):
+        """Stops recording"""
+        self.is_recording = False
+        self.stop_event.set()
+        
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2)
+        
+        self.stats.end_time = time.time()
+        print(f"[WebRecorder] Recording stopped - {self.stats.total_actions} actions captured")
+    
+    def _monitor_actions(self):
+        """Monitoring thread to capture actions continuously"""
+        # Small delay to ensure browser is fully ready
         time.sleep(1)
-        recorder.simulate_capture_click("input[name='email']", [200, 150])
+        
+        while not self.stop_event.is_set():
+            try:
+                if not self.driver:
+                    time.sleep(1)
+                    continue
 
-        recorder.stop_session()
+                # Check if browser is still open
+                try:
+                    # Get current URL - this also serves as a check if window is open
+                    current_url = self.driver.current_url
+                except Exception:
+                    # Window probably closed
+                    break
+                
+                # Check for navigation
+                if current_url != self.current_url:
+                    print(f"[WebRecorder] Navigation detected: {self.current_url} -> {current_url}")
+                    self.current_url = current_url
+                    
+                    if self.is_recording and not self.is_paused:
+                        # Log page load action
+                        self._add_action(WebAction(
+                            action_type='page_load',
+                            timestamp=time.time(),
+                            element_info=ElementInfo(tag="PAGE"),
+                            url=current_url
+                        ))
+                    
+                    # Force re-injection on new page
+                    try:
+                        time.sleep(0.5) # Wait for DOM
+                        self.driver.execute_script(self.INJECTION_SCRIPT)
+                    except Exception as e:
+                        print(f"[WARNING] Re-injection failed initially: {e}")
+                
+                # Check for injection (redundant check but safe)
+                try:
+                    is_injected = self.driver.execute_script("return !!window._rpaRecorder")
+                    if not is_injected:
+                        self.driver.execute_script(self.INJECTION_SCRIPT)
+                except Exception:
+                    # Might happen if page is reloading
+                    pass
 
-        recorder.export_to_json()
-        recorder.export_to_python()
-        recorder.export_to_n8n()
-
-        recorder.test_playback()
-        logger.info("✓ Ejecución completada")
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
+                if self.is_recording and not self.is_paused:
+                    self._capture_actions()
+                
+                time.sleep(0.2)
+                
+            except Exception as e:
+                # e.g. browser closed
+                if "no such window" in str(e) or "target window already closed" in str(e):
+                    print("Browser window closed.")
+                    break
+                print(f"[ERROR] In monitoring loop: {e}")
+                time.sleep(1)
+    
+    def _capture_actions(self):
+        """Captures actions from the browser"""
+        if not self.driver:
+            return
+        
+        try:
+            raw_actions = self.driver.execute_script(
+                "return window._rpaRecorder ? window._rpaRecorder.getActions() : []"
+            )
+            
+            if raw_actions:
+                self.driver.execute_script(
+                    "if (window._rpaRecorder) window._rpaRecorder.clearActions();"
+                )
+                
+                for raw_action in raw_actions:
+                    action = self._create_web_action(raw_action)
+                    if action:
+                        self._add_action(action)
+            
+        except Exception as e:
+            # print(f"[ERROR] Capturing actions: {e}")
+            pass
+    
+    def _create_web_action(self, raw_action: Dict) -> Optional[WebAction]:
+        """Creates a WebAction object from captured data"""
+        try:
+            action_type = raw_action.get('type', 'unknown')
+            
+            element_info = ElementInfo(
+                tag=raw_action.get('tag', ''),
+                element_id=raw_action.get('id', ''),
+                class_name=raw_action.get('className', ''),
+                xpath=raw_action.get('xpath', ''),
+                text=raw_action.get('text', ''),
+                name=raw_action.get('name', ''),
+                placeholder=raw_action.get('placeholder', ''),
+                value=raw_action.get('value', '')
+            )
+            
+            screenshot_base64 = None
+            screenshot_bbox = None
+            
+            if self.capture_screenshots and action_type in ['click', 'input', 'select']:
+                x = raw_action.get('x', 0)
+                y = raw_action.get('y', 0)
+                # Sometimes x/y are missing or 0 for non-mouse events, try to get element center?
+                # For now use what we have.
+                screenshot_base64, screenshot_bbox = self._capture_screenshot_area(x, y)
+            
+            return WebAction(
+                action_type=action_type,
+                timestamp=raw_action.get('timestamp', time.time()) / 1000,
+                element_info=element_info,
+                url=raw_action.get('url', self.current_url),
+                screenshot_base64=screenshot_base64,
+                screenshot_bbox=screenshot_bbox,
+                value=raw_action.get('value'),
+                x_coord=int(raw_action.get('x', 0)),
+                y_coord=int(raw_action.get('y', 0))
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Creating WebAction: {e}")
+            return None
+    
+    def _capture_screenshot_area(self, x: int, y: int, size: int = 300) -> Tuple[Optional[str], Optional[Tuple]]:
+        """Captures a square area around the coordinates"""
+        try:
+            # Note: ImageGrab functionality depends on OS.
+            # On Windows it works out of the box.
+            # However, x and y from browser are relative to the viewport.
+            # ImageGrab takes screen coordinates.
+            # This is a limitation. To do this properly we need to know window position + viewport offset.
+            # But the user asked for this specific feature.
+            # A better approach (headless compatible) is to take full page screenshot via Selenium and crop.
+            
+            if not self.driver:
+                return None, None
+                
+            # Take screenshot of the viewport (visible part)
+            # This is safer than ImageGrab which requires screen coordinates
+            screenshot_png = self.driver.get_screenshot_as_png()
+            image = Image.open(io.BytesIO(screenshot_png))
+            
+            # x, y are viewport relative
+            left = max(0, int(x) - size // 2)
+            top = max(0, int(y) - size // 2)
+            right = min(image.width, left + size)
+            bottom = min(image.height, top + size)
+            
+            cropped = image.crop((left, top, right, bottom))
+            
+            draw = ImageDraw.Draw(cropped)
+            center_x = (right - left) // 2
+            center_y = (bottom - top) // 2
+            radius = 10
+            draw.ellipse(
+                [center_x - radius, center_y - radius, center_x + radius, center_y + radius],
+                outline='red',
+                width=2
+            )
+            
+            buffer = io.BytesIO()
+            cropped.save(buffer, format='PNG')
+            buffer.seek(0)
+            screenshot_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            return screenshot_base64, (left, top, right, bottom)
+            
+        except Exception as e:
+            print(f"[ERROR] Capturing screenshot: {e}")
+            return None, None
+    
+    def _add_action(self, action: WebAction):
+        """Adds an action to the list (thread-safe)"""
+        with self.lock:
+            self.actions.append(action)
+            self.stats.total_actions += 1
+            
+            if action.action_type == 'click':
+                self.stats.clicks += 1
+            elif action.action_type == 'input':
+                self.stats.inputs += 1
+            elif action.action_type == 'select':
+                self.stats.selects += 1
+            elif action.action_type in ['navigate', 'page_load']:
+                self.stats.navigations += 1
+    
+    def close(self):
+        """Closes the browser"""
+        if self.driver:
+            try:
+                self.driver.quit()
+                print("[WebRecorder] Browser closed")
+            except Exception as e:
+                print(f"[ERROR] Closing browser: {e}")
