@@ -30,6 +30,7 @@ class WorkflowPanelV2(QWidget):
         # Setup signals
         self.canvas.node_selected.connect(self.on_node_selected)
         self.canvas.connection_created.connect(self.on_connection_created)
+        self.canvas.connection_deleted.connect(self.on_connection_deleted)
         
         # For drag and drop creation -> Canvas needs to call parent
         # We'll monkey patch or ensure canvas calls 'create_node_from_palette'
@@ -46,6 +47,13 @@ class WorkflowPanelV2(QWidget):
         
         # Note: Canvas usually draws the line temporarily. 
         # The command execution will call load_workflow which redraws everything properly.
+
+    def on_connection_deleted(self, from_id, to_id):
+        """Handle link deletion from Canvas"""
+        if not self.current_workflow: return
+        
+        cmd = ConnectionCommand(self.current_workflow, from_id, to_id, self, is_add=False)
+        self.undo_stack.push(cmd)
 
 
     def init_ui(self):
@@ -148,10 +156,9 @@ class WorkflowPanelV2(QWidget):
         
         main_layout.addWidget(self.splitter)
         
-        # --- STATUS BAR ---
-        self.status_bar = QLabel(" Listo")
-        self.status_bar.setStyleSheet("background: #eee; border-top: 1px solid #ccc; padding: 2px;")
-        main_layout.addWidget(self.status_bar)
+        # self.status_bar = QLabel(" Listo")
+        # self.status_bar.setStyleSheet("background: #eee; border-top: 1px solid #ccc; padding: 2px;")
+        # main_layout.addWidget(self.status_bar)
 
     # --- LOGIC ---
     
@@ -166,12 +173,12 @@ class WorkflowPanelV2(QWidget):
         self.current_workflow = Workflow(id="new_workflow", name="Nuevo Workflow")
         self.canvas.load_workflow(self.current_workflow)
         self.properties_panel.hide()
-        self.status_bar.setText(" Nuevo workflow creado.")
+        # self.status_bar.setText(" Nuevo workflow creado.")
 
     def save_workflow(self):
         # TODO: Implement basic JSON save
         if self.current_workflow:
-             self.status_bar.setText(" Guardado local (simulado).")
+             print(" Guardado local (simulado).")
              
     def create_node_from_palette(self, node_def, pos):
         """Called by Canvas drop event"""
@@ -257,16 +264,16 @@ class WorkflowPanelV2(QWidget):
 
     def execute_workflow(self):
         if not self.current_workflow: return
-        self.status_bar.setText(" 🚀 Ejecutando...")
+        print(" 🚀 Ejecutando...")
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(lambda msg: print(f"LOG: {msg}")) # Redirect to log widget if exists
-        self.worker.finished.connect(lambda res: self.status_bar.setText(" ✅ Ejecución finalizada."))
+        self.worker.finished.connect(lambda res: print(" ✅ Ejecución finalizada."))
         self.worker.start()
         
     def stop_workflow(self):
         if self.worker:
             self.worker.stop()
-            self.status_bar.setText(" 🛑 Detenido.")
+            print(" 🛑 Detenido.")
 
     # --- Methods required by existing Commands (AddNodeCommand expects 'panel.canvas.load_workflow') ---
     # The commands were designed for the old panel structure. 

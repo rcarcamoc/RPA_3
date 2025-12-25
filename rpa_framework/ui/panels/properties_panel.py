@@ -56,7 +56,8 @@ class PropertiesPanel(QWidget):
         self.prop_script.setPlaceholderText("Seleccionar o escribir script Python...")
         script_layout.addWidget(self.prop_script)
         
-        btn_browse = QPushButton("...")
+        btn_browse = QPushButton()
+        btn_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         btn_browse.setFixedWidth(30)
         btn_browse.clicked.connect(self.browse_script)
         script_layout.addWidget(btn_browse)
@@ -295,10 +296,25 @@ class PropertiesPanel(QWidget):
                 self.node_deleted.emit(self.current_node)
 
     def load_scripts(self):
-        script_dir = Path("scripts")
+        script_dir = Path("rpa_framework/recordings")
+        if not script_dir.exists():
+             # Fallback to current dir if specific path doesnt exist, or create it?
+             # Let's try to look relative to cwd too
+             script_dir = Path("recordings")
+        
         if script_dir.exists():
-            files = [f.name for f in script_dir.glob("*.py")]
-            self.prop_script.addItems(files)
+            # Recursive search
+            files = []
+            for f in script_dir.rglob("*.py"):
+                # Make path relative to script_dir for cleaner display
+                try:
+                    rel_path = f.relative_to(script_dir)
+                    files.append(str(rel_path))
+                except ValueError:
+                    files.append(f.name)
+            
+            self.prop_script.clear()
+            self.prop_script.addItems(sorted(files))
 
     def browse_script(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Seleccionar Script", "scripts", "Python (*.py)")

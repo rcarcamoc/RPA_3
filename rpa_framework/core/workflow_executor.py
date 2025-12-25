@@ -8,6 +8,8 @@ manejar control de flujo (IF/ELSE, LOOP) y gestionar variables compartidas.
 import subprocess
 import json
 import os
+import sys
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode
@@ -190,13 +192,40 @@ class WorkflowExecutor:
             for key, value in self.context.items():
                 env[f"VAR_{key}"] = str(value)
             
+            # Resolver ruta del script
+            script_path = Path(node.script)
+            if not script_path.is_absolute():
+                # Intentar buscar en rpa_framework/recordings o cwd
+                possible_paths = [
+                    Path("rpa_framework/recordings") / script_path,
+                    Path("recordings") / script_path,
+                    Path.cwd() / script_path
+                ]
+                
+                for p in possible_paths:
+                    if p.exists():
+                        script_path = p
+                        break
+            
+            if not script_path.exists():
+                 self.logger.log(f"❌ Script no encontrado: {script_path}")
+                 return self.workflow.get_next_node(node.id)
+            
+            # Asegurar ruta absoluta
+            script_path = script_path.resolve()
+            self.logger.log(f"   Ruta absoluta: {script_path}")
+
             # Ejecutar script
+            cmd = [sys.executable, str(script_path)]
+            self.logger.log(f"   Comando a ejecutar: {cmd}")
+            
             result = subprocess.run(
-                ['python', node.script],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
-                env=env
+                env=env,
+                cwd=str(script_path.parent) # Ejecutar en el directorio del script
             )
             
             if result.returncode == 0:

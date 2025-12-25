@@ -100,3 +100,190 @@ ModuleNotFoundError: No module named 'mysql'
 [2025-12-22 22:14:54] [INFO] ✅ Ejecución completada: success
 [2025-12-22 22:14:54] [INFO]    Variables finales: {}
 [2025-12-22 22:14:54] [INFO] ============================================================
+[2025-12-24 18:20:45] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-24 18:20:45] [INFO]    Variables iniciales: {}
+[2025-12-24 18:20:45] [INFO] ============================================================
+[2025-12-24 18:20:45] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-24 18:20:45] [INFO] ============================================================
+[2025-12-24 18:20:45] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-24 18:20:45] [INFO] 🐍 Ejecutando script: web_automation_20251224_182015.py
+[2025-12-24 18:20:45] [INFO] ❌ Error en script (código 1)
+[2025-12-24 18:20:45] [INFO]    Error:   File "c:\Users\arant\OneDrive\Desarrollo\RPA_3_p1\RPA_3\rpa_framework\web_automation_20251224_182015.py", line 122
+    element = self.find_element(r'//*[@id='APjFqb']')
+                             
+[2025-12-24 18:20:45] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-24 18:20:45] [INFO] ============================================================
+[2025-12-24 18:20:45] [INFO] ✅ Ejecución completada: success
+[2025-12-24 18:20:45] [INFO]    Variables finales: {}
+[2025-12-24 18:20:45] [INFO] ============================================================
+[2025-12-24 18:21:00] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-24 18:21:00] [INFO]    Variables iniciales: {}
+[2025-12-24 18:21:00] [INFO] ============================================================
+[2025-12-24 18:21:00] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-24 18:21:00] [INFO] ============================================================
+[2025-12-24 18:21:00] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-24 18:21:00] [INFO] 🐍 Ejecutando script: web_automation_20251224_182015.py
+[2025-12-24 18:21:00] [INFO] ❌ Error en script (código 1)
+[2025-12-24 18:21:00] [INFO]    Error:   File "c:\Users\arant\OneDrive\Desarrollo\RPA_3_p1\RPA_3\rpa_framework\web_automation_20251224_182015.py", line 122
+    element = self.find_element(r'//*[@id='APjFqb']')
+                             
+[2025-12-24 18:21:00] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-24 18:21:00] [INFO] ============================================================
+[2025-12-24 18:21:00] [INFO] ✅ Ejecución completada: success
+[2025-12-24 18:21:00] [INFO]    Variables finales: {}
+[2025-12-24 18:21:00] [INFO] ============================================================
+[2025-12-24 18:21:14] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-24 18:21:14] [INFO]    Variables iniciales: {}
+[2025-12-24 18:21:14] [INFO] ============================================================
+[2025-12-24 18:21:14] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-24 18:21:14] [INFO] ============================================================
+[2025-12-24 18:21:14] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-24 18:21:14] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-24 18:21:14] [INFO] 🐍 Ejecutando script: web_automation_20251224_182015.py
+[2025-12-24 18:21:14] [INFO] ❌ Error en script (código 1)
+[2025-12-24 18:21:14] [INFO]    Error:   File "c:\Users\arant\OneDrive\Desarrollo\RPA_3_p1\RPA_3\rpa_framework\web_automation_20251224_182015.py", line 122
+    element = self.find_element(r'//*[@id='APjFqb']')
+                             
+[2025-12-24 18:21:14] [INFO] 
+📍 Nodo actual: Fin (end)
+[2025-12-24 18:21:14] [INFO] ⏹️ Nodo Final alcanzado.
+[2025-12-24 18:21:14] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-24 18:21:14] [INFO] ============================================================
+[2025-12-24 18:21:14] [INFO] ✅ Ejecución completada: success
+[2025-12-24 18:21:14] [INFO]    Variables finales: {}
+[2025-12-24 18:21:14] [INFO] ============================================================
+[2025-12-25 10:40:35] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 10:40:35] [INFO]    Variables iniciales: {}
+[2025-12-25 10:40:35] [INFO] ============================================================
+[2025-12-25 10:40:35] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 10:40:35] [INFO] ============================================================
+[2025-12-25 10:40:35] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 10:40:35] [INFO] 
+📍 Nodo actual: System Command (action)
+[2025-12-25 10:40:35] [INFO] 💻 Ejecutando comando: start notepad
+[2025-12-25 10:40:35] [INFO] ✅ Comando ejecutado exitosamente
+[2025-12-25 10:40:35] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 10:40:35] [INFO] ============================================================
+[2025-12-25 10:40:35] [INFO] ✅ Ejecución completada: success
+[2025-12-25 10:40:35] [INFO]    Variables finales: {}
+[2025-12-25 10:40:35] [INFO] ============================================================
+[2025-12-25 10:41:04] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 10:41:04] [INFO]    Variables iniciales: {}
+[2025-12-25 10:41:04] [INFO] ============================================================
+[2025-12-25 10:41:04] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 10:41:04] [INFO] ============================================================
+[2025-12-25 10:41:04] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 10:41:04] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 10:41:04] [INFO] 🐍 Ejecutando script: web_automation_20251224_184151.py
+[2025-12-25 10:41:04] [INFO] ❌ Error en script (código 2)
+[2025-12-25 10:41:04] [INFO]    Error: python: can't open file 'c:\\Users\\arant\\OneDrive\\Desarrollo\\RPA_3_p1\\RPA_3\\rpa_framework\\web_automation_20251224_184151.py': [Errno 2] No such file or directory
+
+[2025-12-25 10:41:04] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 10:41:04] [INFO] ============================================================
+[2025-12-25 10:41:04] [INFO] ✅ Ejecución completada: success
+[2025-12-25 10:41:04] [INFO]    Variables finales: {}
+[2025-12-25 10:41:04] [INFO] ============================================================
+[2025-12-25 10:41:10] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 10:41:10] [INFO]    Variables iniciales: {}
+[2025-12-25 10:41:10] [INFO] ============================================================
+[2025-12-25 10:41:10] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 10:41:10] [INFO] ============================================================
+[2025-12-25 10:41:10] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 10:41:10] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 10:41:10] [INFO] 🐍 Ejecutando script: web_automation_20251224_184151.py
+[2025-12-25 10:41:10] [INFO] ❌ Error en script (código 2)
+[2025-12-25 10:41:10] [INFO]    Error: python: can't open file 'c:\\Users\\arant\\OneDrive\\Desarrollo\\RPA_3_p1\\RPA_3\\rpa_framework\\web_automation_20251224_184151.py': [Errno 2] No such file or directory
+
+[2025-12-25 10:41:10] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 10:41:10] [INFO] ============================================================
+[2025-12-25 10:41:10] [INFO] ✅ Ejecución completada: success
+[2025-12-25 10:41:10] [INFO]    Variables finales: {}
+[2025-12-25 10:41:10] [INFO] ============================================================
+[2025-12-25 11:26:59] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 11:26:59] [INFO]    Variables iniciales: {}
+[2025-12-25 11:26:59] [INFO] ============================================================
+[2025-12-25 11:26:59] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 11:26:59] [INFO] ============================================================
+[2025-12-25 11:26:59] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 11:26:59] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 11:26:59] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184151.py
+[2025-12-25 11:26:59] [INFO] ❌ Error en script (código 2)
+[2025-12-25 11:26:59] [INFO]    Error: C:\Users\arant\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\python.exe: can't open file 'c:\\Users\\arant\\OneDrive\\Desarrollo\\RPA_3_p1\\RPA_3\\rpa_framewor
+[2025-12-25 11:26:59] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 11:26:59] [INFO] ============================================================
+[2025-12-25 11:26:59] [INFO] ✅ Ejecución completada: success
+[2025-12-25 11:26:59] [INFO]    Variables finales: {}
+[2025-12-25 11:26:59] [INFO] ============================================================
+[2025-12-25 11:31:20] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 11:31:20] [INFO]    Variables iniciales: {}
+[2025-12-25 11:31:20] [INFO] ============================================================
+[2025-12-25 11:31:20] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 11:31:20] [INFO] ============================================================
+[2025-12-25 11:31:20] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 11:31:20] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 11:31:20] [INFO] ⚠️ Nodo sin script ni comando, saltando
+[2025-12-25 11:31:20] [INFO] 
+📍 Nodo actual: Fin (end)
+[2025-12-25 11:31:20] [INFO] ⏹️ Nodo Final alcanzado.
+[2025-12-25 11:31:20] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 11:31:20] [INFO] ============================================================
+[2025-12-25 11:31:20] [INFO] ✅ Ejecución completada: success
+[2025-12-25 11:31:20] [INFO]    Variables finales: {}
+[2025-12-25 11:31:20] [INFO] ============================================================
+[2025-12-25 11:31:24] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 11:31:24] [INFO]    Variables iniciales: {}
+[2025-12-25 11:31:24] [INFO] ============================================================
+[2025-12-25 11:31:24] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 11:31:24] [INFO] ============================================================
+[2025-12-25 11:31:24] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 11:31:24] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 11:31:24] [INFO] ⚠️ Nodo sin script ni comando, saltando
+[2025-12-25 11:31:24] [INFO] 
+📍 Nodo actual: Fin (end)
+[2025-12-25 11:31:24] [INFO] ⏹️ Nodo Final alcanzado.
+[2025-12-25 11:31:24] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 11:31:24] [INFO] ============================================================
+[2025-12-25 11:31:24] [INFO] ✅ Ejecución completada: success
+[2025-12-25 11:31:24] [INFO]    Variables finales: {}
+[2025-12-25 11:31:24] [INFO] ============================================================
+[2025-12-25 11:31:38] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-25 11:31:38] [INFO]    Variables iniciales: {}
+[2025-12-25 11:31:38] [INFO] ============================================================
+[2025-12-25 11:31:38] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-25 11:31:38] [INFO] ============================================================
+[2025-12-25 11:31:38] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-25 11:31:38] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-25 11:31:38] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184151.py
+[2025-12-25 11:31:38] [INFO]    Ruta absoluta: C:\Users\arant\OneDrive\Desarrollo\RPA_3_p1\RPA_3\rpa_framework\recordings\web\web_automation_20251224_184151.py
+[2025-12-25 11:31:38] [INFO]    Comando a ejecutar: ['C:\\Users\\arant\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\python.exe', 'C:\\Users\\arant\\OneDrive\\Desarrollo\\RPA_3_p1\\RPA_3\\rpa_framework\\recordings\\web\\web_automation_20251224_184151.py']
+[2025-12-25 11:32:02] [INFO] ✅ Script ejecutado exitosamente
+[2025-12-25 11:32:02] [INFO]    Salida: [INFO] Browser started
+[ACTION] Loading page: https://www.google.com
+[ACTION] Loading page: https://www.google.com/?zx=1766612482207&no_sw_cr=1
+[ACTION] Loading page: https://www.emol.com/
+[ACTION] Cl
+[2025-12-25 11:32:02] [INFO] 
+📍 Nodo actual: Fin (end)
+[2025-12-25 11:32:02] [INFO] ⏹️ Nodo Final alcanzado.
+[2025-12-25 11:32:02] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-25 11:32:02] [INFO] ============================================================
+[2025-12-25 11:32:02] [INFO] ✅ Ejecución completada: success
+[2025-12-25 11:32:02] [INFO]    Variables finales: {}
+[2025-12-25 11:32:02] [INFO] ============================================================

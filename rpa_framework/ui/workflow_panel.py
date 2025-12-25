@@ -367,17 +367,44 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         self.insert_button = None
     
     def update_path(self):
-        start = self.from_item.get_center()
-        start.setY(start.y() + 30)
+        # Start point (Output port if available, else center-right)
+        if hasattr(self.from_item, 'output_port') and self.from_item.output_port:
+            start = self.from_item.mapToScene(self.from_item.output_port.pos())
+        else:
+            start = self.from_item.get_center()
+            start.setX(start.x() + self.from_item.node_width / 2)
         
+        # End point (Input port logic - usually center-left)
         end = self.to_item.get_center()
-        end.setY(end.y() - 30)
+        end.setX(end.x() - self.to_item.node_width / 2)
         
         path = QPainterPath()
         path.moveTo(start)
-        path.lineTo(end)
+        
+        # Cubic Bezier for smooth curve
+        dx = end.x() - start.x()
+        dy = end.y() - start.y()
+        ctrl1 = QPointF(start.x() + dx * 0.5, start.y())
+        ctrl2 = QPointF(end.x() - dx * 0.5, end.y())
+        
+        path.cubicTo(ctrl1, ctrl2, end)
         
         self.setPath(path)
+    
+    def contextMenuEvent(self, event):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu()
+        delete_action = menu.addAction("Eliminar Conexión")
+        action = menu.exec(event.screenPos())
+        
+        if action == delete_action:
+            # Emit signal via scene/view or handle directly
+            # Best way: ask view to delete
+            views = self.scene().views()
+            if views:
+                view = views[0]
+                if hasattr(view, 'request_delete_edge'):
+                    view.request_delete_edge(self)
     
     def hoverEnterEvent(self, event):
         # Show insert button
@@ -430,6 +457,7 @@ class WorkflowCanvas(QGraphicsView):
     
     node_selected = pyqtSignal(object)  # Node
     connection_created = pyqtSignal(str, str) # from_id, to_id
+    connection_deleted = pyqtSignal(str, str) # from_id, to_id
     edge_split_requested = pyqtSignal(object, str, str) # node_item, from_id, to_id
     
     def __init__(self, parent=None):
@@ -787,6 +815,12 @@ class WorkflowCanvas(QGraphicsView):
             node_type = node_type_map.get(selected_action)
             if node_type:
                 self.insert_node_in_edge(edge_item, scene_pos, node_type)
+    
+    def request_delete_edge(self, edge_item):
+        """Solicita borrar una conexión"""
+        from_id = edge_item.from_item.node.id
+        to_id = edge_item.to_item.node.id
+        self.connection_deleted.emit(from_id, to_id)
     
     def insert_node_in_edge(self, edge_item, scene_pos, node_type):
         """Inserta un nodo en medio de un edge"""
