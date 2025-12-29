@@ -30,6 +30,7 @@ class Node:
     id: str
     label: str
     type: NodeType
+    on_error: str = "stop"  # "stop" or "continue"
     position: Dict[str, float] = field(default_factory=lambda: {"x": 0, "y": 0})
     
     def to_dict(self) -> Dict[str, Any]:
@@ -38,6 +39,7 @@ class Node:
             "id": self.id,
             "type": self.type.value,
             "label": self.label,
+            "on_error": self.on_error,
             "position": self.position
         }
     
@@ -70,6 +72,7 @@ class Node:
                 id=data["id"],
                 type=node_type,
                 label=data["label"],
+                on_error=data.get("on_error", "stop"),
                 position=data.get("position", {"x": 0, "y": 0})
             )
 
@@ -94,6 +97,7 @@ class ActionNode(Node):
         node.label = data["label"]
         node.script = data.get("script", "")
         node.command = data.get("command", "")
+        node.on_error = data.get("on_error", "stop")
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.ACTION
         return node
@@ -124,6 +128,7 @@ class DecisionNode(Node):
         node.condition = data.get("condition", "")
         node.true_path = data.get("truePath", "")
         node.false_path = data.get("falsePath", "")
+        node.on_error = data.get("on_error", "stop")
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.DECISION
         return node
@@ -133,15 +138,21 @@ class DecisionNode(Node):
 class LoopNode(Node):
     """Nodo de bucle (LOOP)"""
     script: str = ""
-    iterations: str = "1"  # Puede ser número o nombre de variable
-    loop_var: str = "_loop_index"  # Nombre de variable para índice actual
+    loop_type: str = "count" # count, list, while
+    iterations: str = "1"  # Para count
+    iterable: str = ""     # Nombre variable para list
+    condition: str = ""    # Condición para while
+    loop_var: str = "item"  # Variable para el item actual o índice
     type: NodeType = field(default=NodeType.LOOP, init=False)
     
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data.update({
             "script": self.script,
+            "loop_type": self.loop_type,
             "iterations": self.iterations,
+            "iterable": self.iterable,
+            "condition": self.condition,
             "loopVar": self.loop_var
         })
         return data
@@ -152,8 +163,12 @@ class LoopNode(Node):
         node.id = data["id"]
         node.label = data["label"]
         node.script = data.get("script", "")
+        node.loop_type = data.get("loop_type", "count")
         node.iterations = data.get("iterations", "1")
-        node.loop_var = data.get("loopVar", "_loop_index")
+        node.iterable = data.get("iterable", "")
+        node.condition = data.get("condition", "")
+        node.loop_var = data.get("loopVar", "item")
+        node.on_error = data.get("on_error", "stop")
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.LOOP
         return node

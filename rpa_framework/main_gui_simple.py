@@ -41,7 +41,6 @@ try:
     from ui.panels.generator_panel import GeneratorPanel
     from ui.panels.ocr_panel import OCRPanel
     from ui.panels.web_record_panel import WebRecordPanel
-    from ui.workflow_panel import WorkflowPanel
     from ui.workflow_panel_v2 import WorkflowPanelV2
     
 except ImportError as e:
@@ -87,7 +86,6 @@ class MainWindow(QMainWindow):
         # Tabs
         tabs = QTabWidget()
         tabs.addTab(DashboardPanel(), "Dashboard")
-        tabs.addTab(WorkflowPanel(self.config), "Workflows")
         tabs.addTab(WorkflowPanelV2(self.config), "✨ Workflows V2 (Redesign)")
         tabs.addTab(RecordPanel(self.config), "Grabar")
         tabs.addTab(ReplayPanel(self.config), "Reproducir")

@@ -174,8 +174,13 @@ class WorkflowExecutor:
                      self.logger.log(f"❌ Error en comando (código {result.returncode})")
                      if result.stderr: self.logger.log(f"   Error: {result.stderr.strip()[:200]}")
                      
+                     if getattr(node, 'on_error', 'stop') == 'stop':
+                         raise RuntimeError(f"Comando falló con código {result.returncode}")
+                     
              except Exception as e:
                  self.logger.log(f"❌ Error ejecutando comando: {e}")
+                 if getattr(node, 'on_error', 'stop') == 'stop':
+                     raise e
              
              return self.workflow.get_next_node(node.id)
 
@@ -245,11 +250,18 @@ class WorkflowExecutor:
                 self.logger.log(f"❌ Error en script (código {result.returncode})")
                 if result.stderr:
                     self.logger.log(f"   Error: {result.stderr[:200]}")
+                    
+                if getattr(node, 'on_error', 'stop') == 'stop':
+                    raise RuntimeError(f"Script falló con código {result.returncode}")
             
         except subprocess.TimeoutExpired:
             self.logger.log("❌ Timeout ejecutando script")
+            if getattr(node, 'on_error', 'stop') == 'stop':
+                raise RuntimeError("Timeout en script")
         except Exception as e:
             self.logger.log(f"❌ Error: {str(e)}")
+            if getattr(node, 'on_error', 'stop') == 'stop':
+                raise e
         
         return self.workflow.get_next_node(node.id)
     
@@ -271,43 +283,112 @@ class WorkflowExecutor:
             return node.false_path or self.workflow.get_next_node(node.id)
     
     def _execute_loop(self, node: LoopNode) -> Optional[str]:
-        """Ejecuta un nodo de loop"""
-        iterations = self._get_loop_count(node.iterations)
+        """Ejecuta un nodo de loop (Count, List o While)"""
         
-        self.logger.log(f"🔁 Iniciando loop: {iterations} iteraciones")
+        loop_type = getattr(node, 'loop_type', 'count')
+        self.logger.log(f"🔁 Iniciando loop ({loop_type})")
         
-        for i in range(iterations):
-            if self.should_stop:
-                break
+        # 1. Definir el iterador según el tipo
+        iterator = []
+        is_while = False
+        
+        if loop_type == 'count':
+            iterations = self._get_loop_count(node.iterations)
+            iterator = range(iterations)
+            self.logger.log(f"   Modo: {iterations} iteraciones")
             
-            self.logger.log(f"   Iteración {i + 1}/{iterations}")
+        elif loop_type == 'list':
+            # Obtener lista desde variable
+            var_name = node.iterable
+            val = self.context.get(var_name, [])
+            if isinstance(val, (list, tuple)):
+                iterator = val
+                self.logger.log(f"   Modo: Iterar lista '{var_name}' ({len(val)} elementos)")
+            elif isinstance(val, dict):
+                iterator = list(val.items())
+                self.logger.log(f"   Modo: Iterar dict '{var_name}' ({len(val)} elementos)")
+            else:
+                self.logger.log(f"⚠️ Variable '{var_name}' no es iterable: {type(val)}")
+                iterator = []
+                
+        elif loop_type == 'while':
+            is_while = True
+            self.logger.log(f"   Modo: While condición '{node.condition}'")
+        
+        # 2. Ejecutar Loop
+        idx = 0
+        MAX_ITER = 1000 # Safety break for while
+        
+        while True:
+            if self.should_stop: break
             
-            # Actualizar variable de loop
-            self.context[node.loop_var] = i
+            # Control de flujo del iterador
+            current_item = None
             
-            # Ejecutar script del loop si existe
+            if is_while:
+                if idx >= MAX_ITER:
+                    self.logger.log("⚠️ Límite de seguridad alcanzado en While (1000)")
+                    break
+                if not self._eval_condition(node.condition):
+                    break
+                current_item = idx # En while, el item suele ser irrelevante o un contador
+            else:
+                # For loops (count/list)
+                if idx >= len(iterator):
+                    break
+                current_item = iterator[idx]
+
+            
+            self.logger.log(f"   🔄 Iteración {idx + 1}")
+            
+            # Actualizar variables de loop en contexto
+            # loop_var es el nombre de la variable para el item
+            # _loop_index es inmutable estándar
+            self.context["_loop_index"] = idx
+            self.context[node.loop_var] = current_item
+            
+            # Ejecutar script interno del loop
             if node.script:
                 try:
-                    env = os.environ.copy()
-                    for key, value in self.context.items():
-                        env[f"VAR_{key}"] = str(value)
-                    
-                    result = subprocess.run(
-                        ['python', node.script],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        env=env
-                    )
-                    
-                    if result.returncode != 0:
-                        self.logger.log(f"   ⚠️ Error en iteración {i + 1}")
-                        
+                    self._run_script_internal(node)
                 except Exception as e:
-                    self.logger.log(f"   ❌ Error: {str(e)}")
+                     self.logger.log(f"   ❌ Error en script de loop: {e}")
+                     if getattr(node, 'on_error', 'stop') == 'stop':
+                         raise e
+            
+            idx += 1
         
-        self.logger.log(f"✅ Loop completado")
+        self.logger.log(f"✅ Loop completado ({idx} iteraciones)")
         return self.workflow.get_next_node(node.id)
+
+    def _run_script_internal(self, node):
+        """Helper para ejecutar script python del loop"""
+        env = os.environ.copy()
+        for key, value in self.context.items():
+            env[f"VAR_{key}"] = str(value)
+        
+        # Pasamos variables como JSON string también para estructuras complejas
+        # O confiamos en env vars simples. 
+        # Para listas/dicts complejos, el script debería leer un JSON temporal o similar si fuera robusto.
+        # Por ahora mantenemos compatibilidad simple.
+        
+        result = subprocess.run(
+            ['python', node.script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env
+        )
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"Script falló: {result.stderr}")
+        else:
+             # Si el script imprime JSON, actualizamos contexto
+             try:
+                output_data = json.loads(result.stdout)
+                if isinstance(output_data, dict):
+                    self.context.update(output_data)
+             except: pass
     
     def _eval_condition(self, condition: str) -> bool:
         """
@@ -450,10 +531,16 @@ class WorkflowExecutor:
             self.logger.log(f"❌ {error_msg}")
             self.context[node.result_var] = {"error": str(e)}
             
+            if getattr(node, 'on_error', 'stop') == 'stop':
+                raise e
+            
         except Exception as e:
             error_msg = f"Error ejecutando DB: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
             self.context[node.result_var] = {"error": str(e)}
+            
+            if getattr(node, 'on_error', 'stop') == 'stop':
+                raise e
             
         finally:
             if connection and connection.is_connected():

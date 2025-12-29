@@ -45,6 +45,10 @@ class PropertiesPanel(QWidget):
         self.prop_type = QLineEdit() # Read only for now unless we implement type changing logic
         self.prop_type.setReadOnly(True)
         form_layout.addRow("Tipo:", self.prop_type)
+
+        self.prop_on_error = QComboBox()
+        self.prop_on_error.addItems(["stop", "continue"])
+        form_layout.addRow("On Error:", self.prop_on_error)
         
         # --- Campos Especificos (Action/Loop) ---
         self.script_container = QWidget()
@@ -83,9 +87,32 @@ class PropertiesPanel(QWidget):
         self.cmd_presets.currentIndexChanged.connect(self.apply_preset)
         form_layout.addRow("Presets:", self.cmd_presets)
         
+        self.loop_container = QWidget()
+        loop_layout = QFormLayout(self.loop_container)
+        loop_layout.setContentsMargins(0,0,0,0)
+        
+        self.prop_loop_type = QComboBox()
+        self.prop_loop_type.addItems(["Count (N Veces)", "List (ForEach)", "While (Condición)"])
+        self.prop_loop_type.currentIndexChanged.connect(self.update_loop_fields)
+        loop_layout.addRow("Tipo Loop:", self.prop_loop_type)
+
         self.prop_iterations = QLineEdit()
-        self.prop_iterations.setPlaceholderText("Ej: 5, o variable")
-        form_layout.addRow("Iteraciones:", self.prop_iterations)
+        self.prop_iterations.setPlaceholderText("Ej: 5")
+        loop_layout.addRow("Iteraciones:", self.prop_iterations)
+        
+        self.prop_iterable = QLineEdit()
+        self.prop_iterable.setPlaceholderText("Ej: db_result")
+        loop_layout.addRow("Lista (Variable):", self.prop_iterable)
+        
+        self.prop_loop_condition = QLineEdit()
+        self.prop_loop_condition.setPlaceholderText("Ej: x < 10")
+        loop_layout.addRow("Condición While:", self.prop_loop_condition)
+        
+        self.prop_loop_var = QLineEdit()
+        self.prop_loop_var.setPlaceholderText("Ej: item")
+        loop_layout.addRow("Variable Item:", self.prop_loop_var)
+
+        form_layout.addRow(self.loop_container)
         
         self.prop_delay = QLineEdit()
         self.prop_delay.setPlaceholderText("Segundos (ej: 5)")
@@ -154,6 +181,25 @@ class PropertiesPanel(QWidget):
         
         # Cargar scripts iniciales
         self.load_scripts()
+        
+    def update_loop_fields(self):
+        """Muestra u oculta campos de loop según el tipo"""
+        t = self.prop_loop_type.currentText()
+        # Ocultar todos primero (iter, iterable, cond)
+        # Notas: iterotions en index 1, iterable en 2, condition en 3
+        # Layouts son tricky para ocultar filas, mejor ocultar widgets
+        
+        # Iteraciones
+        self.prop_iterations.setVisible("Count" in t)
+        self.loop_container.layout().labelForField(self.prop_iterations).setVisible("Count" in t)
+        
+        # Lista
+        self.prop_iterable.setVisible("List" in t)
+        self.loop_container.layout().labelForField(self.prop_iterable).setVisible("List" in t)
+        
+        # Condicion
+        self.prop_loop_condition.setVisible("While" in t)
+        self.loop_container.layout().labelForField(self.prop_loop_condition).setVisible("While" in t)
 
     def load_node(self, node: Node):
         """Carga los datos de un nodo en el formulario"""
@@ -161,7 +207,7 @@ class PropertiesPanel(QWidget):
         
         # 1. Resetear visibilidad
         self.input_widgets = [
-            self.script_container, self.prop_command, self.cmd_presets, self.prop_iterations, self.prop_delay, 
+            self.script_container, self.prop_command, self.cmd_presets, self.loop_container, self.prop_delay, 
             self.prop_condition, self.db_group, self.note_group
         ]
         for w in self.input_widgets:
@@ -173,6 +219,7 @@ class PropertiesPanel(QWidget):
         self.prop_id.setText(node.id)
         self.prop_label.setText(node.label)
         self.prop_type.setText(node.type.value)
+        self.prop_on_error.setCurrentText(getattr(node, 'on_error', 'stop'))
         
         # 3. Llenar y mostrar especificos
         t = node.type
@@ -190,9 +237,21 @@ class PropertiesPanel(QWidget):
                     self.prop_script.setCurrentText(node.script)
                 
         if t == NodeType.LOOP:
-             self._show_field(self.prop_iterations)
-             if hasattr(node, 'iterations'):
-                 self.prop_iterations.setText(str(node.iterations))
+             self._show_field(self.loop_container)
+             
+             # Mapeo de valores
+             ltype = getattr(node, 'loop_type', 'count')
+             idx = 0
+             if ltype == 'list': idx = 1
+             elif ltype == 'while': idx = 2
+             self.prop_loop_type.setCurrentIndex(idx)
+             
+             self.prop_iterations.setText(str(getattr(node, 'iterations', '1')))
+             self.prop_iterable.setText(getattr(node, 'iterable', ''))
+             self.prop_loop_condition.setText(getattr(node, 'condition', ''))
+             self.prop_loop_var.setText(getattr(node, 'loop_var', 'item'))
+             
+             self.update_loop_fields()
         
         if t == NodeType.DELAY:
              self._show_field(self.prop_delay)
@@ -246,6 +305,7 @@ class PropertiesPanel(QWidget):
         # Actualizar objeto nodo (en memoria) desde UI
         node = self.current_node
         node.label = self.prop_label.text()
+        node.on_error = self.prop_on_error.currentText()
         
         t = node.type
         if t == NodeType.ACTION:
@@ -258,8 +318,17 @@ class PropertiesPanel(QWidget):
                 node.command = ""
 
         if t == NodeType.LOOP:
-            node.script = self.prop_script.currentText()
-            node.iterations = self.prop_iterations.text()
+             node.script = self.prop_script.currentText()
+             # Map combo text to internal type
+             ltype_txt = self.prop_loop_type.currentText()
+             if "Count" in ltype_txt: node.loop_type = "count"
+             elif "List" in ltype_txt: node.loop_type = "list"
+             elif "While" in ltype_txt: node.loop_type = "while"
+             
+             node.iterations = self.prop_iterations.text()
+             node.iterable = self.prop_iterable.text()
+             node.condition = self.prop_loop_condition.text()
+             node.loop_var = self.prop_loop_var.text()
             
         if t == NodeType.DELAY:
             try:
