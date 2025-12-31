@@ -1,7 +1,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QGroupBox, QFormLayout, QLineEdit, QComboBox, QCheckBox,
-    QHBoxLayout, QPushButton, QTextEdit, QMessageBox, QFrame, QListWidget, QAbstractItemView
+    QHBoxLayout, QPushButton, QTextEdit, QMessageBox, QFrame, QListWidget, QAbstractItemView,
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, pyqtSlot
 from PyQt6.QtGui import QFont, QAction
@@ -49,6 +50,7 @@ class FloatingControlWindow(QWidget):
     sig_pause = pyqtSignal()
     sig_stop = pyqtSignal()
     sig_toggle_screenshot = pyqtSignal(bool)
+    sig_replay = pyqtSignal()
     
     def __init__(self, recorder=None):
         super().__init__()
@@ -57,8 +59,8 @@ class FloatingControlWindow(QWidget):
         
         # Window flags to keep it on top and frameless/tool-like if desired
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("🎬 Control Grabación")
-        self.resize(400, 600)  # Larger default size
+        self.setWindowTitle("🎬 Monitor de Eventos & Control")
+        self.resize(450, 650)  # Larger default size
         
         # Styles (Force Light Theme)
         self.setStyleSheet("""
@@ -121,7 +123,7 @@ class FloatingControlWindow(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         
         # Header
-        header = QLabel("🔴 Grabación Web")
+        header = QLabel("🔴 Grabación Web en Vivo")
         header.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.setStyleSheet("color: #d32f2f; margin-bottom: 5px;")
@@ -187,10 +189,21 @@ class FloatingControlWindow(QWidget):
             QPushButton:hover { background-color: #B71C1C; }
             QPushButton:disabled { background-color: #EF9A9A; color: #eee; }
         """)
+
+        self.btn_replay_float = QPushButton("🔄 Validar")
+        self.btn_replay_float.setToolTip("Reproducir script generado para validar")
+        self.btn_replay_float.clicked.connect(self.sig_replay.emit)
+        self.btn_replay_float.setEnabled(False)
+        self.btn_replay_float.setStyleSheet("""
+            QPushButton { background-color: #673AB7; color: white; border: none; font-weight: bold; }
+            QPushButton:hover { background-color: #512DA8; }
+            QPushButton:disabled { background-color: #D1C4E9; color: #eee; }
+        """)
         
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_pause)
         btn_layout.addWidget(self.btn_stop)
+        btn_layout.addWidget(self.btn_replay_float)
         
         layout.addLayout(btn_layout)
         
@@ -200,7 +213,7 @@ class FloatingControlWindow(QWidget):
         layout.addWidget(self.chk_screenshot)
         
         # Event Log
-        log_group = QGroupBox("Log de Eventos")
+        log_group = QGroupBox("Log de Eventos (En Vivo)")
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(5, 15, 5, 5) # Top margin for title
         
@@ -241,18 +254,29 @@ class FloatingControlWindow(QWidget):
                         time_str = datetime.fromtimestamp(action.timestamp).strftime("%H:%M:%S")
                         
                         desc = f"unknown"
+                        info = action.element_info
+                        
+                        element_ident = info.tag
+                        if info.element_id:
+                            element_ident += f"#{info.element_id}"
+                        elif info.name:
+                            element_ident += f"[name={info.name}]"
+                            
                         if action.action_type == 'click':
-                            tag = action.element_info.tag
-                            txt = action.element_info.text[:20] if action.element_info.text else "N/A"
-                            desc = f"CLICK [{tag}] '{txt}'"
+                            txt = info.text[:30] + "..." if len(info.text) > 30 else info.text
+                            desc = f"CLICK {element_ident} '{txt}'"
+                            
                         elif action.action_type == 'input':
-                             desc = f"INPUT '{action.value}'"
+                             desc = f"WRITE '{action.value}' -> {element_ident}"
+                             
                         elif action.action_type == 'select':
-                             desc = f"SELECT '{action.value}'"
+                             desc = f"SELECT '{action.value}' -> {element_ident}"
+                             
                         elif action.action_type == 'navigate':
                              desc = f"NAVIGATE"
+                             
                         elif action.action_type == 'page_load':
-                             desc = f"PAGE LOAD"
+                             desc = f"PAGE LOAD {action.url[:40]}..."
                         
                         item = f"[{time_str}] {desc}"
                         self.log_list.addItem(item)
@@ -314,6 +338,7 @@ class WebRecordPanel(QWidget):
         self.config = config
         self.recorder = None
         self.floating_window = None
+        self.last_script_path = None
         self.init_ui()
         
     def init_ui(self):
@@ -340,8 +365,8 @@ class WebRecordPanel(QWidget):
         settings_layout = QFormLayout(settings_frame)
         
         self.input_url = QLineEdit()
-        self.input_url.setPlaceholderText("https://www.google.com")
-        self.input_url.setText("https://www.google.com")
+        self.input_url.setPlaceholderText("https://www.google.com (Opcional - Dejar vacío para usar pestaña actual)")
+        self.input_url.setText("")
         settings_layout.addRow("URL Inicial:", self.input_url)
         
         self.check_maximize = QCheckBox("Iniciar navegador maximizado")
@@ -375,8 +400,19 @@ class WebRecordPanel(QWidget):
         """)
         self.btn_generate.clicked.connect(self.generate_script)
         
+        self.btn_replay = QPushButton("🔄 Reproducir Último")
+        self.btn_replay.setMinimumHeight(45)
+        self.btn_replay.setEnabled(False)
+        self.btn_replay.setStyleSheet("""
+            QPushButton { background-color: #673AB7; color: white; font-weight: bold; border-radius: 5px; }
+            QPushButton:hover { background-color: #512DA8; }
+            QPushButton:disabled { background-color: #ccc; color: #666; }
+        """)
+        self.btn_replay.clicked.connect(self.replay_last_script)
+
         btn_layout.addWidget(self.btn_launch)
         btn_layout.addWidget(self.btn_generate)
+        btn_layout.addWidget(self.btn_replay)
         
         layout.addLayout(btn_layout)
         
@@ -385,10 +421,9 @@ class WebRecordPanel(QWidget):
     
     def launch_session(self):
         """Starts browser and shows floating window"""
-        url = self.input_url.text()
+        url = self.input_url.text().strip()
         if not url:
-            QMessageBox.warning(self, "Error", "Por favor ingresa una URL válida")
-            return
+            url = "about:blank" # Recorder will stay on current page if already open
             
         if WebRecorder is None:
              QMessageBox.critical(self, "Error", "Módulo WebRecorder no cargado. Revisa dependencias (selenium).")
@@ -406,6 +441,7 @@ class WebRecordPanel(QWidget):
         self.floating_window.sig_pause.connect(self.toggle_pause)
         self.floating_window.sig_stop.connect(self.stop_recording)
         self.floating_window.sig_toggle_screenshot.connect(self.toggle_screenshots)
+        self.floating_window.sig_replay.connect(self.replay_last_script)
         self.floating_window.chk_screenshot.setChecked(self.check_screenshots.isChecked())
         
         # Start Browser in Background Thread
@@ -423,7 +459,7 @@ class WebRecordPanel(QWidget):
         if success:
             self.floating_window.show()
         else:
-            QMessageBox.critical(self, "Error", foo=f"No se pudo iniciar el navegador: {message}")
+            QMessageBox.critical(self, "Error", f"No se pudo iniciar el navegador: {message}")
             self.recorder = None
             
     def toggle_pause(self):
@@ -438,6 +474,18 @@ class WebRecordPanel(QWidget):
             self.recorder.stop_recording()
             self.btn_generate.setEnabled(True)
             self.btn_generate.setText(f"💾 Generar Script ({self.recorder.stats.total_actions} acciones)")
+            
+            # Ask if user wants to save as script immediately
+            if self.recorder.stats.total_actions > 0:
+                reply = QMessageBox.question(
+                    self, 'Guardar Grabación',
+                    "¿Deseas guardar esta grabación como un script Python (.py) ahora mismo?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.generate_script()
     
     def toggle_screenshots(self, enabled):
         if self.recorder:
@@ -449,6 +497,22 @@ class WebRecordPanel(QWidget):
             return
             
         try:
+            # Prepare default name
+            default_name = f"web_automation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Ask for custom name
+            name, ok = QInputDialog.getText(
+                self, "Guardar Script", 
+                "Nombre del archivo (sin .py):", 
+                QLineEdit.EchoMode.Normal, 
+                default_name
+            )
+            
+            if not ok or not name.strip():
+                return
+                
+            filename = f"{name.strip()}.py"
+            
             generator = PythonScriptGenerator(self.recorder)
             content = generator.generate()
             
@@ -458,13 +522,58 @@ class WebRecordPanel(QWidget):
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
             
-            filename = f"web_automation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
             filepath = os.path.join(save_dir, filename)
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
             
+            self.last_script_path = filepath
+            self.btn_replay.setEnabled(True)
+            if self.floating_window:
+                self.floating_window.btn_replay_float.setEnabled(True)
+
             QMessageBox.information(self, "Éxito", f"Script generado correctamente:\n\n{filepath}")
             
         except Exception as e:
              QMessageBox.critical(self, "Error", f"Error generando script: {e}")
+
+    def replay_last_script(self):
+        """Executes the last generated script for validation"""
+        if not self.last_script_path or not os.path.exists(self.last_script_path):
+            QMessageBox.warning(self, "Aviso", "No hay un script generado para reproducir.")
+            return
+
+        try:
+            import subprocess
+            import sys
+            
+            # Use the current python executable (useful for venv)
+            python_exe = sys.executable
+            
+            # Determine if we should show a message
+            self.btn_replay.setEnabled(False)
+            self.btn_replay.setText("Reproduciendo...")
+            if self.floating_window:
+                self.floating_window.btn_replay_float.setEnabled(False)
+                self.floating_window.lbl_status.setText("Validando Script... 🔄")
+
+            # Run in background to avoid freezing UI
+            # We use subprocess.Popen so we don't wait for it to finish in the main thread
+            # but for a simple validation, it's fine.
+            # Using Popen allows the user to see the browser without blocking the UI.
+            subprocess.Popen([python_exe, self.last_script_path], 
+                             creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+            
+            # Re-enable after a short delay or just leave it enabled
+            QTimer.singleShot(2000, lambda: self._reset_replay_button())
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo reproducir el script: {e}")
+            self._reset_replay_button()
+
+    def _reset_replay_button(self):
+        self.btn_replay.setEnabled(True)
+        self.btn_replay.setText("🔄 Reproducir Último")
+        if self.floating_window:
+            self.floating_window.btn_replay_float.setEnabled(True)
+            self.floating_window.lbl_status.setText("Listo para validar ✅")

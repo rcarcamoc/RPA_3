@@ -36,19 +36,36 @@ class ReplayWorker(QThread):
                 import subprocess
                 import sys
                 
-                result = subprocess.run(
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"
+                
+                process = subprocess.Popen(
                     [sys.executable, self.recording_path],
-                    capture_output=True,
-                    text=True
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    bufsize=1,
+                    universal_newlines=True
                 )
                 
-                status = "SUCCESS" if result.returncode == 0 else "FAILED"
+                stdout_lines = []
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                    if line:
+                        print(f"   [REPLAY] {line.strip()}")
+                        stdout_lines.append(line)
+                
+                returncode = process.poll()
+                status = "SUCCESS" if returncode == 0 else "FAILED"
                 results = {
                     "status": status,
-                    "completed": 1 if result.returncode == 0 else 0,
-                    "failed": 0 if result.returncode == 0 else 1,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr
+                    "completed": 1 if returncode == 0 else 0,
+                    "failed": 0 if returncode == 0 else 1,
+                    "stdout": "".join(stdout_lines),
+                    "stderr": ""
                 }
             else:
                 print(f"[DEBUG] ReplayWorker: Cargando JSON {self.recording_path}")

@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, 
                              QPushButton, QLabel, QStyle, QListWidget, QGroupBox,
-                             QTabWidget, QToolBar)
+                             QTabWidget, QToolBar, QTextEdit, QInputDialog, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QAction, QKeySequence, QUndoStack, QIcon
 
@@ -111,6 +111,13 @@ class WorkflowPanelV2(QWidget):
         self.act_stop.setEnabled(False)
         toolbar.addAction(self.act_stop)
         
+        toolbar.addSeparator()
+        
+        # Log Actions
+        act_clear_log = QAction("🗑️ Limpiar Log", self)
+        act_clear_log.triggered.connect(self.clear_log)
+        toolbar.addAction(act_clear_log)
+        
         main_layout.addWidget(toolbar)
         
         # --- MAIN SPLITTER (Left | Center | Right) ---
@@ -142,13 +149,46 @@ class WorkflowPanelV2(QWidget):
         center_layout.addWidget(self.canvas)
         self.splitter.addWidget(center_container)
         
-        # 3. RIGHT PANEL (Properties)
+        # 3. RIGHT PANEL (Properties + Log)
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0,0,0,0)
+        
+        # Vertical splitter for properties and log
+        self.right_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Properties Panel (top)
         self.properties_panel = PropertiesPanel()
         self.properties_panel.node_updated.connect(self.on_node_updated)
         self.properties_panel.node_deleted.connect(self.on_node_deleted_req)
         self.properties_panel.hide() # Hidden by default
+        self.right_splitter.addWidget(self.properties_panel)
         
-        self.splitter.addWidget(self.properties_panel)
+        # Log Panel (bottom)
+        log_group = QGroupBox("📋 Log de Ejecución")
+        log_layout = QVBoxLayout()
+        log_layout.setContentsMargins(5,5,5,5)
+        
+        self.log_widget = QTextEdit()
+        self.log_widget.setReadOnly(True)
+        self.log_widget.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 10px;
+                border: 1px solid #3c3c3c;
+            }
+        """)
+        self.log_widget.setMinimumHeight(100)
+        log_layout.addWidget(self.log_widget)
+        log_group.setLayout(log_layout)
+        
+        self.right_splitter.addWidget(log_group)
+        self.right_splitter.setSizes([400, 200])
+        
+        right_layout.addWidget(self.right_splitter)
+        self.splitter.addWidget(right_container)
         
         # Set Stretch Factors (15% | 65% | 20%)
         self.splitter.setSizes([250, 800, 300])
@@ -163,22 +203,65 @@ class WorkflowPanelV2(QWidget):
     # --- LOGIC ---
     
     def on_workflow_list_click(self, item):
-        # Load workflow logic (Simplified reuse)
+        # Load workflow logic
         wf_name = item.text()
-        wf_path = f"workflows/{wf_name}.json" # Assumption
-        # Load...
-        pass
+        wf_path = f"workflows/{wf_name}.json"
+        if os.path.exists(wf_path):
+            try:
+                self.current_workflow = Workflow.from_json(wf_path)
+                self.canvas.load_workflow(self.current_workflow)
+                self.append_log(f"Workflow cargado: {wf_name}", "INFO")
+                self.properties_panel.hide()
+            except Exception as e:
+                self.append_log(f"Error cargando workflow: {e}", "ERROR")
+                QMessageBox.critical(self, "Error", f"No se pudo cargar el workflow: {e}")
 
     def create_new_workflow(self):
         self.current_workflow = Workflow(id="new_workflow", name="Nuevo Workflow")
         self.canvas.load_workflow(self.current_workflow)
         self.properties_panel.hide()
-        # self.status_bar.setText(" Nuevo workflow creado.")
+        self.undo_stack.clear()
+        self.append_log("Nuevo workflow creado.", "INFO")
 
     def save_workflow(self):
-        # TODO: Implement basic JSON save
-        if self.current_workflow:
-             print(" Guardado local (simulado).")
+        if not self.current_workflow:
+            QMessageBox.warning(self, "Aviso", "No hay un workflow activo para guardar.")
+            return
+
+        name = self.current_workflow.name
+        # Si es el nombre por defecto o el ID es 'new_workflow', preguntamos nombre
+        if name == "Nuevo Workflow" or self.current_workflow.id == "new_workflow":
+            new_name, ok = QInputDialog.getText(self, "Guardar Workflow", "Nombre del Workflow:", text=name)
+            if ok and new_name.strip():
+                self.current_workflow.name = new_name.strip()
+                # Generar un ID simple basado en el nombre
+                import re
+                clean_id = re.sub(r'[^a-zA-Z0-9]', '_', new_name.lower())
+                self.current_workflow.id = clean_id
+                name = self.current_workflow.name
+            else:
+                return # Usuario canceló
+
+        if not os.path.exists("workflows"):
+            os.makedirs("workflows", exist_ok=True)
+
+        filepath = f"workflows/{name}.json"
+        
+        # Confirmar sobreescritura si el archivo ya existe y es un 'Nuevo Workflow' que cambió de nombre
+        if os.path.exists(filepath):
+            ret = QMessageBox.question(self, "Confirmar Guardado", 
+                                     f"El archivo '{name}.json' ya existe. ¿Desea sobrescribirlo?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ret == QMessageBox.StandardButton.No:
+                return
+
+        try:
+            self.current_workflow.to_json(filepath)
+            self.append_log(f"Workflow guardado correctamente en: {filepath}", "SUCCESS")
+            self.load_workflow_list()
+        except Exception as e:
+            self.append_log(f"Error al guardar workflow: {e}", "ERROR")
+            QMessageBox.critical(self, "Error", f"Error al guardar el archivo: {e}")
              
     def create_node_from_palette(self, node_def, pos):
         """Called by Canvas drop event"""
@@ -264,16 +347,59 @@ class WorkflowPanelV2(QWidget):
 
     def execute_workflow(self):
         if not self.current_workflow: return
-        print(" 🚀 Ejecutando...")
+        self.append_log("🚀 Iniciando ejecución del workflow...", "INFO")
         self.worker = WorkflowExecutorWorker(self.current_workflow)
-        self.worker.log_update.connect(lambda msg: print(f"LOG: {msg}")) # Redirect to log widget if exists
-        self.worker.finished.connect(lambda res: print(" ✅ Ejecución finalizada."))
+        self.worker.log_update.connect(lambda msg: self.append_log(msg, "INFO"))
+        self.worker.finished.connect(lambda res: self.append_log("✅ Ejecución finalizada correctamente.", "SUCCESS"))
         self.worker.start()
+        self.act_run.setEnabled(False)
+        self.act_stop.setEnabled(True)
         
     def stop_workflow(self):
         if self.worker:
             self.worker.stop()
-            print(" 🛑 Detenido.")
+            self.append_log("🛑 Ejecución detenida por el usuario.", "WARNING")
+        self.act_run.setEnabled(True)
+        self.act_stop.setEnabled(False)
+    
+    def append_log(self, message: str, level: str = "INFO"):
+        """Append a message to the log widget with color formatting"""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # Auto-detect level from message content if provided in brackets
+        if message.startswith("[ERROR]"): level = "ERROR"
+        elif message.startswith("[WARNING]"): level = "WARNING"
+        elif "✅" in message or "[SUCCESS]" in message: level = "SUCCESS"
+        elif "❌" in message: level = "ERROR"
+        elif "⚠️" in message: level = "WARNING"
+        
+        # Clean up the message for display
+        display_msg = message
+        for tag in ["[INFO]", "[ERROR]", "[WARNING]", "[SUCCESS]"]:
+            if display_msg.startswith(tag):
+                display_msg = display_msg[len(tag):].strip()
+        
+        color_map = {
+            "INFO": "#d4d4d4",
+            "SUCCESS": "#4ec9b0",
+            "WARNING": "#ce9178",
+            "ERROR": "#f48771"
+        }
+        
+        color = color_map.get(level, "#d4d4d4")
+        formatted_msg = f'<span style="color: {color};">[{timestamp}] {display_msg}</span>'
+        
+        self.log_widget.append(formatted_msg)
+        # Auto-scroll to bottom
+        self.log_widget.verticalScrollBar().setValue(
+            self.log_widget.verticalScrollBar().maximum()
+        )
+    
+    def clear_log(self):
+        """Clear the log widget"""
+        self.log_widget.clear()
+        self.append_log("Log limpiado.", "INFO")
 
     # --- Methods required by existing Commands (AddNodeCommand expects 'panel.canvas.load_workflow') ---
     # The commands were designed for the old panel structure. 

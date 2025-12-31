@@ -1,26 +1,26 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-RPA Framework v2 - GUI Application (Versión Simplificada)
-
-GUI moderna y estable con:
-- 4 pestañas principales
-- Gráficos básicos
-- Botones intuitivos
-- Sin dependencias complicadas
-
-Uso:
-    cd rpa_framework
-    python main_gui_simple.py
-"""
-
+import os
 import sys
+import warnings
+
+# --- SUPPRESS CONSOLE NOISE ---
+# 1. Suppress pywinauto / COM warnings
+os.environ["PYTHONWARNINGS"] = "ignore::UserWarning:pywinauto"
+warnings.filterwarnings("ignore", category=UserWarning, message=".*coinit_flags.*")
+
+# 2. Suppress Qt DPI / Window logs
+os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.qpa.plugin=false"
+
+# 3. Suppress noisy library logs (urllib3 pool warnings)
+import logging
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("selenium").setLevel(logging.ERROR)
+
 # Force STA mode for COM/PyQt compatibility
 sys.coinit_flags = 2
-import os
 
-# Ensure we are running from the script directory for relative paths
+# Force running from script dir
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget
@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
         # Tabs
         tabs = QTabWidget()
         tabs.addTab(DashboardPanel(), "Dashboard")
-        tabs.addTab(WorkflowPanelV2(self.config), "✨ Workflows V2 (Redesign)")
+        tabs.addTab(WorkflowPanelV2(self.config), "✨ Workflows")
         tabs.addTab(RecordPanel(self.config), "Grabar")
         tabs.addTab(ReplayPanel(self.config), "Reproducir")
         tabs.addTab(GeneratorPanel(self.config), "Generar")

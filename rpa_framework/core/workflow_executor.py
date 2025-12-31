@@ -157,25 +157,39 @@ class WorkflowExecutor:
                 for key, value in self.context.items():
                     env[f"VAR_{key}"] = str(value)
                 
-                # Ejecutar comando en Shell
-                result = subprocess.run(
+                # Ejecutar comando en Shell con Popen para streaming
+                process = subprocess.Popen(
                     node.command,
                     shell=True,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    timeout=60,
-                    env=env
+                    env=env,
+                    bufsize=1,
+                    universal_newlines=True
                 )
                 
-                if result.returncode == 0:
+                # Leer salida en tiempo real
+                full_output = []
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                    if line:
+                        clean_line = line.strip()
+                        if clean_line:
+                            self.logger.log(f"   [CMD] {clean_line}")
+                            full_output.append(clean_line)
+                
+                returncode = process.poll()
+                
+                if returncode == 0:
                      self.logger.log(f"✅ Comando ejecutado exitosamente")
-                     if result.stdout: self.logger.log(f"   Salida: {result.stdout.strip()[:200]}")
                 else:
-                     self.logger.log(f"❌ Error en comando (código {result.returncode})")
-                     if result.stderr: self.logger.log(f"   Error: {result.stderr.strip()[:200]}")
+                     self.logger.log(f"❌ Error en comando (código {returncode})")
                      
                      if getattr(node, 'on_error', 'stop') == 'stop':
-                         raise RuntimeError(f"Comando falló con código {result.returncode}")
+                         raise RuntimeError(f"Comando falló con código {returncode}")
                      
              except Exception as e:
                  self.logger.log(f"❌ Error ejecutando comando: {e}")
@@ -194,6 +208,7 @@ class WorkflowExecutor:
         try:
             # Preparar entorno con variables del contexto
             env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
             for key, value in self.context.items():
                 env[f"VAR_{key}"] = str(value)
             
@@ -204,7 +219,10 @@ class WorkflowExecutor:
                 possible_paths = [
                     Path("rpa_framework/recordings") / script_path,
                     Path("recordings") / script_path,
-                    Path.cwd() / script_path
+                    Path.cwd() / script_path,
+                    Path("rpa_framework/recordings/web") / script_path,
+                    Path("recordings/web") / script_path,
+                    Path("web") / script_path
                 ]
                 
                 for p in possible_paths:
@@ -220,44 +238,63 @@ class WorkflowExecutor:
             script_path = script_path.resolve()
             self.logger.log(f"   Ruta absoluta: {script_path}")
 
-            # Ejecutar script
+            # Ejecutar script con Popen para streaming
             cmd = [sys.executable, str(script_path)]
             self.logger.log(f"   Comando a ejecutar: {cmd}")
             
-            result = subprocess.run(
+            # Use root directory (parent of rpa_framework) as CWD if possible
+            current_cwd = Path.cwd()
+            if current_cwd.name == "rpa_framework":
+                exec_cwd = current_cwd.parent
+            else:
+                exec_cwd = current_cwd
+
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=60,
                 env=env,
-                cwd=str(script_path.parent) # Ejecutar en el directorio del script
+                cwd=str(exec_cwd),
+                bufsize=1,
+                universal_newlines=True
             )
             
-            if result.returncode == 0:
+            # Leer salida en tiempo real
+            full_stdout = []
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    continue
+                
+                clean_line = line.strip()
+                if clean_line:
+                    self.logger.log(f"   [PY] {clean_line}")
+                    full_stdout.append(clean_line)
+            
+            returncode = process.poll()
+            
+            if returncode == 0:
                 self.logger.log(f"✅ Script ejecutado exitosamente")
                 
-                # Intentar parsear salida como JSON para actualizar contexto
-                try:
-                    output_data = json.loads(result.stdout)
-                    if isinstance(output_data, dict):
-                        self.context.update(output_data)
-                        self.logger.log(f"   Variables actualizadas: {list(output_data.keys())}")
-                except json.JSONDecodeError:
-                    # Si no es JSON, solo loguear la salida
-                    if result.stdout:
-                        self.logger.log(f"   Salida: {result.stdout[:200]}")
+                # Intentar parsear la ÚLTIMA línea como JSON para actualizar contexto
+                # O buscar cualquier línea que sea JSON
+                for line in reversed(full_stdout):
+                    try:
+                        output_data = json.loads(line)
+                        if isinstance(output_data, dict):
+                            self.context.update(output_data)
+                            self.logger.log(f"   Variables actualizadas: {list(output_data.keys())}")
+                            break
+                    except json.JSONDecodeError:
+                        continue
             else:
-                self.logger.log(f"❌ Error en script (código {result.returncode})")
-                if result.stderr:
-                    self.logger.log(f"   Error: {result.stderr[:200]}")
-                    
+                self.logger.log(f"❌ Error en script (código {returncode})")
                 if getattr(node, 'on_error', 'stop') == 'stop':
-                    raise RuntimeError(f"Script falló con código {result.returncode}")
+                    raise RuntimeError(f"Script falló con código {returncode}")
             
-        except subprocess.TimeoutExpired:
-            self.logger.log("❌ Timeout ejecutando script")
-            if getattr(node, 'on_error', 'stop') == 'stop':
-                raise RuntimeError("Timeout en script")
         except Exception as e:
             self.logger.log(f"❌ Error: {str(e)}")
             if getattr(node, 'on_error', 'stop') == 'stop':
@@ -373,10 +410,10 @@ class WorkflowExecutor:
         # Por ahora mantenemos compatibilidad simple.
         
         result = subprocess.run(
-            ['python', node.script],
+            [sys.executable, node.script],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
             env=env
         )
         

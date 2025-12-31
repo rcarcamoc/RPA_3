@@ -1,47 +1,17 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Web Recorder - Script Generator
-Generates a standalone Python script from recorded actions.
-"""
-
-from datetime import datetime
-from .web_recorder import WebRecorder, WebAction
-
-class PythonScriptGenerator:
-    """Generates Python scripts from captured actions"""
-    
-    def __init__(self, recorder: WebRecorder):
-        self.recorder = recorder
-    
-    def generate(self) -> str:
-        """Generates the complete script"""
-        header = self._get_header()
-        imports = self._get_imports()
-        web_automation_class = self._get_web_automation_class()
-        main_logic = self._get_main_logic()
-        
-        return f"{header}\n{imports}\n{web_automation_class}\n{main_logic}"
-    
-    def _get_header(self) -> str:
-        """Script header"""
-        return f'''"""
 Auto-generated Web Automation Script
-Generated: {datetime.now().isoformat()}
-Total Actions: {len(self.recorder.actions)}
-Clicks: {self.recorder.stats.clicks}
-Inputs: {self.recorder.stats.inputs}
-Selects: {self.recorder.stats.selects}
-Duration: {self.recorder.stats.elapsed_formatted}
+Generated: 2025-12-31T07:09:33.390818
+Total Actions: 6
+Clicks: 2
+Inputs: 3
+Selects: 0
+Duration: 00:14
 
 Description:
 This script executes the actions recorded via the RPA Web Recorder.
 It is standalone and only requires 'selenium' and 'pillow'.
-"""'''
-    
-    def _get_imports(self) -> str:
-        """Necessary imports"""
-        return '''
+"""
+
 import time
 import base64
 import io
@@ -69,11 +39,8 @@ try:
 except ImportError:
     HAS_PIL = False
     print("Warning: Missing 'pillow' library. Screenshots will not be saved. (pip install pillow)")
-'''
-    
-    def _get_web_automation_class(self) -> str:
-        """Main automation class"""
-        return '''
+
+
 class WebAutomation:
     """Auto-generated Web Automation Class"""
     
@@ -207,21 +174,60 @@ class WebAutomation:
                 
             # Recorded actions start here
             print("[INFO] Starting recorded actions...")
-'''
-    
-    def _get_main_logic(self) -> str:
-        """Generates the action code"""
-        actions_code = ""
-        
-        for i, action in enumerate(self.recorder.actions):
-            actions_code += self._action_to_code(action, i)
-        
-        return f'''{actions_code}
+
+
+            # Action 1: PAGE_LOAD
+            print('[ACTION] Loading page: https://ris.chile.telemedicina.com/ris/atencion/lista')
+            self.driver.get('https://ris.chile.telemedicina.com/ris/atencion/lista')
+            time.sleep(2)
+
+            # Action 2: INPUT
+            print('[ACTION] Typing text')
+            element = self.find_element(r"""//*[@id='s2id_autogen1']""", r"""input#s2id_autogen1""", clickable=True)
+            if element:
+                element.clear()
+                element.send_keys(r'')
+                time.sleep(1.0)
+
+            # Action 3: CLICK
+            print('[ACTION] CLICK on: ')
+            element = self.find_element(r"""//input[contains(@class, '__rpa-highlight')]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
+            if element:
+                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
+                time.sleep(1.0)
+                element.click()
+                time.sleep(1.0)
+
+            # Action 4: INPUT
+            print('[ACTION] Typing text')
+            element = self.find_element(r"""//input[contains(@class, '__rpa-highlight')]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
+            if element:
+                element.clear()
+                element.send_keys(r'true')
+                time.sleep(1.0)
+
+            # Action 5: INPUT
+            print('[ACTION] Typing text')
+            element = self.find_element(r"""//*[@id='frm_buscar']/table[1]/tbody[1]/tr[2]/td[1]/input[4]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
+            if element:
+                element.clear()
+                element.send_keys(r'true')
+                time.sleep(1.0)
+
+            # Action 6: CLICK
+            print('[ACTION] CLICK on:  Buscar estudios')
+            element = self.find_element(r"""//*[@id='buscar']""", r"""button#buscar""", clickable=True)
+            if element:
+                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
+                time.sleep(1.0)
+                element.click()
+                time.sleep(1.0)
+
             
             print("[INFO] Automation completed successfully")
             
         except Exception as e:
-            print(f"[ERROR] Error during execution: {{e}}")
+            print(f"[ERROR] Error during execution: {e}")
             # traceback.print_exc()
         finally:
             self._cleanup()
@@ -246,94 +252,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-    
-    def _action_to_code(self, action: WebAction, index: int) -> str:
-        """Converts an action to Python code"""
-        code = f"\n            # Action {index + 1}: {action.action_type.upper()}\n"
-        
-        try:
-            timestamp = datetime.fromtimestamp(action.timestamp).strftime("%H%M%S")
-            
-            if action.action_type == 'page_load':
-                code += f"            print('[ACTION] Loading page: {action.url}')\n"
-                code += f"            self.driver.get('{action.url}')\n"
-                code += "            time.sleep(2)\n"
-            
-            elif action.action_type in ['click', 'dblclick', 'contextmenu']:
-                xpath = action.element_info.xpath
-                css = action.element_info.css_selector or ""
-                text = action.element_info.text[:30] if action.element_info.text else ""
-                
-                # Check for screenshot
-                if action.screenshot_base64:
-                    img_name = f"step_{index+1}_{action.action_type}_{timestamp}.png"
-                    code += f"            # Reference Screenshot: {img_name}\n"
-                
-                if xpath:
-                    code += f"            print('[ACTION] {action.action_type.upper()} on: {text}')\n"
-                    # Pass both xpath and css for fallback, and ensure clickable
-                    code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
-                    code += "            if element:\n"
-                    code += "                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)\n"
-                    code += "                time.sleep(1.0)\n"
-                    
-                    if action.action_type == 'click':
-                        code += "                element.click()\n"
-                    elif action.action_type == 'dblclick':
-                        code += "                ActionChains(self.driver).double_click(element).perform()\n"
-                    elif action.action_type == 'contextmenu':
-                        code += "                ActionChains(self.driver).context_click(element).perform()\n"
-                        
-                    code += "                time.sleep(1.0)\n"
-            
-            elif action.action_type == 'input':
-                xpath = action.element_info.xpath
-                css = action.element_info.css_selector or ""
-                value = (action.value or "")
-                if xpath:
-                    code += f"            print('[ACTION] Typing text')\n"
-                    code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
-                    code += "            if element:\n"
-                    code += "                element.clear()\n"
-                    code += f"                element.send_keys(r'{value}')\n"
-                    code += "                time.sleep(1.0)\n"
-            
-            elif action.action_type == 'select':
-                xpath = action.element_info.xpath
-                css = action.element_info.css_selector or ""
-                value = action.value or ""
-                if xpath:
-                    code += f"            print('[ACTION] Selecting option')\n"
-                    code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
-                    code += "            if element:\n"
-                    code += f"                Select(element).select_by_value(r'{value}')\n"
-                    code += "                time.sleep(1.0)\n"
-
-            elif action.action_type == 'keypress':
-                xpath = action.element_info.xpath
-                css = action.element_info.css_selector or ""
-                # We currently only support Enter explicitly, but structure allows expansion
-                if getattr(action, 'key', '') == 'Enter' or (isinstance(action.value, dict) and action.value.get('key') == 'Enter'):
-                     if xpath:
-                        code += f"            print('[ACTION] Pressing Key: Enter')\n"
-                        code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
-                        code += "            if element:\n"
-                        code += "                element.send_keys(Keys.ENTER)\n"
-                        code += "                time.sleep(1)\n"
-
-            elif action.action_type == 'handle_alert':
-                code += f"            print('[ACTION] Handling Alert')\n"
-                code += "            try:\n"
-                code += "                WebDriverWait(self.driver, 5).until(EC.alert_is_present())\n"
-                code += "                alert = self.driver.switch_to.alert\n"
-                code += f"                print(f'[INFO] Alert text: {{alert.text}}')\n"
-                code += "                alert.accept()\n"
-                code += "                time.sleep(1)\n"
-                code += "            except Exception as e:\n"
-                code += "                print(f'[WARNING] No alert found to handle: {e}')\n"
-        
-        except Exception as e:
-            code += f"            # [ERROR] Generating code for action {index}: {e}\n"
-        
-        return code

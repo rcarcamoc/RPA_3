@@ -287,3 +287,230 @@ ModuleNotFoundError: No module named 'mysql'
 [2025-12-25 11:32:02] [INFO] ✅ Ejecución completada: success
 [2025-12-25 11:32:02] [INFO]    Variables finales: {}
 [2025-12-25 11:32:02] [INFO] ============================================================
+[2025-12-26 16:29:03] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-26 16:29:03] [INFO]    Variables iniciales: {}
+[2025-12-26 16:29:03] [INFO] ============================================================
+[2025-12-26 16:29:03] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-26 16:29:03] [INFO] ============================================================
+[2025-12-26 16:29:03] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-26 16:29:03] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-26 16:29:03] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184016.py
+[2025-12-26 16:29:03] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\web_automation_20251224_184016.py
+[2025-12-26 16:29:03] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\web_automation_20251224_184016.py']
+[2025-12-26 16:29:03] [INFO] ❌ Error en script (código 1)
+[2025-12-26 16:29:03] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-26 16:29:03] [INFO] ============================================================
+[2025-12-26 16:29:03] [INFO] ✅ Ejecución completada: success
+[2025-12-26 16:29:03] [INFO]    Variables finales: {}
+[2025-12-26 16:29:03] [INFO] ============================================================
+[2025-12-26 16:29:20] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-26 16:29:20] [INFO]    Variables iniciales: {}
+[2025-12-26 16:29:20] [INFO] ============================================================
+[2025-12-26 16:29:20] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-26 16:29:20] [INFO] ============================================================
+[2025-12-26 16:29:20] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-26 16:29:20] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-26 16:29:20] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184151.py
+[2025-12-26 16:29:20] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\web_automation_20251224_184151.py
+[2025-12-26 16:29:20] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\web_automation_20251224_184151.py']
+[2025-12-26 16:29:20] [INFO] ❌ Error en script (código 1)
+[2025-12-26 16:29:20] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-26 16:29:20] [INFO] ============================================================
+[2025-12-26 16:29:20] [INFO] ✅ Ejecución completada: success
+[2025-12-26 16:29:20] [INFO]    Variables finales: {}
+[2025-12-26 16:29:20] [INFO] ============================================================
+[2025-12-26 16:33:42] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-26 16:33:42] [INFO]    Variables iniciales: {}
+[2025-12-26 16:33:42] [INFO] ============================================================
+[2025-12-26 16:33:42] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-26 16:33:42] [INFO] ============================================================
+[2025-12-26 16:33:42] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-26 16:33:42] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-26 16:33:42] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184151.py
+[2025-12-26 16:33:42] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\web_automation_20251224_184151.py
+[2025-12-26 16:33:42] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\web_automation_20251224_184151.py']
+[2025-12-26 16:34:21] [INFO] ✅ Script ejecutado exitosamente
+[2025-12-26 16:34:21] [INFO]    Salida: [INFO] Browser started
+[ACTION] Loading page: https://www.google.com
+[ACTION] Loading page: https://www.google.com/?zx=1766612482207&no_sw_cr=1
+[ACTION] Loading page: https://www.emol.com/
+[ACTION] Cl
+[2025-12-26 16:34:21] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-26 16:34:21] [INFO] ============================================================
+[2025-12-26 16:34:21] [INFO] ✅ Ejecución completada: success
+[2025-12-26 16:34:21] [INFO]    Variables finales: {}
+[2025-12-26 16:34:21] [INFO] ============================================================
+[2025-12-26 16:34:25] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-26 16:34:25] [INFO]    Variables iniciales: {}
+[2025-12-26 16:34:25] [INFO] ============================================================
+[2025-12-26 16:34:25] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-26 16:34:25] [INFO] ============================================================
+[2025-12-26 16:34:25] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-26 16:34:25] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-26 16:34:25] [INFO] 🐍 Ejecutando script: web\web_automation_20251224_184151.py
+[2025-12-26 16:34:25] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\web_automation_20251224_184151.py
+[2025-12-26 16:34:25] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\web_automation_20251224_184151.py']
+[2025-12-26 16:34:54] [INFO] ✅ Script ejecutado exitosamente
+[2025-12-26 16:34:54] [INFO]    Salida: [INFO] Browser started
+[ACTION] Loading page: https://www.google.com
+[ACTION] Loading page: https://www.google.com/?zx=1766612482207&no_sw_cr=1
+[ACTION] Loading page: https://www.emol.com/
+[ACTION] Cl
+[2025-12-26 16:34:54] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-26 16:34:54] [INFO] ============================================================
+[2025-12-26 16:34:54] [INFO] ✅ Ejecución completada: success
+[2025-12-26 16:34:54] [INFO]    Variables finales: {}
+[2025-12-26 16:34:54] [INFO] ============================================================
+[2025-12-30 06:28:23] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:28:23] [INFO]    Variables iniciales: {}
+[2025-12-30 06:28:23] [INFO] ============================================================
+[2025-12-30 06:28:23] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:28:23] [INFO] ============================================================
+[2025-12-30 06:28:23] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:28:23] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:28:23] [INFO] 🐍 Ejecutando script: ingresa atrys.py
+[2025-12-30 06:28:23] [INFO] ❌ Script no encontrado: ingresa atrys.py
+[2025-12-30 06:28:23] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-30 06:28:23] [INFO] ============================================================
+[2025-12-30 06:28:23] [INFO] ✅ Ejecución completada: success
+[2025-12-30 06:28:23] [INFO]    Variables finales: {}
+[2025-12-30 06:28:23] [INFO] ============================================================
+[2025-12-30 06:31:42] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:31:42] [INFO]    Variables iniciales: {}
+[2025-12-30 06:31:42] [INFO] ============================================================
+[2025-12-30 06:31:42] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:31:42] [INFO] ============================================================
+[2025-12-30 06:31:42] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:31:42] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:31:42] [INFO] 🐍 Ejecutando script: ingresa atrys.py
+[2025-12-30 06:31:42] [INFO] ❌ Script no encontrado: ingresa atrys.py
+[2025-12-30 06:31:42] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-30 06:31:42] [INFO] ============================================================
+[2025-12-30 06:31:42] [INFO] ✅ Ejecución completada: success
+[2025-12-30 06:31:42] [INFO]    Variables finales: {}
+[2025-12-30 06:31:42] [INFO] ============================================================
+[2025-12-30 06:32:20] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:32:20] [INFO]    Variables iniciales: {}
+[2025-12-30 06:32:20] [INFO] ============================================================
+[2025-12-30 06:32:20] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:32:20] [INFO] ============================================================
+[2025-12-30 06:32:20] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:32:20] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:32:20] [INFO] 🐍 Ejecutando script: ingresa atrys.py
+[2025-12-30 06:32:20] [INFO] ❌ Script no encontrado: ingresa atrys.py
+[2025-12-30 06:32:20] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-30 06:32:21] [INFO] ============================================================
+[2025-12-30 06:32:21] [INFO] ✅ Ejecución completada: success
+[2025-12-30 06:32:21] [INFO]    Variables finales: {}
+[2025-12-30 06:32:21] [INFO] ============================================================
+[2025-12-30 06:32:51] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:32:51] [INFO]    Variables iniciales: {}
+[2025-12-30 06:32:51] [INFO] ============================================================
+[2025-12-30 06:32:51] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:32:51] [INFO] ============================================================
+[2025-12-30 06:32:51] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:32:51] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:32:51] [INFO] 🐍 Ejecutando script: ingresa atrys.py
+[2025-12-30 06:32:51] [INFO] ❌ Script no encontrado: ingresa atrys.py
+[2025-12-30 06:32:51] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-30 06:32:51] [INFO] ============================================================
+[2025-12-30 06:32:51] [INFO] ✅ Ejecución completada: success
+[2025-12-30 06:32:51] [INFO]    Variables finales: {}
+[2025-12-30 06:32:51] [INFO] ============================================================
+[2025-12-30 06:33:05] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:33:05] [INFO]    Variables iniciales: {}
+[2025-12-30 06:33:05] [INFO] ============================================================
+[2025-12-30 06:33:05] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:33:05] [INFO] ============================================================
+[2025-12-30 06:33:05] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:33:05] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:33:05] [INFO] 🐍 Ejecutando script: ingresa atrys.py
+[2025-12-30 06:33:05] [INFO] ❌ Script no encontrado: ingresa atrys.py
+[2025-12-30 06:33:05] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-30 06:33:05] [INFO] ============================================================
+[2025-12-30 06:33:05] [INFO] ✅ Ejecución completada: success
+[2025-12-30 06:33:05] [INFO]    Variables finales: {}
+[2025-12-30 06:33:05] [INFO] ============================================================
+[2025-12-30 06:42:46] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:42:46] [INFO]    Variables iniciales: {}
+[2025-12-30 06:42:46] [INFO] ============================================================
+[2025-12-30 06:42:46] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:42:46] [INFO] ============================================================
+[2025-12-30 06:42:46] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:42:46] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:42:46] [INFO] 🐍 Ejecutando script: web\ingresa atrys.py
+[2025-12-30 06:42:46] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\ingresa atrys.py
+[2025-12-30 06:42:46] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\ingresa atrys.py']
+[2025-12-30 06:46:18] [INFO] ⏹️ Deteniendo workflow...
+[2025-12-30 06:51:35] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-30 06:51:35] [INFO]    Variables iniciales: {}
+[2025-12-30 06:51:35] [INFO] ============================================================
+[2025-12-30 06:51:35] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-30 06:51:35] [INFO] ============================================================
+[2025-12-30 06:51:35] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-30 06:51:35] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-30 06:51:35] [INFO] 🐍 Ejecutando script: web\ingresa atrys.py
+[2025-12-30 06:51:35] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\ingresa atrys.py
+[2025-12-30 06:51:35] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\ingresa atrys.py']
+[2025-12-30 06:51:36] [INFO]    [PY] [INFO] Script Python iniciado
+[2025-12-31 06:23:27] [INFO] 🚀 Workflow inicializado: Nuevo Workflow
+[2025-12-31 06:23:27] [INFO]    Variables iniciales: {}
+[2025-12-31 06:23:27] [INFO] ============================================================
+[2025-12-31 06:23:27] [INFO] ▶️ Iniciando ejecución: Nuevo Workflow
+[2025-12-31 06:23:27] [INFO] ============================================================
+[2025-12-31 06:23:27] [INFO] 
+📍 Nodo actual: Inicio (start)
+[2025-12-31 06:23:27] [INFO] 
+📍 Nodo actual: Python Script (action)
+[2025-12-31 06:23:27] [INFO] 🐍 Ejecutando script: web\Inicio_ris.py
+[2025-12-31 06:23:27] [INFO]    Ruta absoluta: C:\Desarrollo\RPA_3\rpa_framework\recordings\web\Inicio_ris.py
+[2025-12-31 06:23:27] [INFO]    Comando a ejecutar: ['C:\\Desarrollo\\RPA_3\\venv\\Scripts\\python.exe', 'C:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\Inicio_ris.py']
+[2025-12-31 06:23:28] [INFO]    [PY] [INFO] Configurando opciones del navegador...
+[2025-12-31 06:23:29] [INFO]    [PY] [INFO] Iniciando nueva instancia de Chrome con puerto 9222...
+[2025-12-31 06:23:34] [INFO]    [PY] [INFO] Nueva instancia lanzada correctamente.
+[2025-12-31 06:23:34] [INFO]    [PY] [INFO] Configuración de navegador completada.
+[2025-12-31 06:23:34] [INFO]    [PY] [INFO] Using current page: chrome://new-tab-page/
+[2025-12-31 06:23:34] [INFO]    [PY] [INFO] Starting recorded actions...
+[2025-12-31 06:23:34] [INFO]    [PY] [ACTION] Loading page: https://ris.chile.telemedicina.com/usuario/logout
+[2025-12-31 06:23:37] [INFO]    [PY] [ACTION] Handling Alert
+[2025-12-31 06:23:37] [INFO]    [PY] [INFO] Alert text: Estimado Usuario,
+[2025-12-31 06:23:37] [INFO]    [PY] Queremos recordarte que nuestras notificaciones de devoluciones de examen y patologías críticas se envían por correo electrónico.
+[2025-12-31 06:23:37] [INFO]    [PY] Por lo tanto, es crucial que nuestros correos no sean marcados como correo no deseado (SPAM) en tu bandeja de entrada.
+[2025-12-31 06:23:37] [INFO]    [PY] Para garantizar que reciba estas alertas de manera eficaz y oportuna, le solicitamos que envíe su lista de correos actualizados a soportemsr@atryshealth.com.
+[2025-12-31 06:23:38] [INFO]    [PY] [ACTION] CLICK on:
+[2025-12-31 06:23:40] [INFO]    [PY] [ACTION] Typing text
+[2025-12-31 06:23:41] [INFO]    [PY] [ACTION] CLICK on:
+[2025-12-31 06:23:43] [INFO]    [PY] [ACTION] Typing text
+[2025-12-31 06:23:45] [INFO]    [PY] [ACTION] CLICK on: Ingresar
+[2025-12-31 06:23:49] [INFO]    [PY] [ACTION] Loading page: https://ris.chile.telemedicina.com/ris/atencion/lista
+[2025-12-31 06:23:53] [INFO]    [PY] [ACTION] CLICK on: Mostrar Filtros
+[2025-12-31 06:24:04] [INFO]    [PY] [INFO] Automation completed successfully
+[2025-12-31 06:24:04] [INFO]    [PY] [INFO] Automation finished. Keeping browser open.
+[2025-12-31 06:24:07] [INFO] ✅ Script ejecutado exitosamente
+[2025-12-31 06:24:07] [INFO] ✅ Fin del workflow (no hay más nodos)
+[2025-12-31 06:24:07] [INFO] ============================================================
+[2025-12-31 06:24:07] [INFO] ✅ Ejecución completada: success
+[2025-12-31 06:24:07] [INFO]    Variables finales: {}
+[2025-12-31 06:24:07] [INFO] ============================================================
