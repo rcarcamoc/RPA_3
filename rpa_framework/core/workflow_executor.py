@@ -114,6 +114,11 @@ class WorkflowExecutor:
         """
         Ejecuta un nodo individual y devuelve el ID del siguiente nodo.
         """
+        # Skip disabled nodes
+        if not node.enabled:
+            self.logger.log(f"🚫 Nodo deshabilitado: {node.label} (saltando)", "WARNING")
+            return self.workflow.get_next_node(node.id)
+        
         # Skip annotation nodes (they're just for documentation)
         if node.type == NodeType.ANNOTATION:
             self.logger.log(f"📝 Anotación: {node.label} (saltando)")
@@ -164,6 +169,7 @@ class WorkflowExecutor:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    encoding='utf-8',
                     env=env,
                     bufsize=1,
                     universal_newlines=True
@@ -185,6 +191,11 @@ class WorkflowExecutor:
                 
                 if returncode == 0:
                      self.logger.log(f"✅ Comando ejecutado exitosamente")
+                     # Guardar salida en variable si se especificó
+                     if node.output_variable:
+                        output_str = "".join(full_output).strip()
+                        self.context[node.output_variable] = output_str
+                        self.logger.log(f"   Salida guardada en '{node.output_variable}': {output_str[:50]}...")
                 else:
                      self.logger.log(f"❌ Error en comando (código {returncode})")
                      
@@ -209,26 +220,49 @@ class WorkflowExecutor:
             # Preparar entorno con variables del contexto
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
             for key, value in self.context.items():
                 env[f"VAR_{key}"] = str(value)
             
             # Resolver ruta del script
             script_path = Path(node.script)
-            if not script_path.is_absolute():
-                # Intentar buscar en rpa_framework/recordings o cwd
-                possible_paths = [
-                    Path("rpa_framework/recordings") / script_path,
-                    Path("recordings") / script_path,
-                    Path.cwd() / script_path,
-                    Path("rpa_framework/recordings/web") / script_path,
-                    Path("recordings/web") / script_path,
-                    Path("web") / script_path
+            
+            # Si es absoluta y existe, no hay nada que resolver
+            if script_path.is_absolute() and script_path.exists():
+                pass
+            else:
+                # Intentar buscar en ubicaciones relativas
+                # Primero, si ya tiene un prefijo de subcarpeta (ej: "ui/Abre_pacs.py")
+                possible_roots = [
+                    Path.cwd(),
+                    Path("recordings"),
+                    Path("rpa_framework/recordings"),
+                    Path("../recordings"), # Por si acaso se ejecuta desde rpa_framework/
+                    Path("recordings/web"),
+                    Path("recordings/ui"),
+                    Path("recordings/ocr")
                 ]
                 
-                for p in possible_paths:
-                    if p.exists():
-                        script_path = p
+                found = False
+                for root in possible_roots:
+                    test_path = (root / script_path).resolve()
+                    if test_path.exists():
+                        script_path = test_path
+                        found = True
                         break
+                
+                if not found:
+                    # Búsqueda desesperada: si solo es el nombre del archivo, buscarlo recursivamente
+                    self.logger.log(f"🔍 Buscando '{script_path}' en recordings recursivamente...")
+                    potential_recordings = [Path("recordings"), Path("rpa_framework/recordings")]
+                    for rec_dir in potential_recordings:
+                        if rec_dir.exists():
+                             matches = list(rec_dir.rglob(script_path.name))
+                             if matches:
+                                 script_path = matches[0].resolve()
+                                 found = True
+                                 self.logger.log(f"   ✨ Encontrado en: {script_path}")
+                                 break
             
             if not script_path.exists():
                  self.logger.log(f"❌ Script no encontrado: {script_path}")
@@ -254,6 +288,7 @@ class WorkflowExecutor:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding='utf-8',
                 env=env,
                 cwd=str(exec_cwd),
                 bufsize=1,
@@ -279,14 +314,21 @@ class WorkflowExecutor:
             if returncode == 0:
                 self.logger.log(f"✅ Script ejecutado exitosamente")
                 
-                # Intentar parsear la ÚLTIMA línea como JSON para actualizar contexto
-                # O buscar cualquier línea que sea JSON
+                # Opción 1: Guardar salida completa en variable si se definió explícitamente
+                if node.output_variable:
+                    output_str = "".join(full_stdout).strip()
+                    self.context[node.output_variable] = output_str
+                    self.logger.log(f"   Salida guardada en '{node.output_variable}': {output_str[:50]}...")
+                
+                # Opción 2: Intentar parsear líneas JSON para actualizaciones implícitas de contexto
+                # Esto permite que scripts actualicen múltiples variables sin configurar output_variable
                 for line in reversed(full_stdout):
                     try:
                         output_data = json.loads(line)
                         if isinstance(output_data, dict):
                             self.context.update(output_data)
-                            self.logger.log(f"   Variables actualizadas: {list(output_data.keys())}")
+                            self.logger.log(f"   Variables actualizadas (JSON): {list(output_data.keys())}")
+                            # Si encontramos un JSON válido al final, asumimos que es el resultado estructurado
                             break
                     except json.JSONDecodeError:
                         continue
@@ -413,6 +455,7 @@ class WorkflowExecutor:
             [sys.executable, node.script],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=120,
             env=env
         )

@@ -44,6 +44,7 @@ class ReplayWorker(QThread):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    encoding='utf-8',
                     env=env,
                     bufsize=1,
                     universal_newlines=True

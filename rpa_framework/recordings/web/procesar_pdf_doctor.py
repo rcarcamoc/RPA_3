@@ -65,18 +65,18 @@ class BuscadorBaseDatosPDF:
             if conn and conn.is_connected():
                 conn.close()
 
-    def actualizar_datos_pdf(self, numero_documento, diagnostico):
-        """Actualiza numero_documento y diagnostico en registro_acciones"""
+    def actualizar_datos_pdf(self, numero_documento, diagnostico, fecha_agendada=None):
+        """Actualiza numero_documento, diagnostico y fecha_agendada en registro_acciones"""
         conn = None
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
             query = """
             UPDATE registro_acciones 
-            SET numero_documento = %s, diagnostico = %s, `update` = NOW(), ultimo_nodo = %s
+            SET numero_documento = %s, diagnostico = %s, fecha_agendada = %s, `update` = NOW(), ultimo_nodo = %s
             WHERE estado = 'En Proceso'
             """
-            cursor.execute(query, (numero_documento, diagnostico, self.script_name))
+            cursor.execute(query, (numero_documento, diagnostico, fecha_agendada, self.script_name))
             conn.commit()
             return True
         except Exception as e:
@@ -106,38 +106,95 @@ class ExtractorPDFDoctor:
 
     def procesar_pestana_pdf(self):
         """
-        Cambia a la última pestaña abierta (asumiendo que es el PDF),
+        Busca una pestaña que parezca ser un PDF (blob: o .pdf),
         descarga el contenido y extrae los datos solicitados.
+        PROTEGE la ventana cuyo título comienza con 'RIS'.
         """
         try:
             handles = self.driver.window_handles
-            if len(handles) > 1:
-                logger.info(f"Cambiando a la última pestaña (Total: {handles})...")
-                self.driver.switch_to.window(handles[-1])
-                time.sleep(2)
+            ris_handle = None
+            pdf_handle = None
             
-            current_url = self.driver.current_url
-            logger.info(f"URL detectada: {current_url}")
+            logger.info(f"Analizando {len(handles)} pestañas abiertas...")
 
-            if not current_url or current_url == "about:blank":
+            # 1. Identificar ventanas (Recorremos para encontrar la RIS y el PDF)
+            for h in handles:
+                try:
+                    self.driver.switch_to.window(h)
+                    time.sleep(0.5) 
+                    title = self.driver.title
+                    url = self.driver.current_url
+                    
+                    logger.info(f"Ventana [{h[-4:]}]: Titulo='{title}' | URL='{url[:50]}...'")
+
+                    # Identificar ventana Principal (RIS)
+                    # Usamos .upper() para evitar problemas de case, aunque el usuario dijo "RIS"
+                    if title and title.strip().upper().startswith("RIS"):
+                        ris_handle = h
+                        logger.info("-> MARCADA COMO PRINCIPAL (NO CERRAR)")
+                        continue # Pasamos a la siguiente, esta no es el PDF
+                    
+                    # Identificar candidato PDF (si no es la RIS)
+                    if url and ("blob:" in url or ".pdf" in url.lower() or "print" in url.lower()):
+                         pdf_handle = h
+                         logger.info("-> MARCADA COMO PDF (POR URL)")
+
+                except Exception as e:
+                    logger.warning(f"Error inspeccionando ventana {h}: {e}")
+
+            # Si no encontramos un PDF explícito por URL, asumimos que es cualquier ventana que NO sea la RIS
+            if not pdf_handle:
+                for h in reversed(handles):
+                    if h != ris_handle:
+                        pdf_handle = h
+                        logger.info(f"-> Asumiendo ventana PDF por descarte: {h[-4:]}")
+                        break
+            
+            # Validación final de objetivos
+            if ris_handle and len(handles) == 1:
+                 logger.warning("Solo está abierta la ventana RIS. No hay PDF para procesar.")
+                 return None
+            
+            target_handle = pdf_handle if pdf_handle else (handles[-1] if handles else None)
+            
+            if not target_handle:
+                logger.warning("No se pudo determinar qué ventana procesar.")
                 return None
 
+            if target_handle == ris_handle:
+                logger.warning("La ventana objetivo resultó ser la RIS. Abortando cierre para protegerla.")
+                # Podríamos intentar extraer datos igual, pero sin cerrar
+            
+            # 2. Procesar (Cambiamos al target si no estamos ahí)
+            self.driver.switch_to.window(target_handle)
+            current_url = self.driver.current_url
+            
+            if not current_url or current_url == "about:blank":
+                logger.warning("URL vacía o about:blank en ventana objetivo.")
+                return None
+
+            extracted_data = None
             if self.descargar_pdf(current_url):
-                datos = self.extraer_datos()
-                
-                # Cerrar la pestaña actual (la del PDF) y volver a la anterior
+                 extracted_data = self.extraer_datos()
+                 
+                 # 3. Cerrar PDF (Solo si NO es la RIS y NO es la única)
+                 if target_handle != ris_handle and len(self.driver.window_handles) > 1:
+                     logger.info("Cerrando pestaña del PDF...")
+                     self.driver.close()
+                 else:
+                     logger.info("No se cerrará la ventana (Es la RIS o la única abierta).")
+
+            # 4. Asegurar foco en RIS al terminar
+            if ris_handle:
                 try:
-                    logger.info("Cerrando pestaña del PDF...")
-                    self.driver.close()
-                    # Volver a la pestaña principal (asumiendo que es la primera)
-                    remaining_handles = self.driver.window_handles
-                    if remaining_handles:
-                        self.driver.switch_to.window(remaining_handles[0])
-                except Exception as e:
-                    logger.warning(f"No se pudo cerrar la pestaña o cambiar: {e}")
-                
-                return datos
-            return None
+                    self.driver.switch_to.window(ris_handle)
+                    logger.info("Foco retornado a ventana RIS.")
+                except:
+                    logger.warning("No se pudo volver a la ventana RIS (¿cerrada?).")
+            elif len(self.driver.window_handles) > 0:
+                 self.driver.switch_to.window(self.driver.window_handles[0])
+
+            return extracted_data
 
         except Exception as e:
             logger.error(f"Error en el proceso de PDF: {e}")
@@ -227,9 +284,25 @@ class ExtractorPDFDoctor:
                 
                 diagnostico = diagnostico.strip()
 
+            # 3. Fecha Examen
+            # Formato en PDF: "Fecha Examen: 22-12-2025 08:19:33"
+            match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', text_content, re.IGNORECASE)
+            fecha_examen_raw = match_fecha.group(1) if match_fecha else None
+            fecha_agendada_sql = None
+            
+            if fecha_examen_raw:
+                try:
+                    # Convertir dd-mm-yyyy hh:mm:ss -> yyyy-mm-dd hh:mm:ss
+                    dt = datetime.strptime(fecha_examen_raw, "%d-%m-%Y %H:%M:%S")
+                    fecha_agendada_sql = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    logger.info(f"Fecha Examen capturada (fecha_agendada): {fecha_agendada_sql}")
+                except Exception as e:
+                    logger.warning(f"Error al formatear fecha: {e}")
+
             return {
                 "numero_documento": doc_number,
-                "diagnostico": diagnostico
+                "diagnostico": diagnostico,
+                "fecha_agendada": fecha_agendada_sql
             }
 
         except Exception as e:
@@ -253,7 +326,8 @@ def main():
             # 3. Guardar en BD
             bd.actualizar_datos_pdf(
                 numero_documento=resultados['numero_documento'],
-                diagnostico=resultados['diagnostico']
+                diagnostico=resultados['diagnostico'],
+                fecha_agendada=resultados.get('fecha_agendada')
             )
             # 4. Fin Tracking (Éxito)
             bd.db_update_tracking(status='Completado')

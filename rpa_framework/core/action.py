@@ -6,8 +6,10 @@ from enum import Enum
 
 class ActionType(str, Enum):
     CLICK = "click"
+    DOUBLE_CLICK = "double_click"
     TYPE_TEXT = "type"
     KEY_PRESS = "key"
+    KEY_COMBINATION = "key_combination"
     WAIT = "wait"
     VALIDATE = "validate"
 
@@ -23,6 +25,8 @@ class Action:
     
     text: Optional[str] = None
     key_code: Optional[str] = None
+    combination: Optional[str] = None
+    clipboard_content: Optional[str] = None
     validation_rule: Optional[str] = None
     
     app_context: Optional[Dict] = None

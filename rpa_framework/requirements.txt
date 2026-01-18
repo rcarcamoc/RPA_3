@@ -19,11 +19,15 @@ numpy>=1.24.0
 fuzzywuzzy>=0.18.0
 python-Levenshtein>=0.21.0
 mss>=9.0.1
+
 # Web Recorder & Browser Automation
 selenium>=4.10.0
 playwright>=1.40.0
-# Note: After installing requirements, run 'python -m playwright install'
 
 # Database & Matching
 mysql-connector-python>=9.0.0
 rapidfuzz>=3.0.0
+
+# Data Processing (nuevo)
+pandas>=2.0.0
+sqlalchemy>=2.0.0

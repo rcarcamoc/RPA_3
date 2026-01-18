@@ -38,10 +38,10 @@ try:
     from ui.panels.dashboard_panel import DashboardPanel
     from ui.panels.record_panel import RecordPanel
     from ui.panels.replay_panel import ReplayPanel
-    from ui.panels.generator_panel import GeneratorPanel
     from ui.panels.ocr_panel import OCRPanel
     from ui.panels.web_record_panel import WebRecordPanel
     from ui.workflow_panel_v2 import WorkflowPanelV2
+
     
 except ImportError as e:
     print(f"❌ Error importando módulos RPA: {e}")
@@ -89,9 +89,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(WorkflowPanelV2(self.config), "✨ Workflows")
         tabs.addTab(RecordPanel(self.config), "Grabar")
         tabs.addTab(ReplayPanel(self.config), "Reproducir")
-        tabs.addTab(GeneratorPanel(self.config), "Generar")
         tabs.addTab(OCRPanel(self), "OCR")
         tabs.addTab(WebRecordPanel(self.config), "Web Recorder")
+
      
         
         layout.addWidget(tabs)

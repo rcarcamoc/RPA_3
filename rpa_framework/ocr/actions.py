@@ -44,27 +44,32 @@ class OCRActions:
         
         logger.info("OCRActions inicializado")
     
-    def capture_screenshot(self, monitor_index: int = 0) -> np.ndarray:
+    def capture_screenshot(self, monitor_index: int = 0, region: Optional[Dict] = None) -> np.ndarray:
         """
-        Captura pantalla actual.
+        Captura pantalla actual o una región específica.
         
         Args:
             monitor_index: Índice del monitor (0=Todos, 1=Principal, etc)
+            region: Opcional, dict con {'top', 'left', 'width', 'height'}
 
         Returns:
             Array numpy con captura
         """
         try:
             with mss() as sct:
-                # Validar índice
-                if monitor_index < 0 or monitor_index >= len(sct.monitors):
-                    logger.warning(f"Índice de monitor {monitor_index} inválido. Usando 0 (All).")
-                    monitor_index = 0
+                if region:
+                    # Captura de región específica
+                    capture_area = region
+                else:
+                    # Validar índice de monitor
+                    if monitor_index < 0 or monitor_index >= len(sct.monitors):
+                        logger.warning(f"Índice de monitor {monitor_index} inválido. Usando 0 (All).")
+                        monitor_index = 0
+                    capture_area = sct.monitors[monitor_index]
                 
-                monitor = sct.monitors[monitor_index]
-                screenshot = sct.grab(monitor)
+                screenshot = sct.grab(capture_area)
                 self.last_screenshot = np.array(screenshot)
-                logger.debug(f"Screenshot capturado del monitor {monitor_index}")
+                logger.debug(f"Screenshot capturado de {capture_area}")
                 return self.last_screenshot
         except Exception as e:
             logger.error(f"Error capturando screenshot: {e}")
@@ -77,7 +82,8 @@ class OCRActions:
         case_sensitive: bool = False,
         take_screenshot: bool = True,
         return_all: bool = False,
-        monitor_index: int = 0
+        monitor_index: int = 0,
+        region: Optional[Dict] = None
     ) -> List[Dict]:
         """
         Captura pantalla y busca texto.
@@ -89,21 +95,42 @@ class OCRActions:
             take_screenshot: Capturar nueva screenshot
             return_all: Retornar todos los matches
             monitor_index: Índice del monitor a capturar
+            region: Opcional, dict con área de búsqueda {'top', 'left', 'width', 'height'}
         
         Returns:
-            Lista de matches con ubicación
+            Lista de matches con ubicación mapeada a coordenadas globales
         """
         if take_screenshot:
-            self.capture_screenshot(monitor_index=monitor_index)
+            self.capture_screenshot(monitor_index=monitor_index, region=region)
         
         if self.last_screenshot is None:
             raise ValueError("No hay screenshot disponible")
         
         # Extraer texto con OCR
         try:
-            self.last_ocr_results = self.ocr_engine.extract_text_with_location(
+            ocr_results = self.ocr_engine.extract_text_with_location(
                 self.last_screenshot
             )
+            
+            # Si se usó una región, ajustar coordenadas a espacio global (pantalla)
+            if region:
+                offset_x = region.get('left', 0)
+                offset_y = region.get('top', 0)
+                
+                for res in ocr_results:
+                    # Ajustar centro
+                    res['center']['x'] += offset_x
+                    res['center']['y'] += offset_y
+                    # Ajustar bounds
+                    res['bounds']['x_min'] += offset_x
+                    res['bounds']['x_max'] += offset_x
+                    res['bounds']['y_min'] += offset_y
+                    res['bounds']['y_max'] += offset_y
+                    # Ajustar bbox points
+                    if 'bbox' in res:
+                        res['bbox'] = [[p[0] + offset_x, p[1] + offset_y] for p in res['bbox']]
+            
+            self.last_ocr_results = ocr_results
             logger.debug(f"OCR: {len(self.last_ocr_results)} textos extraídos")
         except Exception as e:
             logger.error(f"Error en OCR: {e}")
@@ -113,7 +140,6 @@ class OCRActions:
         matches = self.ocr_matcher.find_text(
             self.last_ocr_results,
             search_term,
-            # search_term, # Duplicate arg removed
             fuzzy=fuzzy,
             case_sensitive=case_sensitive,
             return_all=return_all
@@ -130,7 +156,8 @@ class OCRActions:
         case_sensitive: bool = False,
         button: str = 'left',
         clicks: int = 1,
-        interval: float = 0.1
+        interval: float = 0.1,
+        region: Optional[Dict] = None
     ) -> Dict:
         """
         Busca texto y hace click en él.
@@ -144,6 +171,7 @@ class OCRActions:
             button: 'left', 'right', 'middle'
             clicks: Número de clicks
             interval: Intervalo entre clicks (segundos)
+            region: Opcional, dict con área de búsqueda {'top', 'left', 'width', 'height'}
         
         Returns:
             Dict con info de la acción ejecutada
@@ -152,7 +180,8 @@ class OCRActions:
             search_term,
             fuzzy=fuzzy,
             case_sensitive=case_sensitive,
-            take_screenshot=True
+            take_screenshot=True,
+            region=region
         )
         
         if not matches:

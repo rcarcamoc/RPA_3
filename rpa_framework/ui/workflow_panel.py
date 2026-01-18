@@ -248,7 +248,11 @@ class NodeGraphicsItem(QGraphicsRectItem):
         # Agregar puerto de salida (si no es END ni ANNOTATION)
         if node.type not in [NodeType.END, NodeType.ANNOTATION]:
             self.output_port = OutputPortItem(self)
-            self.output_port.setPos(width, height / 2)  # Lado derecho, centro vertical
+            self.output_port.setPos(width / 2, height)  # Parte inferior, centro horizontal
+        
+        # Aplicar opacidad si el nodo está deshabilitado
+        if not node.enabled:
+            self.setOpacity(0.4)
     
     def get_center(self) -> QPointF:
         return QPointF(self.pos().x() + self.node_width / 2, self.pos().y() + self.node_height / 2)
@@ -317,36 +321,52 @@ class NodeGraphicsItem(QGraphicsRectItem):
     
     def mouseDoubleClickEvent(self, event):
         """Abre el script asociado al hacer doble click"""
-        script_path = None
+        script_path_str = None
         
         # Obtener script segun tipo de nodo
         if hasattr(self.node, 'script') and self.node.script:
-            script_path = self.node.script
+            script_path_str = self.node.script
         
-        if script_path:
-            # Construir ruta absoluta
+        if script_path_str:
             from pathlib import Path
-            import subprocess
+            import os
             
-            full_path = Path(script_path)
-            if not full_path.is_absolute():
-                full_path = Path.cwd() / script_path
+            script_path = Path(script_path_str)
             
-            if full_path.exists():
+            # Si la ruta no es absoluta, buscar en las carpetas estándar de grabaciones
+            if not script_path.is_absolute():
+                possible_paths = [
+                    Path.cwd() / script_path_str,
+                    Path.cwd() / "rpa_framework" / script_path_str,
+                    Path.cwd() / "recordings" / script_path_str,
+                    Path.cwd() / "rpa_framework" / "recordings" / script_path_str,
+                    Path.cwd() / "rpa_framework" / "recordings" / "web" / script_path_str,
+                    Path.cwd() / "recordings" / "web" / script_path_str,
+                ]
+                
+                for p in possible_paths:
+                    if p.exists():
+                        script_path = p
+                        break
+            
+            if script_path.exists():
                 # Abrir con el programa predeterminado del sistema
                 try:
-                    os.startfile(str(full_path))
+                    self.node.script = str(script_path) # Actualizar a ruta real si se encontró
+                    os.startfile(str(script_path))
                 except Exception as e:
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.warning(None, "Error", f"No se pudo abrir el archivo:\n{e}")
             else:
                 from PyQt6.QtWidgets import QMessageBox
+                formatted_paths = "\n".join([str(p) for p in possible_paths[:3]])
                 QMessageBox.warning(None, "Archivo no encontrado", 
-                    f"El script no existe:\n{full_path}\n\nCrealo primero.")
+                    f"El script '{script_path_str}' no se encuentra en las rutas de búsqueda.\n\n"
+                    f"Asegúrate de que el archivo exista en la carpeta 'recordings'.")
         else:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(None, "Sin script", 
-                f"Este nodo ({self.node.type.value}) no tiene script asociado.")
+                f"Este nodo no tiene un script Python asociado.")
         
         super().mouseDoubleClickEvent(event)
 
@@ -367,25 +387,27 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         self.insert_button = None
     
     def update_path(self):
-        # Start point (Output port if available, else center-right)
+        # CONEXIONES VERTICALES: de abajo hacia arriba
+        # Start point (Output port if available, else center-bottom)
         if hasattr(self.from_item, 'output_port') and self.from_item.output_port:
             start = self.from_item.mapToScene(self.from_item.output_port.pos())
         else:
             start = self.from_item.get_center()
-            start.setX(start.x() + self.from_item.node_width / 2)
+            start.setY(start.y() + self.from_item.node_height / 2)  # Parte inferior del nodo
         
-        # End point (Input port logic - usually center-left)
+        # End point (Input port logic - usually center-top)
         end = self.to_item.get_center()
-        end.setX(end.x() - self.to_item.node_width / 2)
+        end.setY(end.y() - self.to_item.node_height / 2)  # Parte superior del nodo
         
         path = QPainterPath()
         path.moveTo(start)
         
-        # Cubic Bezier for smooth curve
+        # Cubic Bezier for smooth curve (VERTICAL)
         dx = end.x() - start.x()
         dy = end.y() - start.y()
-        ctrl1 = QPointF(start.x() + dx * 0.5, start.y())
-        ctrl2 = QPointF(end.x() - dx * 0.5, end.y())
+        # Control points para curva vertical
+        ctrl1 = QPointF(start.x(), start.y() + dy * 0.5)
+        ctrl2 = QPointF(end.x(), end.y() - dy * 0.5)
         
         path.cubicTo(ctrl1, ctrl2, end)
         
@@ -394,17 +416,19 @@ class EdgeGraphicsItem(QGraphicsPathItem):
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
         menu = QMenu()
-        delete_action = menu.addAction("Eliminar Conexión")
+        delete_action = menu.addAction("🗑️ Eliminar Conexión")
         action = menu.exec(event.screenPos())
         
         if action == delete_action:
             # Emit signal via scene/view or handle directly
-            # Best way: ask view to delete
             views = self.scene().views()
             if views:
                 view = views[0]
                 if hasattr(view, 'request_delete_edge'):
                     view.request_delete_edge(self)
+                else:
+                    # Fallback: eliminar directamente
+                    self._delete_connection()
     
     def hoverEnterEvent(self, event):
         # Show insert button
@@ -660,22 +684,56 @@ class WorkflowCanvas(QGraphicsView):
         from PyQt6.QtWidgets import QMenu
         from PyQt6.QtGui import QAction
         
-        item = self.itemAt(event.pos())
-        if isinstance(item, QGraphicsTextItem):
-            item = item.parentItem()
+        # Convertir posición del evento a coordenadas de la escena
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Buscar items en el punto de clic (con un pequeño margen de tolerancia)
+        # Creamos un rectangulo pequeño alrededor del clic para facilitar la seleccion de lineas
+        click_area = QRectF(scene_pos.x() - 5, scene_pos.y() - 5, 10, 10)
+        items = self.scene.items(click_area)
+        
+        # Prioridad: Nodos > Edges > Fondo
+        selected_node = None
+        selected_edge = None
+        
+        for item in items:
+            if isinstance(item, QGraphicsTextItem):
+                item = item.parentItem()
+            
+            if isinstance(item, NodeGraphicsItem):
+                selected_node = item
+                break # Prioridad máxima, si clicamos un nodo es un nodo
+            elif isinstance(item, EdgeGraphicsItem) and not selected_edge:
+                selected_edge = item
         
         menu = QMenu(self)
         
-        if isinstance(item, NodeGraphicsItem):
+        if selected_node:
+            item = selected_node
             # Menu para nodo
             node = item.node
             
-            edit_action = menu.addAction("Editar propiedades")
+            edit_action = menu.addAction("✏️ Editar propiedades")
             edit_action.triggered.connect(lambda: self.node_selected.emit(node))
             
+            menu.addSeparator()
+            
+            # Toggle enabled/disabled
+            if node.enabled:
+                toggle_action = menu.addAction("🚫 Deshabilitar Nodo")
+                toggle_action.triggered.connect(lambda: self._toggle_node_enabled(item, False))
+            else:
+                toggle_action = menu.addAction("✅ Habilitar Nodo")
+                toggle_action.triggered.connect(lambda: self._toggle_node_enabled(item, True))
+            
+            menu.addSeparator()
+            
             # Menu de nodo
-            action = menu.addAction("Eliminar Nodo")
+            action = menu.addAction("🗑️ Eliminar Nodo")
             action.triggered.connect(lambda: self._request_delete(item.node)) # Changed to _request_delete
+        elif selected_edge:
+            action = menu.addAction("🗑️ Eliminar Conexión")
+            action.triggered.connect(lambda: self.request_delete_edge(selected_edge))
         else:
             # Menu de canvas
             add_menu = menu.addMenu("Agregar Nodo")
@@ -774,6 +832,38 @@ class WorkflowCanvas(QGraphicsView):
         scene_pos = self.mapToScene(pos)
         # Por ahora solo loggeamos, la implementacion real conectara con el panel
         print(f"[Canvas] Agregar nodo {node_type} en ({scene_pos.x()}, {scene_pos.y()})")
+    
+    def _toggle_node_enabled(self, node_item: NodeGraphicsItem, enabled: bool):
+        """Habilita o deshabilita un nodo"""
+        node_item.node.enabled = enabled
+        # Actualizar apariencia visual
+        if enabled:
+            node_item.setOpacity(1.0)
+        else:
+            node_item.setOpacity(0.4)
+        # Actualizar tooltip
+        if not enabled:
+            current_tooltip = node_item.toolTip()
+            node_item.setToolTip(f"🚫 DESHABILITADO\n{current_tooltip}" if current_tooltip else "🚫 DESHABILITADO")
+        else:
+            # Limpiar tooltip de deshabilitado
+            current_tooltip = node_item.toolTip()
+            if current_tooltip.startswith("🚫 DESHABILITADO"):
+                node_item.setToolTip(current_tooltip.replace("🚫 DESHABILITADO\n", ""))
+    
+    def request_delete_edge(self, edge_item: EdgeGraphicsItem):
+        """Solicita eliminar una conexión"""
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Confirmar",
+            "¿Eliminar esta conexión?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            from_id = edge_item.from_item.node.id
+            to_id = edge_item.to_item.node.id
+            # Emitir señal para que el panel lo maneje
+            self.connection_deleted.emit(from_id, to_id)
         
     def request_split_edge(self, node_item, edge_item):
         """Solicita dividir un edge con un nodo."""

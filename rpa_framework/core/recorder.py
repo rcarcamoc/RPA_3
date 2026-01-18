@@ -36,7 +36,7 @@ class RPARecorder:
         self.text_timer = None
         
         # Estado de teclas modificadoras
-        self.modifiers = {"ctrl": False, "shift": False, "alt": False}
+        self.modifiers = {"ctrl": False, "shift": False, "alt": False, "win": False}
     
     def start(self):
         """Inicia grabación."""
@@ -134,8 +134,16 @@ class RPARecorder:
             self.modifiers["shift"] = True
         elif key in [keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt]:
             self.modifiers["alt"] = True
+        elif key in [keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r]:
+            self.modifiers["win"] = True
             
         if not self.recording:
+            return
+        
+        # Detectar combinaciones de teclas importantes
+        if self._is_key_combination(key):
+            self._flush_text()
+            self._save_key_combination(key)
             return
         
         # Resetear timer
@@ -158,7 +166,7 @@ class RPARecorder:
             # Ignorar modificadores como "acciones de tecla" individuales si se desea
             # Pero para typetext a veces es útil.
             # Por ahora, guardamos teclas especiales importantes solamente.
-            if key_name in ["ENTER", "TAB", "ESCAPE", "DELETE", "BACKSPACE", "SPACE", "UP", "DOWN", "LEFT", "RIGHT"]:
+            if key_name in ["ENTER", "TAB", "ESCAPE", "DELETE", "BACKSPACE", "SPACE", "UP", "DOWN", "LEFT", "RIGHT", "HOME", "END", "PAGE_UP", "PAGE_DOWN"]:
                 self._flush_text()
                 self._save_key_action(key_name)
 
@@ -170,6 +178,115 @@ class RPARecorder:
             self.modifiers["shift"] = False
         elif key in [keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt]:
             self.modifiers["alt"] = False
+        elif key in [keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r]:
+            self.modifiers["win"] = False
+    
+    def _is_key_combination(self, key) -> bool:
+        """Detecta si es una combinación de teclas importante."""
+        # Obtener nombre de la tecla
+        try:
+            key_char = key.char
+            if key_char:
+                key_name = key_char.lower()
+            else:
+                return False
+        except:
+            key_name = str(key).replace("Key.", "").lower()
+        
+        # Combinaciones con Ctrl
+        if self.modifiers.get("ctrl"):
+            if key_name in ['c', 'v', 'x', 'a', 'z', 'y', 's', 'f', 'p', 'n', 'o', 'w', 't']:
+                return True
+        
+        # Combinaciones con Alt
+        if self.modifiers.get("alt"):
+            if key_name in ['tab', 'f4', 'enter']:
+                return True
+        
+        # Combinaciones con Win
+        if self.modifiers.get("win"):
+            if key_name in ['l', 'd', 'e', 'r', 'tab', 'left', 'right', 'up', 'down', 's']:
+                return True
+        
+        # Combinaciones con Ctrl+Shift
+        if self.modifiers.get("ctrl") and self.modifiers.get("shift"):
+            if key_name in ['esc', 'n', 't']:
+                return True
+        
+        return False
+    
+    def _save_key_combination(self, key):
+        """Guarda una combinación de teclas."""
+        try:
+            key_char = key.char
+            if key_char:
+                key_name = key_char.upper()
+            else:
+                key_name = None
+        except:
+            key_name = str(key).replace("Key.", "").upper()
+        
+        # Construir string de combinación
+        combo_parts = []
+        if self.modifiers.get("ctrl"):
+            combo_parts.append("CTRL")
+        if self.modifiers.get("shift"):
+            combo_parts.append("SHIFT")
+        if self.modifiers.get("alt"):
+            combo_parts.append("ALT")
+        if self.modifiers.get("win"):
+            combo_parts.append("WIN")
+        
+        if key_name:
+            combo_parts.append(key_name)
+        
+        combo_string = "+".join(combo_parts)
+        
+        # Detectar operaciones de portapapeles
+        clipboard_content = None
+        if combo_string in ["CTRL+C", "CTRL+X"]:
+            clipboard_content = self._get_clipboard_content()
+        
+        action = {
+            "type": "key_combination",
+            "timestamp": datetime.now().isoformat(),
+            "combination": combo_string,
+            "modifiers": self.modifiers.copy(),
+            "clipboard_content": clipboard_content,
+            "selector": None,
+            "position": None
+        }
+        
+        self.actions.append(action)
+        
+        if clipboard_content:
+            logger.info(f"⌨️ Combinación registrada: {combo_string} (Portapapeles: {clipboard_content[:50]}...)")
+        else:
+            logger.info(f"⌨️ Combinación registrada: {combo_string}")
+    
+    def _get_clipboard_content(self) -> Optional[str]:
+        """Obtiene el contenido del portapapeles."""
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            try:
+                content = win32clipboard.GetClipboardData()
+                return content
+            finally:
+                win32clipboard.CloseClipboard()
+        except:
+            # Fallback usando tkinter
+            try:
+                import tkinter as tk
+                root = tk.Tk()
+                root.withdraw()
+                content = root.clipboard_get()
+                root.destroy()
+                return content
+            except:
+                logger.warning("No se pudo acceder al portapapeles")
+                return None
+
     
     def _flush_text(self):
         """Guarda acción de typing usando contexto del último click."""
@@ -321,10 +438,29 @@ class RecorderGUI:
         self.recorder.stop()
         
         import tkinter.simpledialog
+        import tkinter.messagebox
         name = tkinter.simpledialog.askstring("Guardar", "Nombre de la grabación:")
         
         if name:
-            self.recorder.save(name)
+            # Generar el archivo .py directamente
+            try:
+                from generators.ui_script_generator import UIScriptGenerator
+                
+                # Generar el script Python ejecutable
+                generator = UIScriptGenerator(self.recorder.actions, name)
+                output_path = generator.generate()
+                
+                tkinter.messagebox.showinfo(
+                    "✅ Éxito", 
+                    f"Script generado exitosamente:\n{output_path}"
+                )
+                logger.info(f"✅ Script generado: {output_path}")
+            except Exception as e:
+                logger.error(f"Error generando script: {e}")
+                tkinter.messagebox.showerror(
+                    "❌ Error", 
+                    f"Error al generar el script:\n{e}"
+                )
         
         self.root.quit()
         self.root.destroy()

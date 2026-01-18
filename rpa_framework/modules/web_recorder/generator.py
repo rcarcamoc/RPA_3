@@ -50,6 +50,7 @@ import os
 import socket
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 try:
     from selenium import webdriver
@@ -62,6 +63,13 @@ try:
 except ImportError:
     print("Error: Missing 'selenium' library. Install it with: pip install selenium")
     sys.exit(1)
+
+try:
+    import mysql.connector
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
+    print("Warning: Missing 'mysql-connector-python' library. Database tracking will be disabled.")
 
 try:
     from PIL import Image
@@ -83,7 +91,49 @@ class WebAutomation:
         self.headless = headless
         self.maximize = maximize
         self.screenshots_dir = None
-    
+        # Identity for database tracking
+        self.script_name = Path(sys.argv[0]).stem
+        # Database config
+        self.db_config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': 'ris'
+        }
+
+    def _get_db_connection(self):
+        """Helper to get a database connection"""
+        if not HAS_MYSQL:
+            return None
+        try:
+            return mysql.connector.connect(**self.db_config)
+        except Exception as e:
+            print(f"[ERROR] Could not connect to database: {e}")
+            return None
+
+    def db_update_status(self, status='En Proceso'):
+        """Updates the current execution record in the database"""
+        conn = self._get_db_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            # Update the record that is 'En Proceso'
+            query = """
+            UPDATE registro_acciones 
+            SET `update` = NOW(), ultimo_nodo = %s, estado = %s 
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (self.script_name, status))
+            conn.commit()
+            print(f"[DB] Tracking updated: {self.script_name} ({status})")
+        except Exception as e:
+            print(f"[ERROR] Database tracking failed: {e}")
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
+
     def setup_browser(self):
         """Configures and starts the browser with fast port detection"""
         print("[INFO] Configurando opciones del navegador...", flush=True)
@@ -197,6 +247,9 @@ class WebAutomation:
     def run(self, start_url: str = None):
         """Main execution flow"""
         try:
+            # DB Tracking: Start
+            self.db_update_status(status='En Proceso')
+            
             self.setup_browser()
             
             if start_url and start_url != "about:blank":
@@ -210,18 +263,67 @@ class WebAutomation:
 '''
     
     def _get_main_logic(self) -> str:
-        """Generates the action code"""
+        """Generates the action code with smart optimization"""
         actions_code = ""
+        i = 0
+        n = len(self.recorder.actions)
         
-        for i, action in enumerate(self.recorder.actions):
+        while i < n:
+            action = self.recorder.actions[i]
+            
+            # --- OPTIMIZATION: Detect Select2 Pattern ---
+            # Pattern: Click Opener -> [Click Input] -> Input Text -> Keypress Enter
+            if action.action_type == 'click':
+                # Look ahead
+                next_idx = i + 1
+                if next_idx < n:
+                    next_act = self.recorder.actions[next_idx]
+                    
+                    # Skip intermediate click on the input itself if present
+                    if next_act.action_type == 'click' and self._is_select2_input(next_act):
+                        next_idx += 1
+                        if next_idx < n:
+                            next_act = self.recorder.actions[next_idx]
+                    
+                    # Check for Input on Select2
+                    if next_act.action_type == 'input' and self._is_select2_input(next_act):
+                        input_act = next_act
+                        
+                        # Check for subsequent Enter
+                        enter_act = None
+                        after_input_idx = next_idx + 1
+                        if after_input_idx < n:
+                            candi = self.recorder.actions[after_input_idx]
+                            if candi.action_type == 'keypress' and (candi.value == 'Enter' or (isinstance(candi.value, dict) and candi.value.get('key') == 'Enter')):
+                                enter_act = candi
+                                next_idx = after_input_idx 
+                        
+                        # Detected Sequence!
+                        actions_code += self._generate_select2_block(i, action, input_act, enter_act)
+                        
+                        # Check for spurious empty input after Enter (common artifact)
+                        if next_idx + 1 < n:
+                            cleanup_act = self.recorder.actions[next_idx + 1]
+                            if cleanup_act.action_type == 'input' and not cleanup_act.value:
+                                next_idx += 1
+                                
+                        i = next_idx + 1
+                        continue
+
+            # Standard Generation
             actions_code += self._action_to_code(action, i)
+            i += 1
         
         return f'''{actions_code}
             
             print("[INFO] Automation completed successfully")
+            # DB Tracking: Success
+            self.db_update_status(status='En Proceso')
             
         except Exception as e:
             print(f"[ERROR] Error during execution: {{e}}")
+            # DB Tracking: Error
+            self.db_update_status(status='error')
             # traceback.print_exc()
         finally:
             self._cleanup()
@@ -247,6 +349,59 @@ def main():
 if __name__ == "__main__":
     main()
 '''
+
+    def _is_select2_input(self, action: WebAction) -> bool:
+        """Checks if action functionality targets a Select2 search input"""
+        info = action.element_info
+        # Check specific Select2 classes or IDs
+        if 'select2-input' in info.class_name or 'select2-focused' in info.class_name:
+            return True
+        if 'select2-drop' in info.xpath or 'select2-drop' in info.css_selector:
+            return True
+        return False
+
+    def _generate_select2_block(self, idx, open_act, input_act, enter_act):
+        """Generates robust code for Select2 interaction"""
+        opener_xpath = open_act.element_info.xpath
+        opener_css = open_act.element_info.css_selector
+        value = input_act.value or ""
+        
+        code = f"\n            # Action {idx+1}-{idx+3}: Smart Select2 Interaction ({value})\n"
+        code += f"            print('[ACTION] Searching and Selecting: {value}')\n"
+        
+        # 1. Open Dropdown
+        code += f"            # 1. Open Dropdown\n"
+        code += f'            element = self.find_element(r"""{opener_xpath}""", r"""{opener_css}""", clickable=True)\n'
+        code += "            if element:\n"
+        code += "                element.click()\n"
+        code += "                time.sleep(1.0)\n"
+        code += "            else:\n"
+        code += "                print('[WARNING] Could not find dropdown opener')\n"
+
+        # 2. Wait for Container
+        code += "\n            # 2. Wait for Dropdown Container\n"
+        code += "            try:\n"
+        code += "                self.wait.until(EC.visibility_of_element_located((By.ID, 'select2-drop')))\n"
+        code += "            except:\n"
+        code += "                print('[WARNING] Dropdown container #select2-drop did not explicitly appear.')\n"
+        
+        # 3. Find Input & Type
+        code += "\n            # 3. Search & Enter\n"
+        code += '            element = self.find_element(r"""//div[@id=\'select2-drop\']//input[contains(@class,\'select2-input\')]""", r"""#select2-drop input.select2-input""", clickable=True)\n'
+        code += "            if element:\n"
+        code += "                element.clear()\n"
+        code += f"                element.send_keys(r'{value}')\n"
+        code += "                time.sleep(1.5) # Wait for filtering\n"
+        if enter_act:
+             # Only add Arrow Down if user wants it (commenting it out by default as per user latest pref)
+            code += "                # element.send_keys(Keys.ARROW_DOWN)\n"
+            code += "                time.sleep(0.5)\n"
+            code += "                element.send_keys(Keys.ENTER)\n"
+        code += "                time.sleep(1.0)\n"
+        code += "            else:\n"
+        code += "                print('[ERROR] Could not find Select2 search input!')\n"
+            
+        return code
     
     def _action_to_code(self, action: WebAction, index: int) -> str:
         """Converts an action to Python code"""
@@ -275,10 +430,12 @@ if __name__ == "__main__":
                     # Pass both xpath and css for fallback, and ensure clickable
                     code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
                     code += "            if element:\n"
-                    code += "                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)\n"
-                    code += "                time.sleep(1.0)\n"
+                    # code += "                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)\n"
+                    # code += "                time.sleep(1.0)\n"
                     
                     if action.action_type == 'click':
+                        # Prefer standard click for better event triggering, fallback to JS if needed?
+                        # Standard click is better for dropdowns openers usually.
                         code += "                element.click()\n"
                     elif action.action_type == 'dblclick':
                         code += "                ActionChains(self.driver).double_click(element).perform()\n"

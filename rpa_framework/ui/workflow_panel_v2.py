@@ -113,10 +113,16 @@ class WorkflowPanelV2(QWidget):
         
         toolbar.addSeparator()
         
+        
         # Log Actions
         act_clear_log = QAction("🗑️ Limpiar Log", self)
         act_clear_log.triggered.connect(self.clear_log)
         toolbar.addAction(act_clear_log)
+        
+        self.act_float_log = QAction("🖥️ Log Flotante", self)
+        self.act_float_log.setCheckable(True)
+        self.act_float_log.toggled.connect(self.toggle_float_log)
+        toolbar.addAction(self.act_float_log)
         
         main_layout.addWidget(toolbar)
         
@@ -196,11 +202,22 @@ class WorkflowPanelV2(QWidget):
         
         main_layout.addWidget(self.splitter)
         
-        # self.status_bar = QLabel(" Listo")
-        # self.status_bar.setStyleSheet("background: #eee; border-top: 1px solid #ccc; padding: 2px;")
-        # main_layout.addWidget(self.status_bar)
+        self.log_window = None # Instancia lazy
 
     # --- LOGIC ---
+
+    def toggle_float_log(self, checked):
+        if checked:
+            if not self.log_window:
+                self.log_window = LogWindow(self)
+                # Copiar contenido actual
+                self.log_window.set_html(self.log_widget.toHtml())
+                self.log_window.finished.connect(lambda: self.act_float_log.setChecked(False))
+            self.log_window.show()
+            self.log_window.raise_()
+        else:
+            if self.log_window:
+                self.log_window.hide()
     
     def on_workflow_list_click(self, item):
         # Load workflow logic
@@ -347,6 +364,11 @@ class WorkflowPanelV2(QWidget):
 
     def execute_workflow(self):
         if not self.current_workflow: return
+        
+        # Si log flotante está activo, traerlo al frente
+        if self.log_window and self.log_window.isVisible():
+            self.log_window.raise_()
+        
         self.append_log("🚀 Iniciando ejecución del workflow...", "INFO")
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(lambda msg: self.append_log(msg, "INFO"))
@@ -395,10 +417,16 @@ class WorkflowPanelV2(QWidget):
         self.log_widget.verticalScrollBar().setValue(
             self.log_widget.verticalScrollBar().maximum()
         )
+        
+        # Update floating log if visible
+        if self.log_window and self.log_window.isVisible():
+            self.log_window.append_html(formatted_msg)
     
     def clear_log(self):
         """Clear the log widget"""
         self.log_widget.clear()
+        if self.log_window:
+            self.log_window.clear()
         self.append_log("Log limpiado.", "INFO")
 
     # --- Methods required by existing Commands (AddNodeCommand expects 'panel.canvas.load_workflow') ---
@@ -414,3 +442,41 @@ class WorkflowPanelV2(QWidget):
                 if f.endswith(".json"):
                     self.workflow_list.addItem(f.replace(".json", ""))
         except: pass
+
+class LogWindow(QWidget):
+    """Ventana flotante para mostrar el log"""
+    def __init__(self, parent=None):
+        super().__init__() # Es una ventana independiente, no hija directa en UI
+        self.setWindowTitle("Monitor de Ejecución - RPA Framework")
+        self.resize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+                border: none;
+            }
+        """)
+        layout.addWidget(self.text_edit)
+        
+        # Mantener siempre encima? Opcional
+        self.setWindowFlags(Qt.WindowType.Window) 
+        
+    def append_html(self, html):
+        self.text_edit.append(html)
+        self.text_edit.verticalScrollBar().setValue(
+            self.text_edit.verticalScrollBar().maximum()
+        )
+
+    def set_html(self, html):
+        self.text_edit.setHtml(html)
+        
+    def clear(self):
+        self.text_edit.clear()

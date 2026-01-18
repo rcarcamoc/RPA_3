@@ -1,11 +1,11 @@
 # rpa_framework/ocr/engine.py
 
-import easyocr
 import pytesseract
 import cv2
 import numpy as np
 from typing import List, Dict, Union, Optional
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -56,12 +56,16 @@ class OCREngine:
     def _init_easyocr(self, model_storage_dir: Optional[str]):
         """Inicializar EasyOCR"""
         try:
+            import easyocr
             self.reader = easyocr.Reader(
                 [self.language],
                 gpu=self.use_gpu,
                 model_storage_directory=model_storage_dir
             )
             logger.info(f"EasyOCR inicializado correctamente")
+        except ImportError:
+            logger.error("EasyOCR no está instalado. Instalar con: pip install easyocr")
+            raise
         except Exception as e:
             logger.error(f"Error inicializando EasyOCR: {e}")
             raise
@@ -70,15 +74,22 @@ class OCREngine:
         """Inicializar Tesseract"""
         # En Windows
         try:
-            pytesseract.pytesseract.pytesseract_cmd = (
-                r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-            )
+            tess_dir = r'C:\Program Files\Tesseract-OCR'
+            tess_exe = os.path.join(tess_dir, 'tesseract.exe')
+            
+            # Agregar al PATH para que el proceso encuentre las DLLs
+            if tess_dir not in os.environ['PATH']:
+                os.environ['PATH'] = tess_dir + os.pathsep + os.environ['PATH']
+            
+            pytesseract.pytesseract.pytesseract_cmd = tess_exe
+            
             # Test
-            pytesseract.get_tesseract_version()
-            logger.info("Tesseract inicializado correctamente")
+            version = pytesseract.get_tesseract_version()
+            logger.info(f"Tesseract inicializado correctamente (v{version})")
         except Exception as e:
-            logger.error(f"Tesseract no encontrado en ruta estándar: {e}")
-            logger.info("Instala Tesseract desde: https://github.com/UB-Mannheim/tesseract/wiki")
+            logger.error(f"Error inicializando Tesseract: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def extract_text_with_location(
@@ -118,9 +129,15 @@ class OCREngine:
             if self.engine == 'easyocr':
                 return self._extract_easyocr(image, detail)
             elif self.engine == 'tesseract':
-                return self._extract_tesseract(image, detail)
+                # Tesseract usa 'spa' para español, no 'es'
+                lang = 'spa' if self.language == 'es' else self.language
+                original_lang = self.language
+                self.language = lang
+                results = self._extract_tesseract(image, detail)
+                self.language = original_lang
+                return results
         except Exception as e:
-            logger.error(f"Error en extracción OCR: {e}")
+            logger.error(f"Error en extracción OCR ({self.engine}): {e}")
             raise
 
     def _resize_if_needed(self, image: np.ndarray, max_dimension: int = 4096) -> np.ndarray:

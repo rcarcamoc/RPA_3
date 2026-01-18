@@ -1,11 +1,11 @@
 """
 Auto-generated Web Automation Script
-Generated: 2025-12-31T06:31:18.102462
+Generated: 2026-01-01T18:05:43.911047
 Total Actions: 6
 Clicks: 2
-Inputs: 3
+Inputs: 2
 Selects: 0
-Duration: 00:35
+Duration: 00:21
 
 Description:
 This script executes the actions recorded via the RPA Web Recorder.
@@ -20,6 +20,7 @@ import os
 import socket
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 try:
     from selenium import webdriver
@@ -32,6 +33,13 @@ try:
 except ImportError:
     print("Error: Missing 'selenium' library. Install it with: pip install selenium")
     sys.exit(1)
+
+try:
+    import mysql.connector
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
+    print("Warning: Missing 'mysql-connector-python' library. Database tracking will be disabled.")
 
 try:
     from PIL import Image
@@ -50,6 +58,49 @@ class WebAutomation:
         self.headless = headless
         self.maximize = maximize
         self.screenshots_dir = None
+        self.script_name = "seleccion int 2"
+        # Database config
+        self.db_config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': 'ris'
+        }
+
+    def _get_db_connection(self):
+        """Helper to get a database connection"""
+        if not HAS_MYSQL:
+            return None
+        try:
+            return mysql.connector.connect(**self.db_config)
+        except Exception as e:
+            print(f"[ERROR] Could not connect to database: {e}")
+            return None
+
+    def db_update_node(self, status='En Proceso'):
+        """Updates the current 'En Proceso' record with current node and timestamp"""
+        conn = self._get_db_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            
+            # Update the record that is 'En Proceso'
+            query = """
+            UPDATE registro_acciones 
+            SET `update` = NOW(), ultimo_nodo = %s, estado = %s 
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (self.script_name, status))
+            conn.commit()
+            print(f"[DB] Updated node to '{self.script_name}' (Status: {status})")
+            
+        except Exception as e:
+            print(f"[ERROR] Database update failed: {e}")
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
     
     def setup_browser(self):
         """Configures and starts the browser with fast port detection"""
@@ -164,6 +215,9 @@ class WebAutomation:
     def run(self, start_url: str = None):
         """Main execution flow"""
         try:
+            # Inform start of node
+            self.db_update_node(status='En Proceso')
+            
             self.setup_browser()
             
             if start_url and start_url != "about:blank":
@@ -176,51 +230,66 @@ class WebAutomation:
             print("[INFO] Starting recorded actions...")
 
 
-            # Action 1: PAGE_LOAD
-            print('[ACTION] Loading page: https://ris.chile.telemedicina.com/ris/atencion/lista')
-            self.driver.get('https://ris.chile.telemedicina.com/ris/atencion/lista')
-            time.sleep(2)
 
-            # Action 2: CLICK
-            print('[ACTION] CLICK on: Mostrar Filtros')
-            element = self.find_element(r"""//*[@id='mostrar']""", r"""a#mostrar""", clickable=True)
+            # Action 2: Click to Open Dropdown
+            print('[ACTION] Opening Dropdown (Seleccionar)')
+            # Primary: CSS selector for the Select2 container link/button
+            element = self.find_element(r"""//div[@id='s2id_filtro_cliente']/a""", r"""div#s2id_filtro_cliente > a""", clickable=True)
             if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(false);', element)
+                element.click() 
                 time.sleep(1.0)
-                element.click()
-                time.sleep(1.0)
+            else:
+                print("[WARNING] Could not find the dropdown opener 'div#s2id_filtro_cliente > a'")
 
-            # Action 3: CLICK
-            print('[ACTION] CLICK on: Seleccionar')
-            element = self.find_element(r"""//a[contains(@class, '__rpa-highlight')]""", r"""div#s2id_filtro_cliente > a""", clickable=True)
-            if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(false);', element)
-                time.sleep(1.0)
-                element.click()
-                time.sleep(1.0)
+            # Action 3, 4, 5: Search and Select
+            print('[ACTION] Searching and Selecting: integramedica')
+            
+            # Wait specifically for the dropdown container to appear
+            try:
+                self.wait.until(EC.visibility_of_element_located((By.ID, "select2-drop")))
+            except:
+                print("[WARNING] Dropdown container #select2-drop did not explicitly appear.")
 
-            # Action 4: INPUT
-            print('[ACTION] Typing text')
-            element = self.find_element(r"""//input[contains(@class, 'select2-focused')]""", r"""div#select2-drop > div > input""", clickable=True)
+            # Find the input field within the now-open dropdown
+            # Using the specific class 'select2-input' which is standard for Select2
+            element = self.find_element(r"""//div[@id='select2-drop']//input[contains(@class,'select2-input')]""", r"""#select2-drop input.select2-input""", clickable=True)
+            
             if element:
                 element.clear()
-                element.send_keys(r'integramedica')
-             #   time.sleep(1.0)
+                element.send_keys('integramedica')
+                time.sleep(1.5) # Wait for filtering
              #   element.send_keys(Keys.ARROW_DOWN)
                 time.sleep(0.5)
                 element.send_keys(Keys.ENTER)
                 time.sleep(1.0)
-
-   
-
-        
+            else:
+                print("[ERROR] Could not find the Select2 search input!")
 
             
+     # Action 2: selecciona examen validado
+            print('[ACTION] CLICK on: ')
+            element = self.find_element(r"""//input[contains(@class, '__rpa-highlight')]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
+            if element:
+                element.click()
+                time.sleep(0.1)
+
+
+            # Action 5: CLICK en buscar
+            print('[ACTION] CLICK on:  Buscar estudios')
+            element = self.find_element(r"""//*[@id='buscar']""", r"""button#buscar""", clickable=True)
+            if element:
+                element.click()
+                time.sleep(0.5)
+
+
             print("[INFO] Automation completed successfully")
+            # Inform success
+            self.db_update_node(status='En Proceso')
             
         except Exception as e:
             print(f"[ERROR] Error during execution: {e}")
-            # traceback.print_exc()
+            # Inform error
+            self.db_update_node(status='error')
         finally:
             self._cleanup()
     

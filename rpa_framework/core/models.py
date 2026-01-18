@@ -31,6 +31,7 @@ class Node:
     label: str
     type: NodeType
     on_error: str = "stop"  # "stop" or "continue"
+    enabled: bool = True  # Permite habilitar/deshabilitar el nodo
     position: Dict[str, float] = field(default_factory=lambda: {"x": 0, "y": 0})
     
     def to_dict(self) -> Dict[str, Any]:
@@ -40,6 +41,7 @@ class Node:
             "type": self.type.value,
             "label": self.label,
             "on_error": self.on_error,
+            "enabled": self.enabled,
             "position": self.position
         }
     
@@ -73,6 +75,7 @@ class Node:
                 type=node_type,
                 label=data["label"],
                 on_error=data.get("on_error", "stop"),
+                enabled=data.get("enabled", True),
                 position=data.get("position", {"x": 0, "y": 0})
             )
 
@@ -82,12 +85,25 @@ class ActionNode(Node):
     """Nodo de acción que ejecuta un script o comando"""
     script: str = ""
     command: str = "" # Nuevo campo para comandos de sistema
+    output_variable: str = ""  # Variable para guardar la salida (stdout)
+    
+    # Nuevos meta-campos para UI
+    command_type: str = "custom"
+    program_path: str = ""
+    process_name: str = ""
+    
     type: NodeType = field(default=NodeType.ACTION, init=False)
     
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
-        data["script"] = self.script
-        data["command"] = self.command
+        data.update({
+            "script": self.script,
+            "command": self.command,
+            "output_variable": self.output_variable,
+            "command_type": self.command_type,
+            "program_path": self.program_path,
+            "process_name": self.process_name
+        })
         return data
     
     @staticmethod
@@ -97,7 +113,14 @@ class ActionNode(Node):
         node.label = data["label"]
         node.script = data.get("script", "")
         node.command = data.get("command", "")
+        node.output_variable = data.get("output_variable", "")
+        
+        node.command_type = data.get("command_type", "custom")
+        node.program_path = data.get("program_path", "")
+        node.process_name = data.get("process_name", "")
+        
         node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.ACTION
         return node
@@ -129,6 +152,7 @@ class DecisionNode(Node):
         node.true_path = data.get("truePath", "")
         node.false_path = data.get("falsePath", "")
         node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.DECISION
         return node
@@ -169,6 +193,7 @@ class LoopNode(Node):
         node.condition = data.get("condition", "")
         node.loop_var = data.get("loopVar", "item")
         node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.LOOP
         return node

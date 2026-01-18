@@ -1,0 +1,210 @@
+{
+  "id": "pacs",
+  "name": "pacs",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -424.0,
+        "y": -606.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "action",
+      "label": "muestra escitorio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -422.0,
+        "y": -497.0
+      },
+      "script": "",
+      "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
+      "output_variable": "",
+      "command_type": "desktop",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n3_0",
+      "type": "action",
+      "label": "abre pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -425.0,
+        "y": -394.0
+      },
+      "script": "ui\\Abre_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n4_0",
+      "type": "action",
+      "label": "ingresa user pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -425.0,
+        "y": -293.0
+      },
+      "script": "ui\\ingresa_user_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n5_0",
+      "type": "action",
+      "label": "verifica incio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -424.0,
+        "y": -190.0
+      },
+      "script": "ui\\verifica_inicio.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n6_0",
+      "type": "action",
+      "label": "busca dinamicamente \"busca paciente\"",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -425.0,
+        "y": -89.0
+      },
+      "script": "ocr\\ocr_click_0.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n7_0",
+      "type": "action",
+      "label": "ingresa id cliente",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -423.0,
+        "y": 2.0
+      },
+      "script": "ui\\busqueda_paciente.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n8_0",
+      "type": "action",
+      "label": "Python Script",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -99.0,
+        "y": -541.0
+      },
+      "script": "ui\\clic_y_ordenar.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n9_0",
+      "type": "action",
+      "label": "busqueda triple",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -101.0,
+        "y": -432.0
+      },
+      "script": "ui\\busqueda_triple_estructurada.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n10_0",
+      "type": "action",
+      "label": "Diagnostica y pega",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -99.0,
+        "y": -320.0
+      },
+      "script": "ui\\diagnostica y pega.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n5_0"
+    },
+    {
+      "from": "n5_0",
+      "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "n7_0",
+      "to": "n8_0"
+    },
+    {
+      "from": "n8_0",
+      "to": "n9_0"
+    },
+    {
+      "from": "n9_0",
+      "to": "n10_0"
+    }
+  ],
+  "variables": {}
+}
