@@ -39,6 +39,27 @@ from core.player import RecordingPlayer
 from utils.config_loader import load_config
 from utils.logging_setup import setup_logging
 
+try:
+    import mysql.connector
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
+
+def db_update_status(status='En Proceso'):
+    """Actualiza el estado en la BD"""
+    if not HAS_MYSQL: return
+    try:
+        conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris')
+        cursor = conn.cursor()
+        script_name = "{self.module_name}"
+        query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
+        cursor.execute(query, (script_name, status))
+        conn.commit()
+        conn.close()
+        print(f"[DB] Tracking actualizado: {{script_name}} ({{status}})")
+    except Exception as e:
+        print(f"[DB Error] {{e}}")
+
 # DATOS DE LA GRABACIÓN (INCRUSTADOS)
 RECORDING_JSON = r"""
 {recording_content}
@@ -46,6 +67,9 @@ RECORDING_JSON = r"""
 
 if __name__ == "__main__":
     setup_logging()
+    
+    # DB Tracking: Start
+    db_update_status('En Proceso')
     
     # Cargar configuración (puede ser externa o default)
     try:
@@ -55,14 +79,22 @@ if __name__ == "__main__":
         
     print("🚀 Ejecutando módulo independiente: {self.module_name}")
     
-    # Parsear datos incrustados
-    recording_data = json.loads(RECORDING_JSON)
-    
-    # Instanciar player con diccionario de datos
-    player = RecordingPlayer(recording_data, config)
-    
-    results = player.run()
-    print(results)
+    try:
+        # Parsear datos incrustados
+        recording_data = json.loads(RECORDING_JSON)
+        
+        # Instanciar player con diccionario de datos
+        player = RecordingPlayer(recording_data, config)
+        
+        results = player.run()
+        print(results)
+        
+        # DB Tracking: Success
+        db_update_status('En Proceso')
+    except Exception as e:
+        print(f"Error: {{e}}")
+        # DB Tracking: Error
+        db_update_status('error')
 '''
         
         with open(module_dir / "run.py", "w", encoding="utf-8") as f:

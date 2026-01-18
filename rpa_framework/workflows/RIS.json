@@ -1,0 +1,126 @@
+{
+  "id": "ris",
+  "name": "RIS",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -410.0,
+        "y": -578.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "action",
+      "label": "Inicia RIS",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -409.0,
+        "y": -457.0
+      },
+      "script": "web\\Inicio_ris.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n3_0",
+      "type": "action",
+      "label": "selecciona",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -408.0,
+        "y": -346.0
+      },
+      "script": "web\\seleccion int 2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n4_0",
+      "type": "action",
+      "label": "Busca_doctor",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -410.0,
+        "y": -239.0
+      },
+      "script": "web\\busca_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n5_0",
+      "type": "action",
+      "label": "detecta patologia critica",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -403.0,
+        "y": -110.0
+      },
+      "script": "web\\derecta_patologia.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n6_0",
+      "type": "action",
+      "label": "procesar_pdf_doctor",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -211.0,
+        "y": 49.0
+      },
+      "script": "web\\procesar_pdf_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n5_0"
+    },
+    {
+      "from": "n5_0",
+      "to": "n6_0"
+    }
+  ],
+  "variables": {}
+}

@@ -34,9 +34,10 @@ CÓMO GRABAR:
 4. Interactúa con la aplicación (clicks, typing)
 5. Presiona "STOP"
 6. Ingresa nombre del módulo
-7. ¡Grabación guardada!
+7. ¡El script .py se genera automáticamente!
 
-Las grabaciones se guardan en: recordings/
+Los scripts se guardan en: recordings/
+Ya no necesitas ir a la pestaña "Generar" 🎉
         """)
         instructions.setStyleSheet("""
             QTextEdit {

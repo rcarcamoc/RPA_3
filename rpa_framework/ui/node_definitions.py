@@ -85,8 +85,13 @@ NODE_CATALOG = {
             name='System Command',
             description='Ejecuta un comando del sistema (cmd/powershell)',
             node_type_enum='action',
-            fields=['command'],
-            default_values={'command': 'echo "Hello"'}
+            fields=['command_type', 'command', 'program_path', 'process_name'],
+            default_values={
+                'command_type': 'custom',
+                'command': 'echo "Hello"',
+                'program_path': '',
+                'process_name': ''
+            }
         ),
     ],
     'Database': [

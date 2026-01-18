@@ -20,6 +20,7 @@ class DelayNode(Node):
         node.label = data["label"]
         node.delay_seconds = int(data.get("delay_seconds", 5))
         node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.DELAY
         return node

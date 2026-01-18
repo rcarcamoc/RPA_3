@@ -50,6 +50,7 @@ class DatabaseNode(Node):
         node.operation = data.get("operation", "SELECT")
         node.result_var = data.get("resultVar", "db_result")
         node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.DATABASE
         return node

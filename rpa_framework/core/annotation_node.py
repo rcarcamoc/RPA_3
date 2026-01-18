@@ -37,6 +37,7 @@ class AnnotationNode(Node):
         node.color = data.get("color", "#ffffcc")
         node.width = data.get("width", 200)
         node.height = data.get("height", 100)
+        node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.ANNOTATION
         return node

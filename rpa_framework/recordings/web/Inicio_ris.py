@@ -20,6 +20,7 @@ import os
 import socket
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 try:
     from selenium import webdriver
@@ -32,6 +33,13 @@ try:
 except ImportError:
     print("Error: Missing 'selenium' library. Install it with: pip install selenium")
     sys.exit(1)
+
+try:
+    import mysql.connector
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
+    print("Warning: Missing 'mysql-connector-python' library. Database tracking will be disabled.")
 
 try:
     from PIL import Image
@@ -50,6 +58,87 @@ class WebAutomation:
         self.headless = headless
         self.maximize = maximize
         self.screenshots_dir = None
+        # Database config
+        self.db_config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': 'ris'
+        }
+        self.current_action_id = None
+
+    def _get_db_connection(self):
+        """Helper to get a database connection"""
+        if not HAS_MYSQL:
+            return None
+        try:
+            return mysql.connector.connect(**self.db_config)
+        except Exception as e:
+            print(f"[ERROR] Could not connect to database: {e}")
+            return None
+
+    def db_initialize(self):
+        """Initializes database state for the current run"""
+        conn = self._get_db_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            
+            # 1. Update existing 'En Proceso' records to 'error'
+            print("[DB] Cleaning up previous 'En Proceso' records...")
+            update_query = "UPDATE registro_acciones SET estado = 'error', `update` = NOW() WHERE estado = 'En Proceso'"
+            cursor.execute(update_query)
+            
+            # 2. Insert new record for current run
+            print("[DB] Inserting new run record...")
+            insert_query = """
+            INSERT INTO registro_acciones (inicio, `update`, ultimo_nodo, estado) 
+            VALUES (NOW(), NOW(), 'inicio', 'En Proceso')
+            """
+            cursor.execute(insert_query)
+            self.current_action_id = cursor.lastrowid
+            
+            conn.commit()
+            print(f"[DB] New run record created with ID: {self.current_action_id}")
+            
+        except Exception as e:
+            print(f"[ERROR] Database initialization failed: {e}")
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
+
+    def db_finish(self, success=True):
+        """Updates database state on script completion or error"""
+        if self.current_action_id is None:
+            return
+            
+        conn = self._get_db_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            
+            if success:
+                # Success case: Update timestamp and node (keep status as En Proceso for next node)
+                print("[DB] Updating record for success...")
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'inicio' WHERE id = %s"
+                cursor.execute(query, (self.current_action_id,))
+            else:
+                # Error case: Update timestamp, node, and set status to error
+                print("[DB] Updating record for error...")
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'inicio', estado = 'error' WHERE id = %s"
+                cursor.execute(query, (self.current_action_id,))
+            
+            conn.commit()
+            
+        except Exception as e:
+            print(f"[ERROR] Database finish update failed: {e}")
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
     
     def setup_browser(self):
         """Configures and starts the browser with fast port detection"""
@@ -167,6 +256,9 @@ class WebAutomation:
     def run(self, start_url: str = None):
         """Main execution flow"""
         try:
+            # Initialize database tracking
+            self.db_initialize()
+            
             self.setup_browser()
             
             if start_url and start_url != "about:blank":
@@ -209,7 +301,7 @@ class WebAutomation:
             element = self.find_element(r"""//*[@id='user']""", r"""input#user""", clickable=True)
             if element:
                 element.clear()
-                element.send_keys(r'gestor.cruz')
+                element.send_keys(r'rbt.integra')
                 time.sleep(1.0)
 
             # Action 5: CLICK
@@ -228,7 +320,7 @@ class WebAutomation:
             element = self.find_element(r"""//*[@id='pass']""", r"""input#pass""", clickable=True)
             if element:
                 element.clear()
-                element.send_keys(r'Yona2020#')
+                element.send_keys(r'Integramedica02!')
                 time.sleep(1.0)
 
             # Action 8: CLICK
@@ -251,16 +343,24 @@ class WebAutomation:
             print('[ACTION] CLICK on: Mostrar Filtros')
             element = self.find_element(r"""//*[@id='mostrar']""", r"""a#mostrar""", clickable=True)
             if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
-                time.sleep(1.0)
-                element.click()
-                time.sleep(10.0)
+                # Se utiliza click via JS para evitar que Selenium haga scroll automático al elemento
+                self.driver.execute_script('arguments[0].click();', element)
+                # Esperar a que el botón de búsqueda sea visible (máximo 15 segundos)
+                # Esto es más eficiente que un sleep fijo de 10 segundos
+                print('[INFO] Esperando a que carguen los filtros del sistema...', flush=True)
+                self.find_element(r"//*[@id='buscar']", r"button#buscar", timeout=15)
 
-            
+
+
             print("[INFO] Automation completed successfully")
+            
+            # Update database for success
+            self.db_finish(success=True)
             
         except Exception as e:
             print(f"[ERROR] Error during execution: {e}")
+            # Update database for error
+            self.db_finish(success=False)
             # traceback.print_exc()
         finally:
             self._cleanup()

@@ -28,6 +28,27 @@ class OCRCodeGenerator:
         self.generated_count = 0
         
         logger.info(f"OCRCodeGenerator inicializado (engine: {engine})")
+        
+    def _get_db_tracking_code(self, node_name: str) -> str:
+        """Retorna el fragmento de código para tracking de BD."""
+        return f'''
+    # Database Tracking Support
+    try:
+        import mysql.connector
+        def db_update_status(status='En Proceso'):
+            try:
+                conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris')
+                cursor = conn.cursor()
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
+                cursor.execute(query, ('{node_name}', status))
+                conn.commit()
+                conn.close()
+            except: pass
+    except ImportError:
+        def db_update_status(status='En Proceso'): pass
+    
+    db_update_status('En Proceso')
+'''
     
     def generate_click_module(
         self,
@@ -70,20 +91,21 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         # Inicializar motor OCR
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         
         # Inicializar matcher
@@ -101,9 +123,11 @@ def {function_name}():
             button='{button}'
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'click',
             'status': 'error',
@@ -154,19 +178,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -178,9 +203,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'double_click',
             'status': 'error',
@@ -224,19 +251,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -248,9 +276,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'right_click',
             'status': 'error',
@@ -294,20 +324,21 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         # Inicializar motor OCR
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         
         # Inicializar matcher
@@ -323,9 +354,11 @@ def {function_name}():
             case_sensitive={str(case_sensitive)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'copy',
             'status': 'error',
@@ -375,19 +408,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -397,9 +431,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'select',
             'status': 'error',
@@ -453,19 +489,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -478,9 +515,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'type_near_text',
             'status': 'error',
@@ -536,19 +575,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -581,9 +621,11 @@ def {function_name}():
             result['executed'] = 'false_actions'
             result['false_actions'] = {false_actions_str}
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'conditional',
             'status': 'error',
@@ -630,19 +672,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -654,9 +697,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'hover',
             'status': 'error',
@@ -697,19 +742,20 @@ def {function_name}():
     """
     import sys
     import os
-    # Add parent dir to path to allow importing 'ocr'
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Add framework root to path to allow importing 'ocr'
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
     from ocr.engine import OCREngine
     from ocr.matcher import OCRMatcher
     from ocr.actions import OCRActions
     
+    {self._get_db_tracking_code(module_name)}
     try:
         engine = OCREngine(
             engine='{self.engine}',
             language='{self.language}',
             confidence_threshold=0.5,
-            use_gpu=False
+            use_gpu=True
         )
         matcher = OCRMatcher(threshold=80)
         actions = OCRActions(engine, matcher, delay=0.3)
@@ -720,9 +766,11 @@ def {function_name}():
             fuzzy={str(fuzzy)}
         )
         
+        db_update_status('En Proceso')
         return result
     
     except Exception as e:
+        db_update_status('error')
         return {{
             'action': 'wait_for_text',
             'status': 'error',
