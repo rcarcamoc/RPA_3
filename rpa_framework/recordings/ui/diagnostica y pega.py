@@ -178,6 +178,59 @@ class Test1Automation:
         self.db_update_status('En Proceso')
         
         try:
+             # Acción 1: CLICK
+            try:
+                action = Action(
+                    type=ActionType.CLICK,
+                    selector={'automation_id': 'm_TextControl'},
+                    position={'x': 493, 'y': 537},
+                    timestamp=datetime.fromisoformat("2026-01-18T22:53:02.144296")
+                )
+                self.executor.execute(action)
+                results["completed"] += 1
+                logger.info(f"[1/4] ✅ click")
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"action_idx": 1, "type": "click", "reason": str(e)})
+                logger.error(f"[1/4] ❌ click: {e}")
+
+            # Acción 2: CTRL+A (Seleccionar todo)
+            try:
+                action = Action(
+                    type=ActionType.KEY_COMBINATION,
+                    combination='CTRL+A',
+                    timestamp=datetime.fromisoformat("2026-01-18T22:53:08.911226")
+                )
+                self.executor.execute(action)
+                results["completed"] += 1
+                logger.info(f"[2/4] ✅ ctrl+a")
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"action_idx": 2, "type": "key_combination", "reason": str(e)})
+                logger.error(f"[2/4] ❌ ctrl+a: {e}")
+
+            # Acción 3: KEY
+            try:
+                action = Action(
+                    type=ActionType.KEY_PRESS,
+                    key_code="DELETE",
+                    timestamp=datetime.fromisoformat("2026-01-18T22:53:09.062012")
+                )
+                self.executor.execute(action)
+                results["completed"] += 1
+                logger.info(f"[3/4] ✅ key")
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"action_idx": 3, "type": "key", "reason": str(e)})
+                logger.error(f"[3/4] ❌ key: {e}")
+
+
+
+
+
+
+
+
             # Acción 1: CLICK
             try:
                 action = Action(

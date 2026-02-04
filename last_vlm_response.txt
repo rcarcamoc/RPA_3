@@ -1,0 +1,11 @@
+{
+  "encontrada": true,
+  "fila_indice": 3,
+  "texto_estado": "Examen Hecho",
+  "texto_examen": "Ecotomografía de Muslo Derecho",
+  "texto_fecha": "30-12-2025",
+  "coordenada_x": 500,
+  "coordenada_y": 300,
+  "confianza": 0.98,
+  "razonamiento": "La fila 3 cumple todos los criterios: Estado exacto 'Examen Hecho', diagnóstico equivalente a 'Ecotomografía de Muslo Derecho' y fecha exacta 30-12-2025. Las coordenadas se calculan como el centro de la fila en una tabla de 7 filas (y=300) y centro horizontal (x=500)."
+}

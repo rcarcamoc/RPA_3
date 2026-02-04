@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Script: busqueda_triple_estructurada.py
-Descripción: Búsqueda ESTRUCTURADA en 3 pasos con filtrado progresivo.
+Script: busqueda_triple_estructurada_v2.py
+Descripción: Búsqueda ESTRUCTURADA en 3 pasos con filtrado progresivo y RapidFuzz.
 
 ALGORITMO:
 ┌─────────────────────────────────────────────────────────────┐
@@ -10,7 +10,7 @@ ALGORITMO:
 │ └─ Si 1 coincidencia: Pasar a Paso 2                       │
 │ └─ Si >1 coincidencias: Guardar todas y filtrar en Paso 2  │
 │                                                             │
-│ PASO 2: Buscar DIAGNÓSTICO (convertir a formato tabla)      │
+│ PASO 2: Buscar DIAGNÓSTICO (RAPIDFUZZ MEJORADO)             │
 │ └─ Si 1 coincidencia: Pasar a Paso 3                       │
 │ └─ Si >1 coincidencias: Guardar todas y filtrar en Paso 3  │
 │                                                             │
@@ -24,6 +24,7 @@ Ventajas:
 2. Transparente: Logs detallados de cada filtración
 3. Robusto: Maneja múltiples coincidencias en cada paso
 4. Debuggeable: Sabe exactamente dónde quedaron los textos
+5. Fuzzy Mejorado: Usa RapidFuzz para tolerar variaciones complejas
 """
 
 import sys
@@ -31,9 +32,16 @@ import logging
 import numpy as np
 import cv2
 import pyautogui
+# Import pytesseract explicitly as requested for multi-config
+import pytesseract
 from datetime import datetime
 from pathlib import Path
 from difflib import SequenceMatcher
+try:
+    from rapidfuzz import fuzz, process
+except ImportError:
+    print("Error: rapidfuzz no está instalado. Ejecuta 'pip install rapidfuzz'")
+    sys.exit(1)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -50,10 +58,10 @@ logger = logging.getLogger(__name__)
 
 class BusquedaEstructurada:
     def __init__(self):
-        # Bajamos el umbral de confianza porque las fechas suelen tener menor score en Tesseract
+        # Inicializamos OCREngine para que configure el path de Tesseract si es necesario
         self.ocr_engine = OCREngine(engine='tesseract', language='es', use_gpu=False, confidence_threshold=0.05)
-        self.region = (189, 176, 1125, 832)
-        
+        #self.region = (189, 176, 1125, 832)
+        self.region = (190, 70, 1900, 650)
         # Aumentamos a 15 para capturar textos que bailan un poco arriba/abajo en la misma fila
         self.ROW_TOLERANCE = 15
         self.SIMILARITY_THRESHOLD = 0.85  # Para comparar diagnósticos (mayúsculas/minúsculas)
@@ -151,6 +159,131 @@ class BusquedaEstructurada:
 
         return rows_data
 
+    # --------------------------------------------------------------------------------
+    # MEJORAS SUGERIDAS: Preprocesamiento y OCR Multi-Config
+    # --------------------------------------------------------------------------------
+    def preprocess_image(self, img_bgr):
+        """Aplica preprocesamiento optimizado para OCR."""
+        # Convertir a escala de grises
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Aplicar umbralización OTSU (mejor para texto en tablas)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Aplicar filtro de mediana para reducir ruido
+        denoised = cv2.medianBlur(thresh, 3)
+        
+        # Guardar imagen procesada para debug
+        debug_preprocessed = Path(__file__).parent / "debug_preprocessed.png"
+        try:
+            cv2.imwrite(str(debug_preprocessed), denoised)
+            logger.info(f"Imagen preprocesada guardada en: {debug_preprocessed}")
+        except Exception:
+            pass
+        
+        return denoised
+
+    def execute_ocr_multiconfig(self, img_bgr):
+        """Ejecuta OCR con múltiples configuraciones y combina resultados."""
+        
+        # Escalar imagen
+        scale_factor = 2
+        img_resized = cv2.resize(img_bgr, None, fx=scale_factor, fy=scale_factor, 
+                                interpolation=cv2.INTER_CUBIC)
+        
+        # Preprocesar
+        img_processed = self.preprocess_image(img_resized)
+        
+        # PSM Modes a probar (según tipo de contenido)
+        psm_configs = [
+            6,  # Asume bloque uniforme de texto (mejor para tablas)
+            4,  # Asume columna única de texto
+            3,  # Segmentación automática (default)
+        ]
+        
+        all_results = []
+        
+        for psm in psm_configs:
+            logger.info(f"Ejecutando OCR con PSM={psm}...")
+            
+            custom_config = f'--psm {psm} -l spa'
+            
+            try:
+                # Usar pytesseract directamente con config
+                # Asumimos que OCREngine ya configuró el path si era necesario
+                ocr_data = pytesseract.image_to_data(
+                    img_processed, 
+                    config=custom_config,
+                    output_type=pytesseract.Output.DICT
+                )
+                
+                # Procesar resultados
+                n_boxes = len(ocr_data['text'])
+                for i in range(n_boxes):
+                    confidence = float(ocr_data['conf'][i])
+                    text = ocr_data['text'][i].strip()
+                    
+                    if confidence > 5 and text:  # Umbral bajo para capturar más
+                        x, y, w, h = (ocr_data['left'][i], ocr_data['top'][i],
+                                     ocr_data['width'][i], ocr_data['height'][i])
+                        
+                        # Ajustar coordenadas al tamaño original
+                        result = {
+                            'text': text,
+                            'confidence': confidence,
+                            'center': {
+                                'x': (x + w/2) / scale_factor,
+                                'y': (y + h/2) / scale_factor
+                            },
+                            'bounds': {
+                                'x_min': x / scale_factor,
+                                'y_min': y / scale_factor,
+                                'x_max': (x + w) / scale_factor,
+                                'y_max': (y + h) / scale_factor
+                            },
+                            'psm': psm
+                        }
+                        all_results.append(result)
+            except Exception as e:
+                logger.error(f"Error en OCR PSM={psm}: {e}")
+                
+        # Eliminar duplicados (mantener mejor confianza)
+        unique_results = {}
+        for r in all_results:
+            key = (round(r['center']['y']), round(r['center']['x']/10)*10, r['text'].lower())
+            if key not in unique_results or r['confidence'] > unique_results[key]['confidence']:
+                unique_results[key] = r
+        
+        return list(unique_results.values())
+
+    # --------------------------------------------------------------------------------
+    # MEJORA: RAPIDFUZZ MATCHING
+    # --------------------------------------------------------------------------------
+    def match_diagnostico_mejorado(self, target, row_text):
+        """
+        Matching mejorado usando múltiples estrategias de RapidFuzz.
+        Retorna (match_encontrado, score, metodo_usado)
+        """
+        target_norm = self.normalize_text(target)
+        row_norm = self.normalize_text(row_text)
+        
+        # Estrategia 1: Token Set Ratio 
+        score_token_set = fuzz.token_set_ratio(target_norm, row_norm)
+        if score_token_set >= 85:
+            return (True, score_token_set, "token_set")
+        
+        # Estrategia 2: Partial Ratio
+        score_partial = fuzz.partial_ratio(target_norm, row_norm)
+        if score_partial >= 90:
+            return (True, score_partial, "partial")
+        
+        # Estrategia 3: Token Sort Ratio
+        score_token_sort = fuzz.token_sort_ratio(target_norm, row_norm)
+        if score_token_sort >= 85:
+            return (True, score_token_sort, "token_sort")
+        
+        return (False, 0, "no_match")
+
     def capture_and_process(self):
         """Ejecuta búsqueda estructurada en 3 pasos."""
         
@@ -162,11 +295,10 @@ class BusquedaEstructurada:
         # Preparar formatos de fecha
         fmt_dd_mm_yyyy = target_fecha_obj.strftime("%d-%m-%Y")
         
-        # Preparar diagnóstico: convertir a formato título (como aparece en tabla)
         target_examen_titulo = self.format_as_titulo(target_examen_db)
         
         logger.info(f"\n{'='*80}")
-        logger.info("🔍 BÚSQUEDA ESTRUCTURADA EN 3 PASOS")
+        logger.info("🔍 BÚSQUEDA ESTRUCTURADA EN 3 PASOS (VERSION RAPIDFUZZ + MULTI-OCR)")
         logger.info(f"{'='*80}\n")
         
         logger.info(f"Targets de búsqueda:")
@@ -180,192 +312,131 @@ class BusquedaEstructurada:
         img_np = np.array(screenshot)
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-        # Guardar debug con OTRO nombre para no pisar la imagen de prueba 'gold'
-        debug_path = Path(__file__).parent / "debug_capture_last_run.png"
+        # Guardar debug
+        debug_path = Path(__file__).parent / "debug_capture_v2.png"
         cv2.imwrite(str(debug_path), img_bgr)
 
-        # MODO DEBUG: Usar imagen existente (COMENTADO PARA PRODUCCIÓN)
-        # debug_path = Path(__file__).parent / "debug_capture_estructurada.png"
-        # logger.info(f"DEBUG MODE: Cargando imagen desde {debug_path}")
-        # img_bgr = cv2.imread(str(debug_path))
-        
-        # if img_bgr is None:
-        #     logger.error(f"No se pudo cargar la imagen de debug: {debug_path}")
-        #     return False
+        # OCR Multi-Config
+        logger.info("Ejecutando OCR con múltiples configuraciones...")
+        results = self.execute_ocr_multiconfig(img_bgr)
+        logger.info(f"✓ Extraídos {len(results)} textos únicos\n")
 
-        # OCR con Reescalado para mejorar precisión en números (Upscale x2)
-        logger.info("Ejecutando OCR (con reescalado x2 para precisión)...")
-        # Tesseract funciona mucho mejor con imágenes grandes (300 DPI aprox)
-        scale_factor = 2
-        img_resized = cv2.resize(img_bgr, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
-        
-        results_raw = self.ocr_engine.extract_text_with_location(img_resized)
-        
-        # Ajustar coordenadas de vuelta al tamaño original
-        results = []
-        for item in results_raw:
-            item['center']['x'] /= scale_factor
-            item['center']['y'] /= scale_factor
-            # Ajustar bounds también por si acaso
-            item['bounds']['x_min'] /= scale_factor
-            item['bounds']['y_min'] /= scale_factor
-            item['bounds']['x_max'] /= scale_factor
-            item['bounds']['y_max'] /= scale_factor
-            results.append(item)
-
-        logger.info(f"✓ Extraídos {len(results)} textos\n")
+        # AGREGAR ESTO PARA DEBUG:
+        logger.info("=" * 80)
+        logger.info("📋 DUMP COMPLETO DE TEXTOS DETECTADOS (ordenados por Y)")
+        logger.info("=" * 80)
+        for idx, item in enumerate(sorted(results, key=lambda x: x['center']['y'])):
+            logger.info(f"  [{idx:03d}] Y={item['center']['y']:6.1f} | Conf={item['confidence']:5.2f} | '{item['text']}'")
+        logger.info("=" * 80 + "\n")
 
         # Agrupar por filas
         rows_data = self.agrupar_por_filas(results)
         logger.info(f"Se agruparon en {len(rows_data)} filas\n")
 
-        # DEBUG: Ver todas las palabras detectadas por el OCR y su Y
-        logger.debug("--- DUMP DE PALABRAS DETECTADAS (Confianza > 0.1) ---")
-        for item in sorted(results, key=lambda x: x['center']['y']):
-            logger.debug(f"  Y={item['center']['y']:.1f} | Conf={item['confidence']:.2f} | Texto: '{item['text']}'")
-
         # ════════════════════════════════════════════════════════════════════════════
-        # PASO 1: Buscar "Examen Hecho"
+        # PASO 1: Buscar "Examen Hecho" (Fuzzy Match)
         # ════════════════════════════════════════════════════════════════════════════
         
         logger.info(f"{'='*80}")
-        logger.info("PASO 1: Buscar 'Examen Hecho'")
+        logger.info("PASO 1: Buscar 'Examen Hecho' (Fuzzy Match)")
         logger.info(f"{'='*80}\n")
 
         self.paso1_candidatos = []
+        TARGET_ESTADO = "examen hecho"
         
         logger.info("--- Revisando todas las filas detectadas ---")
         for idx, row in enumerate(rows_data):
             y = row['y_center']
             items = row['items']
-            # Texto con separadores visuales
-            row_text_display = " | ".join([i['text'] for i in sorted(items, key=lambda x: x['center']['x'])])
             
-            # Texto limpio para búsqueda (sin pipes, solo Qespacios)
             row_text_search = " ".join([i['text'] for i in sorted(items, key=lambda x: x['center']['x'])])
+            row_text_display = " | ".join([i['text'] for i in sorted(items, key=lambda x: x['center']['x'])])
             row_text_normalized = self.normalize_text(row_text_search)
             
-            # Buscar 'examen hecho' (exacto o fuzzy)
-            found_cancelado = False
+            # Estrategia 1: Buscar palabras individuales con fuzzy
+            palabras_row = row_text_normalized.split()
             
-            if "examen hecho" in row_text_normalized:
-                found_cancelado = True
-                logger.info(f"  ✓ [EXACT] Fila {idx}: {row_text_display}")
-            else:
-                # Intento fuzzy palabra por palabra
-                for word in row_text_normalized.split():
-                    sim = self.similarity("examen hecho", word)
-                    if sim >= 0.80: # Tolerancia para 'examen hecho'
-                        found_cancelado = True
-                        logger.info(f"  ✓ [FUZZY {sim:.0%}] Fila {idx}: {row_text_display} (match: '{word}')")
-                        break
+            # Buscar "examen" y "hecho" por separado
+            match_examen = process.extractOne("examen", palabras_row, scorer=fuzz.ratio, score_cutoff=80)
+            match_hecho = process.extractOne("hecho", palabras_row, scorer=fuzz.ratio, score_cutoff=80)
             
-            if found_cancelado:
+            if match_examen and match_hecho:
+                logger.info(f"  ✓ [FUZZY PALABRAS] Fila {idx}: {row_text_display}")
+                logger.info(f"    Match: 'examen'→'{match_examen[0]}' ({match_examen[1]}%), 'hecho'→'{match_hecho[0]}' ({match_hecho[1]}%)")
                 self.paso1_candidatos.append({
                     'fila_idx': idx,
                     'y': y,
                     'items': items,
-                    'row_text': row_text_display, # Guardamos el visual para logs
-                    'row_text_search': row_text_search # Guardamos el limpio para búsquedas
+                    'row_text': row_text_display,
+                    'row_text_search': row_text_search
                 })
-            else:
-                # Loguear filas descartadas solo si parecen relevantes o para debug
-                # logger.debug(f"  ✗ Fila {idx}: {row_text_display}")
-                pass
+                continue
+            
+            # Estrategia 2: Token Set Ratio (toda la frase)
+            score = fuzz.token_set_ratio(TARGET_ESTADO, row_text_normalized)
+            if score >= 75:  # Umbral más bajo
+                logger.info(f"  ✓ [TOKEN SET {score}%] Fila {idx}: {row_text_display}")
+                self.paso1_candidatos.append({
+                    'fila_idx': idx,
+                    'y': y,
+                    'items': items,
+                    'row_text': row_text_display,
+                    'row_text_search': row_text_search
+                })
+                continue
+            
+            # Estrategia 3: Partial Ratio (subcadenas)
+            score_partial = fuzz.partial_ratio(TARGET_ESTADO, row_text_normalized)
+            if score_partial >= 85:
+                logger.info(f"  ✓ [PARTIAL {score_partial}%] Fila {idx}: {row_text_display}")
+                self.paso1_candidatos.append({
+                    'fila_idx': idx,
+                    'y': y,
+                    'items': items,
+                    'row_text': row_text_display,
+                    'row_text_search': row_text_search
+                })
 
         logger.info(f"\n  Resultado: {len(self.paso1_candidatos)} fila(s) con 'Examen Hecho'\n")
 
         if not self.paso1_candidatos:
             logger.warning("❌ PASO 1 FALLÓ: No se encontró 'Examen Hecho' en ninguna fila.")
-            logger.warning("Revisar archivo 'debug_capture_estructurada.png' y logs anteriores.")
-            # Imprimir primeras 10 filas para dar contexto
-            logger.info("Muestra de lo que se leyó (primeras 10 filas):")
-            for idx, row in enumerate(rows_data[:10]):
-                 t = " | ".join([i['text'] for i in sorted(row['items'], key=lambda x: x['center']['x'])])
-                 logger.info(f"  Fila {idx}: {t}")
             return False
 
-        if len(self.paso1_candidatos) == 1:
-            logger.info("  ✅ PASO 1 OK: 1 coincidencia → Pasar a PASO 2\n")
-        else:
-            logger.info(f"  ⚠️  PASO 1: {len(self.paso1_candidatos)} coincidencias → Filtrar en PASO 2\n")
+        # ════════════════════════════════════════════════════════════════════════════
+        # PASO 2: Buscar DIAGNÓSTICO (VERSIÓN MEJORADA - RAPIDFUZZ)
+        # ════════════════════════════════════════════════════════════════════════════
 
-        # ════════════════════════════════════════════════════════════════════════════
-        # PASO 2: Buscar DIAGNÓSTICO (filtrar entre candidatos de PASO 1)
-        # ════════════════════════════════════════════════════════════════════════════
-        
         logger.info(f"{'='*80}")
-        logger.info("PASO 2: Buscar Diagnóstico")
+        logger.info("PASO 2: Buscar Diagnóstico (Fuzzy Mejorado)")
         logger.info(f"{'='*80}\n")
-        
-        target_normalized = self.normalize_text(target_examen_db)
-        logger.info(f"  Buscando: '{target_normalized}'")
+
+        logger.info(f"  Target original: '{target_examen_db}'")
+        logger.info(f"  Target normalizado: '{self.normalize_text(target_examen_db)}'")
 
         self.paso2_candidatos = []
-        
+
         for candidato in self.paso1_candidatos:
-            # Usamos el texto limpio de búsqueda, no el que tiene pipes
-            row_text_search_norm = self.normalize_text(candidato['row_text_search'])
+            row_text = candidato['row_text_search']
             
-            # Búsqueda 1: Coincidencia de frase exacta (normalized)
-            if target_normalized in row_text_search_norm:
-                logger.info(f"  ✓ Fila {candidato['fila_idx']}: Coincidencia EXACTA")
-                logger.info(f"    Contenido: {candidato['row_text']}")
+            # Usar el nuevo método de matching mejorado
+            match_result, score, metodo = self.match_diagnostico_mejorado(
+                target_examen_db, 
+                row_text
+            )
+            
+            if match_result:
+                logger.info(f"  ✓ Fila {candidato['fila_idx']}: Match encontrado")
+                logger.info(f"    Método: {metodo} | Score: {score:.1f}%")
+                logger.info(f"    Texto leído: '{row_text}'")
                 self.paso2_candidatos.append(candidato)
-                continue
-            
-            # Búsqueda 2: Fuzzy
-            # Si el diagnóstico tiene varias palabras ("Agenda Rayos"), SequenceMatcher directo sobre la frase
-            sim_phrase = self.similarity(target_normalized, row_text_search_norm)
-            
-            if sim_phrase > 0.6: # Si toda la frase se parece algo
-                 logger.debug(f"    Similitud frase completa: {sim_phrase:.2f}")
-
-            # Check simplificado: ¿Están todas las palabras clave presentes?
-            target_words = target_normalized.split()
-            found_words_count = 0
-            
-            for t_word in target_words:
-                # Búsqueda exacta de palabra o muy similar
-                word_found = False
-                if t_word in row_text_search_norm:
-                    word_found = True
-                else:
-                    # Intentar buscar palabra similar en la fila
-                    for row_word in row_text_search_norm.split():
-                        if self.similarity(t_word, row_word) > 0.85:
-                            word_found = True
-                            break
-                
-                if word_found:
-                    found_words_count += 1
-            
-            # ACEPTAR SI:
-            # 1. Todas las palabras están (exactas o fuzzy)
-            # 2. O la similitud global es muy alta ( > 0.85 )
-            # 3. O (caso Agenda Rayos) encontramos la mayoría de palabras importantes
-            
-            if found_words_count == len(target_words):
-                 logger.info(f"  ✓ Fila {candidato['fila_idx']}: Diagnóstico OK (Todas las palabras)")
-                 self.paso2_candidatos.append(candidato)
-                 continue
-            
-            # Fallback scan: Si falta algo pero la similitud es decente
-            if found_words_count >= len(target_words) - 1 and len(target_words) > 1:
-                 logger.info(f"  ✓ Fila {candidato['fila_idx']}: Diagnóstico OK (Fuzzy Match)")
-                 self.paso2_candidatos.append(candidato)
-                 continue
-
-            logger.debug(f"  ✗ Fila {candidato['fila_idx']}: No coincide diagnóstico '{target_normalized}'")
+            else:
+                logger.debug(f"  ✗ Fila {candidato['fila_idx']}: No match (score: {score:.1f}%)")
 
         logger.info(f"\n  Resultado: {len(self.paso2_candidatos)} fila(s) con diagnóstico\n")
 
         if not self.paso2_candidatos:
             logger.warning("❌ PASO 2 FALLÓ: No se encontró diagnóstico")
-            # Loguear qué falló
-            for c in self.paso1_candidatos:
-                logger.warning(f"  Candidato Fila {c['fila_idx']} (Examen Hecho OK): No match con '{target_normalized}'")
-                logger.warning(f"  Texto leido: '{self.normalize_text(c['row_text_search'])}'")
             return False
 
         if len(self.paso2_candidatos) == 1:
@@ -382,7 +453,6 @@ class BusquedaEstructurada:
         logger.info(f"{'='*80}\n")
         
         import re
-        # Preparamos un regex de la fecha 02-08-2023 -> 02.*08.*2023
         parts = fmt_dd_mm_yyyy.split('-')
         if len(parts) == 3:
             date_regex = re.compile(f"{parts[0]}.*?{parts[1]}.*?{parts[2]}", re.IGNORECASE)
@@ -396,20 +466,19 @@ class BusquedaEstructurada:
         for candidato_p2 in self.paso2_candidatos:
             row_text = candidato_p2['row_text_search']
             
-            # 1. Intento por Regex (flexible con ruidos)
+            # 1. Intento por Regex
             if date_regex and date_regex.search(row_text):
                 logger.info(f"  ✓ Fila {candidato_p2['fila_idx']}: Fecha encontrada con Regex")
                 resultados_finales.append(candidato_p2)
-            # 2. Intento exacto (sin espacios)
+            # 2. Intento exacto
             elif fmt_dd_mm_yyyy in row_text.replace(" ", ""):
                 logger.info(f"  ✓ Fila {candidato_p2['fila_idx']}: Fecha encontrada (Exacta)")
                 resultados_finales.append(candidato_p2)
-            # 3. Intento FUZZY (si el diagnostico fue perfecto, aceptamos errores tipicos 8->0, 6->5)
+            # 3. Intento FUZZY
             else:
                 sim_fecha = self.similarity(fmt_dd_mm_yyyy, row_text)
-                if sim_fecha > 0.6: # Tolerancia alta por si lee "00-01-2025" por "08-01-2026"
+                if sim_fecha > 0.6:
                      logger.info(f"  ✓ Fila {candidato_p2['fila_idx']}: Fecha aceptada por SIMILITUD ({sim_fecha:.2%})")
-                     logger.info(f"    Leído: '{row_text}' vs Esperado: '{fmt_dd_mm_yyyy}'")
                      resultados_finales.append(candidato_p2)
                 else:
                     logger.debug(f"  ✗ Fila {candidato_p2['fila_idx']}: No coincide fecha en '{row_text}'")
@@ -429,24 +498,16 @@ class BusquedaEstructurada:
             
             logger.info(f"✅ FILA ENCONTRADA - Fila #{fila_encontrada['fila_idx']}")
             
-            # Calcular coordenadas reales de pantalla
-            # self.region = (x, y, w, h)
-            # ocr_x, ocr_y son relativos a la captura
-            
-            # Usamos el centro de la fila (Y) y el centro promedio de los items de esa fila (X)
             avg_x = sum([i['center']['x'] for i in fila_encontrada['items']]) / len(fila_encontrada['items'])
-            
             screen_x = self.region[0] + avg_x
             screen_y = self.region[1] + fila_encontrada['y']
             
             logger.info(f"📍 Coordenadas pantalla: ({screen_x:.0f}, {screen_y:.0f})")
             
-            # Mover y Click Derecho
             pyautogui.moveTo(screen_x, screen_y, duration=0.5)
             pyautogui.rightClick()
             logger.info("🖱️ Click derecho ejecutado")
 
-            # Esperar 0.3s y click en opción (relativo 100, 194)
             import time
             time.sleep(0.3)
             pyautogui.click(screen_x + 100, screen_y + 194)
@@ -460,7 +521,7 @@ class BusquedaEstructurada:
             return False
         else:
             logger.warning(f"\n⚠️  MÚLTIPLES FILAS ENCONTRADAS ({len(resultados_finales)})")
-            # En caso de duda, click en la primera
+            # Click en la primera
             fila = resultados_finales[0]
             avg_x = sum([i['center']['x'] for i in fila['items']]) / len(fila['items'])
             pyautogui.rightClick(self.region[0] + avg_x, self.region[1] + fila['y'])

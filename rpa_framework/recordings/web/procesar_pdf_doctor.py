@@ -65,18 +65,18 @@ class BuscadorBaseDatosPDF:
             if conn and conn.is_connected():
                 conn.close()
 
-    def actualizar_datos_pdf(self, numero_documento, diagnostico, fecha_agendada=None):
-        """Actualiza numero_documento, diagnostico y fecha_agendada en registro_acciones"""
+    def actualizar_datos_pdf(self, numero_documento, diagnostico, examen, url, fecha_agendada=None):
+        """Actualiza numero_documento, diagnostico, examen, url y fecha_agendada en registro_acciones"""
         conn = None
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
             query = """
             UPDATE registro_acciones 
-            SET numero_documento = %s, diagnostico = %s, fecha_agendada = %s, `update` = NOW(), ultimo_nodo = %s
+            SET numero_documento = %s, diagnostico = %s, examen = %s, URL = %s, fecha_agendada = %s, `update` = NOW(), ultimo_nodo = %s
             WHERE estado = 'En Proceso'
             """
-            cursor.execute(query, (numero_documento, diagnostico, fecha_agendada, self.script_name))
+            cursor.execute(query, (numero_documento, diagnostico, examen, url, fecha_agendada, self.script_name))
             conn.commit()
             return True
         except Exception as e:
@@ -176,6 +176,8 @@ class ExtractorPDFDoctor:
             extracted_data = None
             if self.descargar_pdf(current_url):
                  extracted_data = self.extraer_datos()
+                 if extracted_data:
+                     extracted_data["url"] = current_url
                  
                  # 3. Cerrar PDF (Solo si NO es la RIS y NO es la única)
                  if target_handle != ris_handle and len(self.driver.window_handles) > 1:
@@ -254,23 +256,41 @@ class ExtractorPDFDoctor:
 
     def extraer_datos(self):
         try:
-            text_content = ""
+            pages_text = []
             with open(self.temp_pdf_path, 'rb') as f:
                 reader = pypdf.PdfReader(f)
                 for page in reader.pages:
-                    text_content += page.extract_text() + "\n"
+                    txt = page.extract_text()
+                    if txt:
+                        pages_text.append(txt)
+            
+            # Usamos un delimitador para identificar saltos de página
+            PAGE_MARKER = " [PAGE_BREAK_HERE] "
+            text_content = PAGE_MARKER.join(pages_text)
             
             # 1. Número de Documento
             match_doc = re.search(r'Número de documento\s*[:\.]?\s*([\d\-]+)', text_content, re.IGNORECASE)
             doc_number = match_doc.group(1) if match_doc else "NO ENCONTRADO"
             
-            # 2. Cuerpo (Diagnóstico)
+            # 2. Cuerpo (Diagnóstico y Examen)
             pattern_body = r'N[úu]mero de ficha.*?\n(.*?)(?=Atentamente|\Z)'
             match_body = re.search(pattern_body, text_content, re.DOTALL | re.IGNORECASE)
             
             diagnostico = "NO ENCONTRADO"
+            examen = "NO ENCONTRADO"
+            
             if match_body:
-                diagnostico = match_body.group(1).strip()
+                raw_diagnostico = match_body.group(1)
+                
+                # Examen es hasta el primer salto de página (relativo al inicio del diagnóstico)
+                if PAGE_MARKER in raw_diagnostico:
+                    examen = raw_diagnostico.split(PAGE_MARKER)[0].strip()
+                else:
+                    examen = raw_diagnostico.strip()
+                
+                # Diagnóstico es todo, reemplzando el marcador por un salto de línea real
+                diagnostico = raw_diagnostico.replace(PAGE_MARKER, "\n").strip()
+                
                 # Limpieza solicitada por el usuario
                 limpiar = [
                     r"Integramédica",
@@ -281,27 +301,28 @@ class ExtractorPDFDoctor:
                 ]
                 for p in limpiar:
                     diagnostico = re.sub(p, "", diagnostico, flags=re.IGNORECASE | re.MULTILINE)
+                    examen = re.sub(p, "", examen, flags=re.IGNORECASE | re.MULTILINE)
                 
                 diagnostico = diagnostico.strip()
+                examen = examen.strip()
 
             # 3. Fecha Examen
-            # Formato en PDF: "Fecha Examen: 22-12-2025 08:19:33"
             match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', text_content, re.IGNORECASE)
             fecha_examen_raw = match_fecha.group(1) if match_fecha else None
             fecha_agendada_sql = None
             
             if fecha_examen_raw:
                 try:
-                    # Convertir dd-mm-yyyy hh:mm:ss -> yyyy-mm-dd hh:mm:ss
                     dt = datetime.strptime(fecha_examen_raw, "%d-%m-%Y %H:%M:%S")
                     fecha_agendada_sql = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    logger.info(f"Fecha Examen capturada (fecha_agendada): {fecha_agendada_sql}")
+                    logger.info(f"Fecha Examen capturada: {fecha_agendada_sql}")
                 except Exception as e:
                     logger.warning(f"Error al formatear fecha: {e}")
 
             return {
                 "numero_documento": doc_number,
                 "diagnostico": diagnostico,
+                "examen": examen,
                 "fecha_agendada": fecha_agendada_sql
             }
 
@@ -327,6 +348,8 @@ def main():
             bd.actualizar_datos_pdf(
                 numero_documento=resultados['numero_documento'],
                 diagnostico=resultados['diagnostico'],
+                examen=resultados['examen'],
+                url=resultados['url'],
                 fecha_agendada=resultados.get('fecha_agendada')
             )
             # 4. Fin Tracking (Éxito)
