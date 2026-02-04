@@ -4,25 +4,14 @@
   "description": "",
   "nodes": [
     {
-      "id": "n1_0",
-      "type": "start",
-      "label": "Inicio",
-      "on_error": "stop",
-      "enabled": true,
-      "position": {
-        "x": -410.0,
-        "y": -578.0
-      }
-    },
-    {
       "id": "n2_0",
       "type": "action",
       "label": "Inicia RIS",
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -409.0,
-        "y": -457.0
+        "x": -591.0,
+        "y": -301.0
       },
       "script": "web\\Inicio_ris.py",
       "command": "",
@@ -38,8 +27,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -408.0,
-        "y": -346.0
+        "x": -602.0,
+        "y": -178.0
       },
       "script": "web\\seleccion int 2.py",
       "command": "",
@@ -55,8 +44,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -410.0,
-        "y": -239.0
+        "x": -608.0,
+        "y": -6.0
       },
       "script": "web\\busca_doctor.py",
       "command": "",
@@ -72,8 +61,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -403.0,
-        "y": -110.0
+        "x": -574.0,
+        "y": 106.0
       },
       "script": "web\\derecta_patologia.py",
       "command": "",
@@ -89,8 +78,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -211.0,
-        "y": 49.0
+        "x": -315.0,
+        "y": 137.0
       },
       "script": "web\\procesar_pdf_doctor.py",
       "command": "",
@@ -98,13 +87,48 @@
       "command_type": "",
       "program_path": "",
       "process_name": ""
+    },
+    {
+      "id": "n7_0",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 44.0,
+        "y": 101.0
+      }
+    },
+    {
+      "id": "2537e2dc",
+      "type": "action",
+      "label": "verifica conexion mysql",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -604.0,
+        "y": -429.0
+      },
+      "script": "sistema\\check_db_connection.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n8_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -601.0,
+        "y": -550.0
+      }
     }
   ],
   "edges": [
-    {
-      "from": "n1_0",
-      "to": "n2_0"
-    },
     {
       "from": "n2_0",
       "to": "n3_0"
@@ -120,6 +144,18 @@
     {
       "from": "n5_0",
       "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "2537e2dc",
+      "to": "n2_0"
+    },
+    {
+      "from": "n8_0",
+      "to": "2537e2dc"
     }
   ],
   "variables": {}

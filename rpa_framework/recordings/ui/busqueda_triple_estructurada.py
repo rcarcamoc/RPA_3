@@ -241,7 +241,7 @@ class BusquedaEstructurada:
             # Texto con separadores visuales
             row_text_display = " | ".join([i['text'] for i in sorted(items, key=lambda x: x['center']['x'])])
             
-            # Texto limpio para búsqueda (sin pipes, solo espacios)
+            # Texto limpio para búsqueda (sin pipes, solo Qespacios)
             row_text_search = " ".join([i['text'] for i in sorted(items, key=lambda x: x['center']['x'])])
             row_text_normalized = self.normalize_text(row_text_search)
             

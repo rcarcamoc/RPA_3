@@ -119,7 +119,7 @@
     {
       "id": "n8_0",
       "type": "action",
-      "label": "Python Script",
+      "label": "Click y ordenar",
       "on_error": "stop",
       "enabled": true,
       "position": {
@@ -143,7 +143,7 @@
         "x": -101.0,
         "y": -432.0
       },
-      "script": "ui\\busqueda_triple_estructurada.py",
+      "script": "ocr\\busqueda_triple_combinada.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
