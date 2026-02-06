@@ -20,6 +20,7 @@ from datetime import datetime
 import json
 import os
 import sys
+import math
 
 # Importar comandos
 from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
@@ -64,10 +65,10 @@ class WorkflowExecutorWorker(QThread):
                 self.log_update.emit(f"[{level}] {message}")
                 
                 # Detectar inicio de nodo
-                if "Ejecutando nodo:" in message:
+                if "📍 Nodo actual:" in message:
                     # Buscar el nodo por label
                     for node in self.workflow.nodes:
-                        if node.label in message:
+                        if f"Nodo actual: {node.label}" in message:
                             if current_node_id[0]:
                                 self.node_finished.emit(current_node_id[0])
                             current_node_id[0] = node.id
@@ -93,11 +94,12 @@ class WorkflowExecutorWorker(QThread):
 
 
 
-class OutputPortItem(QGraphicsEllipseItem):
-    """Puerto de salida visual para crear conexiones."""
+class PortItem(QGraphicsEllipseItem):
+    """Puerto de conexión (visual) en el nodo."""
     
-    def __init__(self, parent=None):
-        super().__init__(-6, -6, 12, 12, parent)
+    def __init__(self, port_type, parent=None):
+        super().__init__(-5, -5, 10, 10, parent)
+        self.port_type = port_type  # 'top', 'bottom', 'left', 'right'
         self.setBrush(QBrush(QColor("#ffffff")))
         self.setPen(QPen(QColor("#333333"), 1.5))
         self.setAcceptHoverEvents(True)
@@ -117,7 +119,7 @@ class OutputPortItem(QGraphicsEllipseItem):
         if views:
             view = views[0]
             if hasattr(view, 'start_connection_drag'):
-                # Start drag from parent Node center-right
+                # Start drag from this port
                 view.start_connection_drag(self.parentItem(), self.mapToScene(self.rect().center()))
                 event.accept()
         else:
@@ -171,6 +173,12 @@ class NodeGraphicsItem(QGraphicsRectItem):
             'color2': QColor("#c82333"),
             'icon': "✔️",  # Checkmark
             'shadow': QColor(220, 53, 69, 100)
+        },
+        NodeType.WORKFLOW: {
+            'color1': QColor("#8e44ad"),
+            'color2': QColor("#9b59b6"),
+            'icon': "🔗",  # Link
+            'shadow': QColor(142, 68, 173, 100)
         }
     }
     
@@ -245,14 +253,35 @@ class NodeGraphicsItem(QGraphicsRectItem):
         # Cursor de arrastre
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         
-        # Agregar puerto de salida (si no es END ni ANNOTATION)
-        if node.type not in [NodeType.END, NodeType.ANNOTATION]:
-            self.output_port = OutputPortItem(self)
-            self.output_port.setPos(width / 2, height)  # Parte inferior, centro horizontal
+        # Agregar puertos de conexión (4 lados)
+        self.ports = {}
+        if node.type not in [NodeType.ANNOTATION]:
+            # Top
+            self.ports['top'] = PortItem('top', self)
+            self.ports['top'].setPos(width / 2, 0)
+            
+            # Bottom
+            self.ports['bottom'] = PortItem('bottom', self)
+            self.ports['bottom'].setPos(width / 2, height)
+            
+            # Left
+            self.ports['left'] = PortItem('left', self)
+            self.ports['left'].setPos(0, height / 2)
+            
+            # Right
+            self.ports['right'] = PortItem('right', self)
+            self.ports['right'].setPos(width, height / 2)
         
-        # Aplicar opacidad si el nodo está deshabilitado
+        # Icono de estado (Deshabilitado)
+        self.status_icon = QGraphicsTextItem(self)
+        self.status_icon.setDefaultTextColor(QColor("#ff0000"))
+        self.status_icon.setFont(QFont("Segoe UI Emoji", 20))
+        self.status_icon.setPos(width - 30, -10)
+        self.status_icon.hide() # Oculto por defecto
+        
+        # Aplicar estado inicial
         if not node.enabled:
-            self.setOpacity(0.4)
+            self._update_enabled_visuals(False)
     
     def get_center(self) -> QPointF:
         return QPointF(self.pos().x() + self.node_width / 2, self.pos().y() + self.node_height / 2)
@@ -319,6 +348,30 @@ class NodeGraphicsItem(QGraphicsRectItem):
                             view.request_split_edge(self, item)
                             break
     
+    def _update_enabled_visuals(self, enabled: bool):
+        """Actualiza la apariencia visual según estado habilitado"""
+        if enabled:
+            self.setOpacity(1.0)
+            if hasattr(self, 'status_icon'):
+                self.status_icon.hide()
+            
+            # Limpiar tooltip
+            current = self.toolTip()
+            if "🚫 DESHABILITADO" in current:
+                 self.setToolTip(current.replace("🚫 DESHABILITADO\n", "").replace("🚫 DESHABILITADO", ""))
+        else:
+            self.setOpacity(0.5)
+            if hasattr(self, 'status_icon'):
+                self.status_icon.setPlainText("🚫")
+                self.status_icon.show()
+                # Asegurar que esté encima
+                self.status_icon.setZValue(10)
+            
+            # Set tooltip
+            current = self.toolTip()
+            if "🚫 DESHABILITADO" not in current:
+                self.setToolTip(f"🚫 DESHABILITADO\n{current}")
+
     def mouseDoubleClickEvent(self, event):
         """Abre el script asociado al hacer doble click"""
         script_path_str = None
@@ -381,37 +434,111 @@ class EdgeGraphicsItem(QGraphicsPathItem):
         
         self.setPen(QPen(QColor("#666666"), 2))
         self.setAcceptHoverEvents(True)  # Enable hover for insert button
+        self.arrow_head = QPolygonF()
         self.update_path()
         
         # Insert button (created on demand)
         self.insert_button = None
     
     def update_path(self):
-        # CONEXIONES VERTICALES: de abajo hacia arriba
-        # Start point (Output port if available, else center-bottom)
-        if hasattr(self.from_item, 'output_port') and self.from_item.output_port:
-            start = self.from_item.mapToScene(self.from_item.output_port.pos())
-        else:
-            start = self.from_item.get_center()
-            start.setY(start.y() + self.from_item.node_height / 2)  # Parte inferior del nodo
+        # SMART ROUTING: Determinar los mejores puertos basados en posición relativa
         
-        # End point (Input port logic - usually center-top)
-        end = self.to_item.get_center()
-        end.setY(end.y() - self.to_item.node_height / 2)  # Parte superior del nodo
+        # Obtener centros
+        c1 = self.from_item.get_center()
+        c2 = self.to_item.get_center()
+        
+        dx = c2.x() - c1.x()
+        dy = c2.y() - c1.y()
+        
+        start_port = 'bottom'
+        end_port = 'top'
+        
+        # Lógica simple de dirección
+        if abs(dx) > abs(dy): # Más horizontal que vertical
+            if dx > 0: # Target a la derecha
+                start_port = 'right'
+                end_port = 'left'
+            else: # Target a la izquierda
+                start_port = 'left'
+                end_port = 'right'
+        else: # Más vertical
+            if dy > 0: # Target abajo
+                start_port = 'bottom'
+                end_port = 'top'
+            else: # Target arriba
+                start_port = 'top'
+                end_port = 'bottom'
+        
+        # Obtener posiciones de los puertos
+        if hasattr(self.from_item, 'ports') and start_port in self.from_item.ports:
+            start = self.from_item.mapToScene(self.from_item.ports[start_port].pos())
+        else:
+            # Fallback
+            start = c1
+            start.setY(start.y() + self.from_item.node_height / 2)
+
+        if hasattr(self.to_item, 'ports') and end_port in self.to_item.ports:
+            end = self.to_item.mapToScene(self.to_item.ports[end_port].pos())
+        else:
+            # Fallback
+            end = c2
+            end.setY(end.y() - self.to_item.node_height / 2)
+            
         
         path = QPainterPath()
         path.moveTo(start)
         
-        # Cubic Bezier for smooth curve (VERTICAL)
-        dx = end.x() - start.x()
-        dy = end.y() - start.y()
-        # Control points para curva vertical
-        ctrl1 = QPointF(start.x(), start.y() + dy * 0.5)
-        ctrl2 = QPointF(end.x(), end.y() - dy * 0.5)
+        # Curvas Bezier adaptativas
+        dist = (end - start).manhattanLength()
+        ctrl_dist = min(dist * 0.5, 100) # Control point distance
+        
+        if start_port == 'right':
+            ctrl1 = start + QPointF(ctrl_dist, 0)
+        elif start_port == 'left':
+            ctrl1 = start - QPointF(ctrl_dist, 0)
+        elif start_port == 'bottom':
+            ctrl1 = start + QPointF(0, ctrl_dist)
+        else: # top
+            ctrl1 = start - QPointF(0, ctrl_dist)
+            
+        if end_port == 'right':
+            ctrl2 = end + QPointF(ctrl_dist, 0)
+        elif end_port == 'left':
+            ctrl2 = end - QPointF(ctrl_dist, 0)
+        elif end_port == 'bottom':
+            ctrl2 = end + QPointF(0, ctrl_dist)
+        else: # top
+            ctrl2 = end - QPointF(0, ctrl_dist)
+            
         
         path.cubicTo(ctrl1, ctrl2, end)
         
         self.setPath(path)
+        
+        # Calcular Arrow Head (Triangulo)
+        # Vector direccion final (desde ctrl2 a end)
+        # Si end y ctrl2 son iguales (linea recta), usar start
+        if end == ctrl2:
+            direction = end - start
+        else:
+            direction = end - ctrl2
+            
+        angle = math.atan2(direction.y(), direction.x())
+        
+        arrow_size = 10
+        arrow_p1 = end + QPointF(math.cos(angle - math.pi + 0.5) * arrow_size,
+                                 math.sin(angle - math.pi + 0.5) * arrow_size)
+        arrow_p2 = end + QPointF(math.cos(angle - math.pi - 0.5) * arrow_size,
+                                 math.sin(angle - math.pi - 0.5) * arrow_size)
+                                 
+        self.arrow_head = QPolygonF([end, arrow_p1, arrow_p2])
+
+    def paint(self, painter, option, widget=None):
+        super().paint(painter, option, widget)
+        # Dibujar flecha
+        if not self.arrow_head.isEmpty():
+            painter.setBrush(QBrush(self.pen().color()))
+            painter.drawPolygon(self.arrow_head)
     
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
@@ -679,6 +806,18 @@ class WorkflowCanvas(QGraphicsView):
             if isinstance(item, NodeGraphicsItem):
                 self.node_selected.emit(item.node)
     
+    def keyPressEvent(self, event):
+        """Manejar teclas de acceso rápido (Delete, etc)"""
+        if event.key() == Qt.Key.Key_Delete:
+            # Eliminar items seleccionados
+            for item in self.scene.selectedItems():
+                if isinstance(item, NodeGraphicsItem):
+                    self._request_delete(item.node)
+                elif isinstance(item, EdgeGraphicsItem):
+                    self.request_delete_edge(item)
+        else:
+            super().keyPressEvent(event)
+    
     def contextMenuEvent(self, event):
         """Menu contextual con click derecho"""
         from PyQt6.QtWidgets import QMenu
@@ -836,20 +975,26 @@ class WorkflowCanvas(QGraphicsView):
     def _toggle_node_enabled(self, node_item: NodeGraphicsItem, enabled: bool):
         """Habilita o deshabilita un nodo"""
         node_item.node.enabled = enabled
-        # Actualizar apariencia visual
-        if enabled:
-            node_item.setOpacity(1.0)
-        else:
-            node_item.setOpacity(0.4)
-        # Actualizar tooltip
-        if not enabled:
-            current_tooltip = node_item.toolTip()
-            node_item.setToolTip(f"🚫 DESHABILITADO\n{current_tooltip}" if current_tooltip else "🚫 DESHABILITADO")
-        else:
-            # Limpiar tooltip de deshabilitado
-            current_tooltip = node_item.toolTip()
-            if current_tooltip.startswith("🚫 DESHABILITADO"):
-                node_item.setToolTip(current_tooltip.replace("🚫 DESHABILITADO\n", ""))
+        node_item._update_enabled_visuals(enabled)
+            
+    # ------ Extensión de NodeGraphicsItem para manejar visuales ------
+    # (Lo agregamos aquí monkey-patching style o asumimos que se actualizó la clase arriba)
+    # Como editamos NodeGraphicsItem arriba, agreguemos el método allí.
+    # Pero como no puedo editar dos lugares disjuntos fácilmente sin contexto del patch anterior si fuera muy largo...
+    # Espera, 'NodeGraphicsItem' está definida arriba en este archivo.
+    # Debo agregar '_update_enabled_visuals' a la clase NodeGraphicsItem.
+    # Lo haré en un reemplazo separado para la clase NodeGraphicsItem si es necesario, 
+    # pero ya edité el __init__. 
+    # Necesito inyectar el método `_update_enabled_visuals` en `NodeGraphicsItem`.
+    # Voy a hacerlo modificando el final de `NodeGraphicsItem` en el chunk anterior o creando uno nuevo.
+    # Mejor edito `NodeGraphicsItem` de nuevo para agregar el método.
+    
+    # ... Wait, I can just do it in the `_toggle_node_enabled` logic if I access properties manually.
+    # But cleanest is method on Item.
+    # Let's verify if I can add method to class in previous chunk?
+    # I already closed previous chunk for __init__.
+    # I will add a new replacement chunk for NodeGraphicsItem methods.
+
     
     def request_delete_edge(self, edge_item: EdgeGraphicsItem):
         """Solicita eliminar una conexión"""

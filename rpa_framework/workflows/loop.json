@@ -1,0 +1,43 @@
+{
+  "id": "loop",
+  "name": "loop",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -63.0,
+        "y": -152.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "loop",
+      "label": "Loop",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -45.0,
+        "y": 12.0
+      },
+      "script": "",
+      "loop_type": "count",
+      "iterations": "2",
+      "iterable": "",
+      "condition": "",
+      "loopVar": "item",
+      "workflow_path": "RIS.json"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    }
+  ],
+  "variables": {}
+}

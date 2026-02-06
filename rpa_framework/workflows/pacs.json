@@ -143,7 +143,7 @@
         "x": -101.0,
         "y": -432.0
       },
-      "script": "ocr\\busqueda_triple_combinada.py",
+      "script": "ocr\\busqueda_triple_text_only.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -160,7 +160,7 @@
         "x": -99.0,
         "y": -320.0
       },
-      "script": "ui\\diagnostica y pega.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\diagnostica y pega.py",
       "command": "",
       "output_variable": "",
       "command_type": "",

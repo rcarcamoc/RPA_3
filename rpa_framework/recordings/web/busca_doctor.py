@@ -1,4 +1,5 @@
 import time
+import sys
 from typing import Optional
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -200,6 +201,30 @@ class BuscadorDoctorSelenium:
             logger.error(f"✗ Error al intentar hacer click en el doctor: {e}")
             return False
 
+    def verificar_sin_resultados(self) -> bool:
+        """
+        Verifica si la tabla muestra el mensaje de 'Sin resultados'.
+        Retorna True si encuentra el mensaje.
+        """
+        try:
+            logger.info("Verificando si existen resultados en la tabla...")
+            # Esperar brevemente a que haya filas (o el mensaje)
+            self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr")))
+            
+            # Buscar celda con texto 'Sin resultados'
+            # El usuario indicó: <td align="center" colspan="7"> Sin resultados </td>
+            xpath = "//td[contains(text(), 'Sin resultados')]"
+            elementos = self.driver.find_elements(By.XPATH, xpath)
+            
+            if elementos:
+                logger.info("Se detectó 'Sin resultados' en la tabla.")
+                return True
+            return False
+        except Exception as e:
+            # Si falla el wait o la búsqueda, asumimos que no es el caso de 'Sin resultados' explícito
+            logger.warning(f"No se pudo verificar sin resultados (posiblemente hay datos o error): {e}")
+            return False
+
     def cerrar(self):
         """Cierra el navegador (solo si fue abierto por este módulo)"""
         if self.driver and not self.usar_navegador_existente:
@@ -336,6 +361,27 @@ class BuscadorBaseDatos:
             print(f"Error al actualizar BD: {e}")
             return False
         finally:
+                conn.close()
+
+    def registrar_sin_resultados(self):
+        """
+        Actualiza el estado a 'sin registros para trabajar' cuando la tabla está vacía.
+        """
+        conn = None
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            query = """
+            UPDATE registro_acciones 
+            SET estado = 'sin registros para trabajar'
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query)
+            conn.commit()
+            print("[DB] Estado actualizado a: 'sin registros para trabajar'")
+        except Exception as e:
+            print(f"[ERROR] Al registrar sin resultados: {e}")
+        finally:
             if conn and conn.is_connected():
                 conn.close()
 
@@ -356,6 +402,13 @@ def main():
         buscador.conectar_navegador()
         buscador.navegar_a_lista()
         
+        # Verificación solicitada antes de extraer
+        if buscador.verificar_sin_resultados():
+            bd.registrar_sin_resultados()
+            print("Terminando script: Tabla sin resultados.")
+            # Terminar con error en consola como solicitado (sys.exit(1))
+            sys.exit("Script finalizado: Sin resultados para trabajar")
+
         nombre_medico = buscador.extraer_primer_medico()
         
         if nombre_medico:

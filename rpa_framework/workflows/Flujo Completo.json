@@ -1,0 +1,336 @@
+{
+  "id": "flujo_completo",
+  "name": "Flujo Completo",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2349.3599999999997,
+        "y": -1028.56
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "action",
+      "label": "verifica conexion mysql",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2085.6799999999994,
+        "y": -1024.7600000000002
+      },
+      "script": "sistema\\check_db_connection.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n3_0",
+      "type": "action",
+      "label": "Inicia RIS",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1820.7199999999998,
+        "y": -1033.7600000000002
+      },
+      "script": "web\\Inicio_ris.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n4_0",
+      "type": "action",
+      "label": "selecciona",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1586.2,
+        "y": -1040.08
+      },
+      "script": "web\\seleccion int 2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n5_0",
+      "type": "action",
+      "label": "Busca_examen",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1582.4400000000003,
+        "y": -859.90236453202
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\busca_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n6_0",
+      "type": "action",
+      "label": "detecta patologia critica",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2126.9877339901477,
+        "y": -854.612906403941
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\derecta_patologia.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n7_0",
+      "type": "action",
+      "label": "procesar_pdf_doctor",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1840.3200000000002,
+        "y": -858.24
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\procesar_pdf_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n8_0",
+      "type": "action",
+      "label": "System Command",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2360.1599999999994,
+        "y": -845.2800000000001
+      },
+      "script": "",
+      "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
+      "output_variable": "",
+      "command_type": "desktop",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n9_0",
+      "type": "action",
+      "label": "abre pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2358.7199999999984,
+        "y": -702.7199999999998
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\Abre_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n10_0",
+      "type": "action",
+      "label": "ingresa user pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2103.84,
+        "y": -707.0399999999997
+      },
+      "script": "ui\\ingresa_user_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n11_0",
+      "type": "action",
+      "label": "verifica incio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1843.1999999999996,
+        "y": -708.4799999999998
+      },
+      "script": "ui\\verifica_inicio.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n12_0",
+      "type": "action",
+      "label": "busca dinamicamente \"busca paciente\"",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1592.64,
+        "y": -705.6
+      },
+      "script": "ocr\\ocr_click_0.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n13_0",
+      "type": "action",
+      "label": "ingresa id cliente",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1572.4799999999996,
+        "y": -538.56
+      },
+      "script": "ui\\busqueda_paciente.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n14_0",
+      "type": "action",
+      "label": "Click y ordenar",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1834.029519692602,
+        "y": -533.1836791546586
+      },
+      "script": "ui\\clic_y_ordenar.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n15_0",
+      "type": "action",
+      "label": "busqueda triple",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -2076.663775216137,
+        "y": -528.0863208453407
+      },
+      "script": "ocr\\busqueda_triple_text_only.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n16_0",
+      "type": "action",
+      "label": "Diagnostica y pega",
+      "on_error": "stop",
+      "enabled": false,
+      "position": {
+        "x": -2288.7138808837644,
+        "y": -532.164207492795
+      },
+      "script": "ui\\diagnostica y pega.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n5_0"
+    },
+    {
+      "from": "n5_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "n7_0",
+      "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n8_0"
+    },
+    {
+      "from": "n8_0",
+      "to": "n9_0"
+    },
+    {
+      "from": "n9_0",
+      "to": "n10_0"
+    },
+    {
+      "from": "n10_0",
+      "to": "n11_0"
+    },
+    {
+      "from": "n11_0",
+      "to": "n12_0"
+    },
+    {
+      "from": "n12_0",
+      "to": "n13_0"
+    },
+    {
+      "from": "n13_0",
+      "to": "n14_0"
+    },
+    {
+      "from": "n14_0",
+      "to": "n15_0"
+    },
+    {
+      "from": "n15_0",
+      "to": "n16_0"
+    }
+  ],
+  "variables": {}
+}
