@@ -39,7 +39,7 @@ class BusquedaPacienteAutomation:
         self.executor = None
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-    def db_update_status(self, status='En Proceso'):
+    def db_update_status(self, status='En Proceso', obs=None):
         """Actualiza el estado en la BD"""
         if not HAS_MYSQL:
             return
@@ -52,13 +52,26 @@ class BusquedaPacienteAutomation:
             )
             cursor = conn.cursor()
             script_name = "busqueda_paciente"
-            query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
-            cursor.execute(query, (script_name, status))
+            
+            if status == 'Error':
+                query = "UPDATE registro_acciones SET estado = 'Error', observacion = %s, `update` = NOW() WHERE estado = 'En Proceso'"
+                cursor.execute(query, (obs,))
+            else:
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
+                cursor.execute(query, (script_name, status))
+            
             conn.commit()
             conn.close()
             logger.info(f"[DB] Tracking actualizado: {script_name} ({status})")
         except Exception as e:
             logger.warning(f"[DB Error] {e}")
+
+    def fatal_error(self, message):
+        """Actualiza la BD con el error y detiene la ejecución inmediatamente."""
+        logger.error(f"❌ ERROR CRÍTICO: {message}")
+        self.db_update_status('Error', obs=message)
+        print(f"ERROR: {message}")
+        sys.exit(1)
     
     def get_patient_id(self):
         """Obtiene el id_primario desde la BD."""
@@ -113,8 +126,11 @@ class BusquedaPacienteAutomation:
     
     def run(self) -> dict:
         """Ejecuta todas las acciones grabadas."""
+        # DB Tracking: Start
+        self.db_update_status('En Proceso')
+
         if not self.setup():
-            return {"status": "FAILED", "reason": "Setup failed"}
+            self.fatal_error("Falló el inicio de la aplicación (setup)")
         
         results = {
             "session_id": self.session_id,
@@ -128,13 +144,8 @@ class BusquedaPacienteAutomation:
         
         logger.info(f"🚀 Iniciando ejecución: {results['total_actions']} acciones")
         
-        # DB Tracking: Start
-        self.db_update_status('En Proceso')
-        
         try:
-           
-
-            # Acción 2: CLICK
+            # Acción 2: CLICK en PatientId
             try:
                 action = Action(
                     type=ActionType.CLICK,
@@ -144,15 +155,16 @@ class BusquedaPacienteAutomation:
                 )
                 self.executor.execute(action)
                 results["completed"] += 1
-                logger.info(f"[2/5] ✅ click")
+                logger.info(f"[2/5] ✅ click en PatientId")
             except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 2, "type": "click", "reason": str(e)})
-                logger.error(f"[2/5] ❌ click: {e}")
+                self.fatal_error(f"No se pudo hacer clic en PatientId: {e}")
 
             # Acción 3: TYPE_TEXT (Estrategia Directa con pyautogui + Fallback)
             try:
-                patient_id = self.get_patient_id() or "12345678"
+                patient_id = self.get_patient_id()
+                if not patient_id:
+                    self.fatal_error("No se encontró patient_id en la base de datos")
+                
                 logger.info(f"Ingresando ID de paciente: {patient_id}")
                 
                 try:
@@ -177,11 +189,9 @@ class BusquedaPacienteAutomation:
                 results["completed"] += 1
                 logger.info(f"[3/5] ✅ type_text ({patient_id}) con pyautogui")
             except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 3, "type": "type_text", "reason": str(e)})
-                logger.error(f"[3/5] ❌ type_text: {e}")
+                self.fatal_error(f"Fallo al escribir ID de paciente: {e}")
 
-            # Acción 4: CLICK
+            # Acción 4: CLICK btnSearch
             try:
                 action = Action(
                     type=ActionType.CLICK,
@@ -191,45 +201,36 @@ class BusquedaPacienteAutomation:
                 )
                 self.executor.execute(action)
                 results["completed"] += 1
-                logger.info(f"[4/5] ✅ click")
+                logger.info(f"[4/5] ✅ click Search")
             except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 4, "type": "click", "reason": str(e)})
-                logger.error(f"[4/5] ❌ click: {e}")
+                self.fatal_error(f"No se pudo hacer clic en botón Buscar: {e}")
 
-            # Acción 5: CLICK
+            # Acción 5: DOUBLE_CLICK (Simulado con 2 clicks directos)
             try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'position': {'x': 1821, 'y': 920}},
-                    position={'x': 1821, 'y': 920},
-                    timestamp=datetime.fromisoformat("2026-01-02T07:37:08.279462")
-                )
-                self.executor.execute(action)
+                base_x, base_y = 1010, 368
+                logger.info(f"Realizando doble clic simulado en ({base_x}, {base_y})")
+                
+                pyautogui.click(base_x, base_y)
+                time.sleep(0.1)
+                pyautogui.click(base_x, base_y)
+                
                 results["completed"] += 1
-                logger.info(f"[5/5] ✅ click")
+                logger.info(f"[5/5] ✅ double_click (simulado)")
             except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 5, "type": "click", "reason": str(e)})
-                logger.error(f"[5/5] ❌ click: {e}")
+                self.fatal_error(f"No se pudo hacer doble clic en el paciente: {e}")
 
+            results["status"] = "SUCCESS"
             
-            results["status"] = "SUCCESS" if results["failed"] == 0 else "PARTIAL"
-            
+        except SystemExit:
+            raise
         except Exception as e:
-            logger.error(f"❌ Error crítico: {e}")
-            results["status"] = "FAILED"
-            results["errors"].append({"reason": str(e)})
-            self.db_update_status('error')
+            self.fatal_error(f"Error inesperado: {e}")
         
         results["end_time"] = datetime.now().isoformat()
-        
         logger.info(f"📊 RESUMEN: {results['completed']} OK, {results['failed']} FAILED")
-        logger.info(f"Status: {results['status']}")
         
         # DB Tracking: Final
-        if results["status"] == "SUCCESS":
-            self.db_update_status('En Proceso')
+        self.db_update_status('En Proceso')
         
         return results
 
@@ -243,11 +244,11 @@ def main():
     
     print("\n" + "="*50)
     print(f"Resultado: {results['status']}")
-    print(f"Completadas: {results['completed']}/{results['total_actions']}")
-    print(f"Fallidas: {results['failed']}")
+    print(f"Completadas: {results['completed']}/5")
+    print(f"Fallidas: 0")
     print("="*50)
     
-    return 0 if results["status"] == "SUCCESS" else 1
+    return 0
 
 
 if __name__ == "__main__":

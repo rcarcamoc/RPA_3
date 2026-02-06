@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit,
                              QLabel, QStyle, QPlainTextEdit, QMessageBox, QFileDialog)
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from pathlib import Path
-from core.models import Node, NodeType, ActionNode, DecisionNode, LoopNode
+from core.models import Node, NodeType, ActionNode, DecisionNode, LoopNode, WorkflowNode
 import os
 
 class PropertiesPanel(QWidget):
@@ -76,6 +76,26 @@ class PropertiesPanel(QWidget):
         
         form_layout.addRow("Script Python:", self.script_container)
         
+        form_layout.addRow("Script Python:", self.script_container)
+        
+        # --- Campos Workflow Nested ---
+        self.wf_container = QWidget()
+        wf_layout = QHBoxLayout(self.wf_container)
+        wf_layout.setContentsMargins(0,0,0,0)
+        
+        self.prop_workflow_path = QComboBox()
+        self.prop_workflow_path.setEditable(True)
+        self.prop_workflow_path.setPlaceholderText("Seleccionar workflow...")
+        wf_layout.addWidget(self.prop_workflow_path)
+        
+        btn_browse_wf = QPushButton()
+        btn_browse_wf.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        btn_browse_wf.setFixedWidth(30)
+        btn_browse_wf.clicked.connect(self.browse_workflow)
+        wf_layout.addWidget(btn_browse_wf)
+        
+        form_layout.addRow("Workflow:", self.wf_container)
+        
         # Tipo de Comando (Predefinido o Custom)
         self.prop_command_type = QComboBox()
         self.prop_command_type.addItems([
@@ -146,6 +166,10 @@ class PropertiesPanel(QWidget):
         self.prop_delay.setPlaceholderText("Segundos (ej: 5)")
         form_layout.addRow("Delay (s):", self.prop_delay)
         
+        self.prop_error_delay = QLineEdit()
+        self.prop_error_delay.setPlaceholderText("Segundos si falla (ej: 10)")
+        form_layout.addRow("Delay por Error (s):", self.prop_error_delay)
+        
         # --- Campos Decision ---
         self.prop_condition = QLineEdit()
         self.prop_condition.setPlaceholderText("Ej: x > 5")
@@ -208,8 +232,9 @@ class PropertiesPanel(QWidget):
         layout.addLayout(btn_layout)
         layout.addStretch()
         
-        # Cargar scripts iniciales
+        # Cargar scripts iniciales y workflows
         self.load_scripts()
+        self.load_workflows()
         
     def update_loop_fields(self):
         """Muestra u oculta campos de loop según el tipo"""
@@ -264,7 +289,7 @@ class PropertiesPanel(QWidget):
             self.prop_label, self.prop_command, self.prop_program_path_edit, 
             self.prop_process_name, self.prop_output_var, self.prop_iterations,
             self.prop_iterable, self.prop_loop_condition, self.prop_loop_var,
-            self.prop_delay, self.prop_condition, self.prop_db_host,
+            self.prop_delay, self.prop_error_delay, self.prop_condition, self.prop_db_host,
             self.prop_db_port, self.prop_db_user, self.prop_db_password,
             self.prop_db_database
         ]
@@ -281,6 +306,10 @@ class PropertiesPanel(QWidget):
             if cb.isEditable():
                 cb.editTextChanged.connect(self.trigger_autosave)
                 
+        # Workflow combo
+        self.prop_workflow_path.currentIndexChanged.connect(self.trigger_autosave)
+        self.prop_workflow_path.editTextChanged.connect(self.trigger_autosave)
+
         # PlainTextEdits
         texts = [self.prop_db_query, self.prop_note_text]
         for t in texts:
@@ -299,8 +328,9 @@ class PropertiesPanel(QWidget):
         # 1. Resetear visibilidad
         self.input_widgets = [
             self.script_container, self.prop_command_type, self.prop_command, self.prop_program_path, 
-            self.prop_process_name, self.prop_output_var, self.loop_container, self.prop_delay, 
-            self.prop_condition, self.db_group, self.note_group
+            self.prop_process_name, self.prop_output_var, self.prop_iterations, self.loop_container,
+            self.prop_delay, self.prop_error_delay, # Delay por error oculto por defect
+            self.prop_condition, self.db_group, self.note_group, self.wf_container
         ]
         for w in self.input_widgets:
             w.setVisible(False)
@@ -317,7 +347,10 @@ class PropertiesPanel(QWidget):
         self.prop_iterable.setText("")
         self.prop_loop_condition.setText("")
         self.prop_loop_var.setText("item")
+        self.prop_loop_var.setText("item")
         self.prop_delay.setText("5")
+        self.prop_error_delay.setText("0")
+        self.prop_workflow_path.setCurrentText("")
 
         # 2. Llenar datos comunes
         self.prop_id.setText(node.id)
@@ -392,6 +425,15 @@ class PropertiesPanel(QWidget):
              self.prop_loop_condition.setText(getattr(node, 'condition', ''))
              self.prop_loop_var.setText(getattr(node, 'loop_var', 'item'))
              
+             # Show workflow picker if it's a loop
+             self._show_field(self.wf_container)
+             if self.prop_workflow_path.count() == 0:
+                 self.load_workflows()
+             self.prop_workflow_path.setCurrentText(getattr(node, 'workflow_path', ''))
+             
+             self._show_field(self.prop_error_delay)
+             self.prop_error_delay.setText(str(getattr(node, 'error_delay', 0)))
+             
              self.update_loop_fields()
         
         if t == NodeType.DELAY:
@@ -430,7 +472,16 @@ class PropertiesPanel(QWidget):
                 self.prop_note_color.setCurrentText(c_map.get(color, "Amarillo"))
             except:
                 pass
-                
+
+        if t == NodeType.WORKFLOW:
+             self._show_field(self.wf_container)
+             # populate combo if empty
+             if self.prop_workflow_path.count() == 0:
+                 self.load_workflows()
+             
+             if hasattr(node, 'workflow_path'):
+                 self.prop_workflow_path.setCurrentText(node.workflow_path)
+                 
         self._loading_node = False # Desbloquear
         self.setVisible(True)
 
@@ -512,6 +563,13 @@ class PropertiesPanel(QWidget):
              node.iterable = self.prop_iterable.text()
              node.condition = self.prop_loop_condition.text()
              node.loop_var = self.prop_loop_var.text()
+             node.loop_var = self.prop_loop_var.text()
+             node.workflow_path = self.prop_workflow_path.currentText().strip()
+             
+             try:
+                 node.error_delay = int(self.prop_error_delay.text())
+             except:
+                 node.error_delay = 0
             
         if t == NodeType.DELAY:
             try:
@@ -535,6 +593,9 @@ class PropertiesPanel(QWidget):
             node.text = self.prop_note_text.toPlainText()
             color_map = {"Amarillo": "#ffffcc", "Azul": "#cce5ff", "Rosa": "#ffccf2", "Verde": "#ccffcc"}
             node.color = color_map.get(self.prop_note_color.currentText(), "#ffffcc")
+            
+        if t == NodeType.WORKFLOW:
+            node.workflow_path = self.prop_workflow_path.currentText().strip()
             
         # Emitir señal para que el controlador sea notificado del cambio
         self.node_updated.emit(node)
@@ -597,5 +658,33 @@ class PropertiesPanel(QWidget):
                 else:
                     self.prop_script.setCurrentText(str(path))
             except Exception:
-                # Si falla lo relativo (ej: disco diferente), usar nombre o path completo
                 self.prop_script.setCurrentText(str(path))
+        
+    def load_workflows(self):
+        """Carga lista de workflows disponibles"""
+        base_dirs = [Path("rpa_framework/workflows"), Path("workflows")]
+        files = []
+        
+        for w_dir in base_dirs:
+            if w_dir.exists():
+                 for f in w_dir.glob("*.json"):
+                     files.append(f.name)
+        
+        # Eliminar duplicados y ordenar
+        files = sorted(list(set(files)))
+        
+        current = self.prop_workflow_path.currentText()
+        self.prop_workflow_path.clear()
+        self.prop_workflow_path.addItems(files)
+        if current:
+            self.prop_workflow_path.setCurrentText(current)
+
+    def browse_workflow(self):
+        start_dir = "rpa_framework/workflows"
+        if not os.path.exists(start_dir):
+            start_dir = "workflows"
+            
+        fname, _ = QFileDialog.getOpenFileName(self, "Seleccionar Workflow", start_dir, "JSON (*.json)")
+        if fname:
+            path = Path(fname)
+            self.prop_workflow_path.setCurrentText(path.name)

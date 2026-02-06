@@ -24,7 +24,10 @@ class WorkflowLogger:
         
         # Asegurar que el directorio existe
         if filepath:
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            self.log_dir = os.path.dirname(filepath)
+            os.makedirs(self.log_dir, exist_ok=True)
+        else:
+            self.log_dir = None
     
     def log(self, message: str, level: str = "INFO"):
         """
@@ -40,8 +43,12 @@ class WorkflowLogger:
         # Guardar en memoria
         self.logs.append(log_entry)
         
-        # Imprimir a consola
-        print(log_entry)
+        # Imprimir a consola (safe)
+        try:
+            print(log_entry)
+        except UnicodeEncodeError:
+            # Fallback para consolas Windows sin soporte unicode completo
+            print(log_entry.encode('cp1252', errors='replace').decode('cp1252'))
         
         # Guardar en archivo
         if self.filepath:

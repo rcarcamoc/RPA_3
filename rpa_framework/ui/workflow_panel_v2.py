@@ -8,7 +8,7 @@ from .node_palette import NodePalette
 from .workflow_panel import WorkflowCanvas, WorkflowExecutorWorker # Reusing Canvas logic
 from .panels.properties_panel import PropertiesPanel
 from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
-from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode
+from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, WorkflowNode
 from core.workflow_executor import WorkflowExecutor
 import os
 
@@ -203,6 +203,25 @@ class WorkflowPanelV2(QWidget):
         main_layout.addWidget(self.splitter)
         
         self.log_window = None # Instancia lazy
+        
+        # Floating Zoom Controls
+        self.zoom_controls = ZoomControls(self.canvas, self.canvas)
+        self.zoom_controls.show()
+        
+        # Monkey patch resize event of canvas to move zoom controls
+        original_resize = self.canvas.resizeEvent
+        
+        def new_resize_event(event):
+            original_resize(event)
+            # Position bottom right
+            zc_width = self.zoom_controls.sizeHint().width()
+            zc_height = self.zoom_controls.sizeHint().height()
+            x = event.size().width() - zc_width - 20
+            y = event.size().height() - zc_height - 20
+            self.zoom_controls.move(x, y)
+            self.zoom_controls.raise_()
+            
+        self.canvas.resizeEvent = new_resize_event
 
     # --- LOGIC ---
 
@@ -299,7 +318,8 @@ class WorkflowPanelV2(QWidget):
             'annotation': NodeType.ANNOTATION,
             'delay': NodeType.DELAY,
             'start': NodeType.START,
-            'end': NodeType.END
+            'end': NodeType.END,
+            'workflow': NodeType.WORKFLOW
         }
 
         
@@ -324,6 +344,8 @@ class WorkflowPanelV2(QWidget):
              node = Node(id=new_id, type=NodeType.START, label="Inicio", position={"x": pos.x(), "y": pos.y()})
         elif ntype == NodeType.END:
              node = Node(id=new_id, type=NodeType.END, label="Fin", position={"x": pos.x(), "y": pos.y()})
+        elif ntype == NodeType.WORKFLOW:
+             node = WorkflowNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
         else:
              # Action (Python or Command)
              node = ActionNode(id=new_id, label=node_def.name, position={"x": pos.x(), "y": pos.y()}, **defaults)
@@ -373,6 +395,7 @@ class WorkflowPanelV2(QWidget):
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(lambda msg: self.append_log(msg, "INFO"))
         self.worker.finished.connect(lambda res: self.append_log("✅ Ejecución finalizada correctamente.", "SUCCESS"))
+        self.worker.error.connect(lambda err: self.append_log(f"❌ Error en ejecución: {err}", "ERROR"))
         self.worker.start()
         self.act_run.setEnabled(False)
         self.act_stop.setEnabled(True)
@@ -480,3 +503,63 @@ class LogWindow(QWidget):
         
     def clear(self):
         self.text_edit.clear()
+
+class ZoomControls(QWidget):
+    """Controles flotantes de zoom para el canvas"""
+    def __init__(self, canvas, parent=None):
+        super().__init__(parent)
+        self.canvas = canvas
+        self.setWindowFlags(Qt.WindowType.SubWindow)
+        # Background semi-transparent
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Style for buttons
+        btn_style = """
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.9);
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+                color: #333;
+                min-width: 30px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background-color: #e6f7ff;
+                border-color: #1890ff;
+            }
+        """
+        
+        # Zoom Out
+        btn_out = QPushButton("−")
+        btn_out.setToolTip("Alejar")
+        btn_out.setStyleSheet(btn_style)
+        btn_out.clicked.connect(lambda: self.canvas.scale_view(1/1.2))
+        layout.addWidget(btn_out)
+        
+        # Fit View
+        btn_fit = QPushButton("⛶") # Unicode for square
+        btn_fit.setToolTip("Ajustar a Ventana")
+        btn_fit.setStyleSheet(btn_style)
+        btn_fit.clicked.connect(self.fit_view)
+        layout.addWidget(btn_fit)
+        
+        # Zoom In
+        btn_in = QPushButton("+")
+        btn_in.setToolTip("Acercar")
+        btn_in.setStyleSheet(btn_style)
+        btn_in.clicked.connect(lambda: self.canvas.scale_view(1.2))
+        layout.addWidget(btn_in)
+        
+        # Container style
+        self.container = QWidget() # Wrapper if needed, but direct layout on self works for subwindow
+        
+    def fit_view(self):
+        self.canvas.fitInView(self.canvas.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self.canvas._zoom = 1.0 # Reset internal zoom tracker roughly
+

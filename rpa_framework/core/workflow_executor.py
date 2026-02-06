@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
-from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode
+from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, WorkflowNode
 from core.logger import WorkflowLogger
 import mysql.connector
 from mysql.connector import Error as MySQLError
@@ -30,7 +30,19 @@ class WorkflowExecutor:
             log_dir: Directorio para guardar logs
         """
         self.workflow = workflow
-        self.logger = WorkflowLogger(log_dir)
+        
+        # Create a unique log filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Simple sanitization
+        safe_name = "".join([c for c in workflow.name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
+        log_filename = f"wf_{safe_name}_{timestamp}.log"
+        
+        # Ensure log_dir is not empty/None
+        if not log_dir: log_dir = "logs"
+            
+        log_path = os.path.join(log_dir, log_filename)
+        
+        self.logger = WorkflowLogger(log_path)
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
         
@@ -134,6 +146,8 @@ class WorkflowExecutor:
             return self._execute_database(node)
         elif node.type == NodeType.DELAY:
             return self._execute_delay(node)
+        elif node.type == NodeType.WORKFLOW:
+            return self._execute_workflow(node)
         elif node.type == NodeType.END:
              self.logger.log("⏹️ Nodo Final alcanzado.")
              return None
@@ -426,19 +440,95 @@ class WorkflowExecutor:
             self.context["_loop_index"] = idx
             self.context[node.loop_var] = current_item
             
-            # Ejecutar script interno del loop
-            if node.script:
+            # Ejecutar contenido del loop
+            # 1. Workflow
+            if hasattr(node, 'workflow_path') and node.workflow_path:
+                try:
+                     # Usamos una instancia temporal de WorkflowNode para reutilizar logica
+                     # o llamamos directamente a la logica de ejecucion.
+                     # Dado que _execute_workflow toma un nodo, creamos uno al vuelo o adaptamos.
+                     
+                     # Opción mejor: Extraer logica de execute workflow a un metodo auxiliar que tome el path
+                     # Pero por simplicidad y reutilización de 'context', llamamos a lógica interna.
+                     
+                     # Hack: Crear un dummy node para pasarle a _execute_workflow
+                     # Pero _execute_workflow devuelve "next node id", lo cual no queremos aqui.
+                     # Solo queremos que ejecute y ya.
+                     
+                     self._run_workflow_internal(node.workflow_path)
+                     
+                except Exception as e:
+                     self.logger.log(f"   ❌ Error en workflow del loop: {e}")
+                     
+                     # Delay por error si está configurado
+                     delay = getattr(node, 'error_delay', 0)
+                     if delay > 0:
+                         self.logger.log(f"   ⏳ Esperando {delay}s por error...")
+                         import time
+                         time.sleep(delay)
+                         
+                     pass 
+            
+            # 2. Script (si existe y no es workflow, o ambos)
+            elif node.script:
                 try:
                     self._run_script_internal(node)
                 except Exception as e:
                      self.logger.log(f"   ❌ Error en script de loop: {e}")
+                     
                      if getattr(node, 'on_error', 'stop') == 'stop':
                          raise e
+                     
+                     # Si on_error es 'continue', aplicar delay tambien
+                     delay = getattr(node, 'error_delay', 0)
+                     if delay > 0:
+                         self.logger.log(f"   ⏳ Esperando {delay}s por error...")
+                         import time
+                         time.sleep(delay)
             
             idx += 1
         
         self.logger.log(f"✅ Loop completado ({idx} iteraciones)")
         return self.workflow.get_next_node(node.id)
+
+    def _run_workflow_internal(self, wf_path: str):
+        """Ejecuta un workflow hijo reutilizando lógica (sin retorno de nodo)"""
+        # Resolver ruta (copiado de _execute_workflow)
+        path_obj = Path(wf_path)
+        if not path_obj.is_absolute():
+            base_dir = Path("rpa_framework/workflows")
+            if not base_dir.exists(): base_dir = Path("workflows")
+            
+            candidate = base_dir / wf_path
+            if not candidate.exists() and not candidate.suffix:
+                candidate = candidate.with_suffix(".json")
+            if candidate.exists(): path_obj = candidate
+            else: path_obj = Path(wf_path).resolve()
+
+        if not path_obj.exists():
+             raise FileNotFoundError(f"Workflow loop no encontrado: {path_obj}")
+             
+        # Cargar nested workflow
+        nested_wf = Workflow.from_json(str(path_obj))
+        nested_wf.variables.update(self.context)
+        
+        # Executor
+        nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
+        
+        # Patch logs
+        original_log = nested_executor.logger.log
+        def bridged_log(msg, level="INFO"):
+            prefix = f"   [LOOP-WF:{nested_wf.name}]"
+            self.logger.log(f"{prefix} {msg}", level)
+        nested_executor.logger.log = bridged_log
+        
+        self.logger.log(f"   ▶️ Loop Running Workflow: {nested_wf.name}")
+        result = nested_executor.execute()
+        
+        if result["status"] == "error":
+             raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
+        else:
+             self.context.update(result["context"])
 
     def _run_script_internal(self, node):
         """Helper para ejecutar script python del loop"""
@@ -627,4 +717,89 @@ class WorkflowExecutor:
                 connection.close()
                 self.logger.log(f"🔌 Conexión cerrada")
         
+        return self.workflow.get_next_node(node.id)
+
+    def _execute_workflow(self, node) -> Optional[str]:
+        """
+        Ejecuta un workflow anidado.
+        """
+        if not isinstance(node, WorkflowNode):
+            self.logger.log(f"❌ Nodo no es WorkflowNode: {node.id}")
+            return self.workflow.get_next_node(node.id)
+            
+        wf_path = node.workflow_path
+        if not wf_path:
+            self.logger.log("⚠️ Nodo Workflow sin ruta definida")
+            return self.workflow.get_next_node(node.id)
+            
+        self.logger.log(f"🔄 Preparando ejecución de workflow anidado: {wf_path}")
+        
+        # Resolver ruta
+        path_obj = Path(wf_path)
+        if not path_obj.is_absolute():
+            # Intentar en rpa_framework/workflows
+            base_dir = Path("rpa_framework/workflows")
+            if not base_dir.exists():
+                 base_dir = Path("workflows")
+            
+            candidate = base_dir / wf_path
+            # Si tiene extensión .json bien, sino probar agregandola
+            if not candidate.exists() and not candidate.suffix:
+                candidate = candidate.with_suffix(".json")
+            
+            if candidate.exists():
+                path_obj = candidate
+            else:
+                # Fallback: intentar desde cwd
+                path_obj = Path(wf_path).resolve()
+
+        if not path_obj.exists():
+             self.logger.log(f"❌ Archivo de workflow no encontrado: {path_obj}")
+             if getattr(node, 'on_error', 'stop') == 'stop':
+                 raise FileNotFoundError(f"Workflow no encontrado: {path_obj}")
+             return self.workflow.get_next_node(node.id)
+             
+        try:
+            # Cargar nested workflow
+            nested_wf = Workflow.from_json(str(path_obj))
+            
+            # Inicializar variables con el contexto actual
+            # (Sobreescribiendo las defaults del nested)
+            nested_wf.variables.update(self.context)
+            
+            # Crear executor
+            nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
+            
+            # --- PATCH LOGGER ---
+            # Para que los logs del hijo suban al padre (y a la UI)
+            original_child_log = nested_executor.logger.log
+            def bridged_log(msg, level="INFO"):
+                # Llamar al original para que quede en el archivo del hijo (opcional)
+                # original_child_log(msg, level) 
+                # O mejor: logguear en el padre con un prefijo
+                prefix = f"   [WF:{nested_wf.name}]"
+                self.logger.log(f"{prefix} {msg}", level)
+            
+            nested_executor.logger.log = bridged_log
+            # --------------------
+            
+            self.logger.log(f"▶️ Iniciando sub-workflow: {nested_wf.name}")
+            result = nested_executor.execute()
+            
+            if result["status"] == "error":
+                self.logger.log(f"❌ Error en sub-workflow: {result.get('error')}")
+                if getattr(node, 'on_error', 'stop') == 'stop':
+                     raise RuntimeError(f"Fallo en sub-workflow: {result.get('error')}")
+            else:
+                self.logger.log(f"✅ Sub-workflow finalizado correctamente")
+                # Actualizar contexto padre con resultados del hijo
+                # Opcional: ¿Queremos que el hijo modifique variables del padre?
+                # Generalmente sí en este tipo de RPA simple.
+                self.context.update(result["context"])
+        
+        except Exception as e:
+            self.logger.log(f"❌ Error ejecutando nodo workflow: {e}")
+            if getattr(node, 'on_error', 'stop') == 'stop':
+                raise e
+                
         return self.workflow.get_next_node(node.id)

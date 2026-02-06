@@ -93,6 +93,16 @@ NODE_CATALOG = {
                 'process_name': ''
             }
         ),
+         NodeDefinition(
+            id='run_workflow',
+            category='Ejecuta un programa',
+            icon='🔗',
+            name='Sub Workflow',
+            description='Ejecuta otro workflow completo',
+            node_type_enum='workflow',
+            fields=['workflow_path'],
+            default_values={}
+        ),
     ],
     'Database': [
         NodeDefinition(

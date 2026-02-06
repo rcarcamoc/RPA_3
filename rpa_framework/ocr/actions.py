@@ -118,17 +118,22 @@ class OCRActions:
                 offset_y = region.get('top', 0)
                 
                 for res in ocr_results:
-                    # Ajustar centro
-                    res['center']['x'] += offset_x
-                    res['center']['y'] += offset_y
-                    # Ajustar bounds
-                    res['bounds']['x_min'] += offset_x
-                    res['bounds']['x_max'] += offset_x
-                    res['bounds']['y_min'] += offset_y
-                    res['bounds']['y_max'] += offset_y
-                    # Ajustar bbox points
-                    if 'bbox' in res:
-                        res['bbox'] = [[p[0] + offset_x, p[1] + offset_y] for p in res['bbox']]
+                    # Verificar si ya fueron ajustados (para evitar doble ajuste)
+                    if not res.get('_adjusted', False):
+                        # Ajustar centro
+                        res['center']['x'] += offset_x
+                        res['center']['y'] += offset_y
+                        # Ajustar bounds
+                        res['bounds']['x_min'] += offset_x
+                        res['bounds']['x_max'] += offset_x
+                        res['bounds']['y_min'] += offset_y
+                        res['bounds']['y_max'] += offset_y
+                        # Ajustar bbox points
+                        if 'bbox' in res:
+                            res['bbox'] = [[p[0] + offset_x, p[1] + offset_y] for p in res['bbox']]
+                        
+                        # Marcar como ajustado
+                        res['_adjusted'] = True
             
             self.last_ocr_results = ocr_results
             logger.debug(f"OCR: {len(self.last_ocr_results)} textos extraídos")

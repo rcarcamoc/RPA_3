@@ -51,16 +51,17 @@ from ocr.engine import OCREngine
 logger = logging.getLogger(__name__)
 
 # Configuración LLM
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL_ID = "tngtech/deepseek-r1t2-chimera:free"
 
 class BusquedaTextOnly:
     def __init__(self):
         self.ocr_engine = OCREngine(engine='tesseract', language='es', use_gpu=False, confidence_threshold=0.05)
-        self.region = (190, 70, 1900, 650)
-        self.ROW_TOLERANCE = 15
-        self.CROP_HEIGHT = 20  # Altura de recorte para OCR enfocado
+        # Ampliamos región horizontal para asegurar captura completa (0 a 1920)
+        self.region = (0, 180, 1920, 1000)
+        self.ROW_TOLERANCE = 25  # Aumentado de 15 a 25 para mayor robustez
+        self.CROP_HEIGHT = 30  # Altura de recorte un poco mayor
 
     def get_db_targets(self):
         """Obtiene diagnóstico y fecha desde la base de datos."""
@@ -106,23 +107,47 @@ class BusquedaTextOnly:
         text = ' '.join(text.split())
         return text
 
-    def similarity(self, a, b):
-        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    # Removed similarity method as it was not appropriate for substring checks
+
 
     def agrupar_por_filas(self, results):
+        if not results:
+            return []
+            
+        # 1. Ordenar todos los items por su posición Y para facilitar el agrupamiento de arriba a abajo
+        results_sorted = sorted(results, key=lambda x: x['center']['y'])
+        
         rows_data = []
-        for item in results:
+        for item in results_sorted:
             y_item = item['center']['y']
             matched = False
             for row in rows_data:
+                # Si el item está dentro de la tolerancia vertical de una fila existente
                 if abs(row['y_center'] - y_item) < self.ROW_TOLERANCE:
                     row['items'].append(item)
+                    # Recalcular el centro Y de la fila como el promedio de sus elementos
                     row['y_center'] = sum([i['center']['y'] for i in row['items']]) / len(row['items'])
                     matched = True
                     break
             if not matched:
                 rows_data.append({'y_center': y_item, 'items': [item]})
-        return rows_data
+        
+        # 2. Paso de consolidación: Unir filas que hayan quedado muy cerca tras el primer paso
+        rows_data.sort(key=lambda x: x['y_center'])
+        final_rows = []
+        if rows_data:
+            current_row = rows_data[0]
+            for i in range(1, len(rows_data)):
+                next_row = rows_data[i]
+                if abs(current_row['y_center'] - next_row['y_center']) < (self.ROW_TOLERANCE * 0.8):
+                    current_row['items'].extend(next_row['items'])
+                    current_row['y_center'] = sum([it['center']['y'] for it in current_row['items']]) / len(current_row['items'])
+                else:
+                    final_rows.append(current_row)
+                    current_row = next_row
+            final_rows.append(current_row)
+            
+        return final_rows
 
     def preprocess_image(self, img_bgr):
         # 1. Convertir a escala de grises
@@ -171,23 +196,40 @@ class BusquedaTextOnly:
             return ""
 
     def execute_ocr_data(self, img_bgr):
-        """Devuelve datos estructurados de OCR (cajas)."""
-        scale_factor = 2
-        img_resized = cv2.resize(img_bgr, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
-        img_processed = self.preprocess_image(img_resized)
+        """Devuelve datos estructurados de OCR (cajas) con pre-procesamiento optimizado."""
+        scale_factor = 3
+        img_resized = cv2.resize(img_bgr, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LANCZOS4)
+        
+        # Convertir a escala de grises y aplicar CLAHE para mejorar contraste local
+        gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray = clahe.apply(gray)
+        
+        # Binarización adaptativa o simple (Tesseract 5 prefiere grises pero binario ayuda en fondos complejos)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Añadir Padding (Margen blanco) para ayudar a Tesseract con bordes
+        border = 40
+        img_padded = cv2.copyMakeBorder(thresh, border, border, border, border, 
+                                        cv2.BORDER_CONSTANT, value=[255, 255, 255])
         
         all_results = []
-        custom_config = r'--psm 6 -l spa'
+        # PSM 3 (Auto) es más robusto para capturar toda la extensión de líneas en tablas
+        custom_config = r'--psm 3 -l spa'
         
         try:
-            ocr_data = pytesseract.image_to_data(img_processed, config=custom_config, output_type=pytesseract.Output.DICT)
+            ocr_data = pytesseract.image_to_data(img_padded, config=custom_config, output_type=pytesseract.Output.DICT)
             n_boxes = len(ocr_data['text'])
             for i in range(n_boxes):
-                confidence = float(ocr_data['conf'][i])
                 text = ocr_data['text'][i].strip()
-                if confidence > 5 and text:
-                    x, y, w, h = (ocr_data['left'][i], ocr_data['top'][i],
-                                 ocr_data['width'][i], ocr_data['height'][i])
+                if text:
+                    confidence = float(ocr_data['conf'][i])
+                    # Ajustar coordenadas por el padding y el scale_factor
+                    x = ocr_data['left'][i] - border
+                    y = ocr_data['top'][i] - border
+                    w = ocr_data['width'][i]
+                    h = ocr_data['height'][i]
+                    
                     result = {
                         'text': text,
                         'confidence': confidence,
@@ -197,6 +239,7 @@ class BusquedaTextOnly:
                         }
                     }
                     all_results.append(result)
+            logger.info(f"OCR detectó {len(all_results)} palabras en la imagen.")
         except Exception as e:
             logger.error(f"Error OCR Data: {e}")
             
@@ -355,21 +398,50 @@ RESPONDE SOLO EN FORMATO JSON:
             row_text = " ".join([i['text'] for i in row_items])
             row_norm = self.normalize_text(row_text)
             
-            # Verificar Fecha Y Estado
-            has_date = (target_fecha_str in row_text.replace(" ", "") or 
-                        self.similarity(target_fecha_str, row_text) > 0.7)
+            # Verificar Fecha Y Estado CON FORMATO FLEXIBLE
+            # 1. Normalizar fecha objetivo (solo números)
+            target_fecha_digits = "".join(filter(str.isdigit, target_fecha_str)) # 29012026
             
-            has_estado = "hecho" in row_norm or "realizado" in row_norm
+            # Limpiar texto fila para búsqueda de fecha (quitar espacios y símbolos excepto / - .)
+            # Simplemente quitamos todo lo que no sea numero para el check de digitos
+            row_digits = "".join(filter(str.isdigit, row_text))
+
+            # Check A: Fecha exacta en bloque (permite 29-01-2026 o 29/01/2026)
+            has_date_literal = (target_fecha_str in row_text) or (target_fecha_str.replace("-", "/") in row_text)
             
+            # Check B: Match solo digitos (muy robusto a separadores basura como . , |)
+            has_date_digits = target_fecha_digits in row_digits
+
+            # Check C: Fuzzy sobre la fila completa (fallback)
+            score_date = fuzz.partial_ratio(target_fecha_str, row_text)
+            
+            # Check D: Fuzzy Status
+            score_hecho = fuzz.partial_ratio("hecho", row_norm)
+            score_realizado = fuzz.partial_ratio("realizado", row_norm)
+            
+            has_date = has_date_literal or has_date_digits or (score_date > 80)
+            has_estado = (score_hecho > 80) or (score_realizado > 80)
+            
+            # Guardamos el texto completo en el candidato para usarlo despues
+            row['full_text'] = row_text
+
             if has_date and has_estado:
                 candidates.append(row)
+                logger.info(f"Candidato encontrado (Digits: {has_date_digits}, Score Fecha: {score_date}, Score Estado: {max(score_hecho, score_realizado)}): {row_text}")
                 
         logger.info(f"Candidatos iniciales (Fecha + Estado): {len(candidates)}")
         
         if not candidates:
-            # Fallback: Si no encuentra FECHA exacta, buscar solo 'Examen Hecho' y confiar en LLM? 
-            # Por seguridad, mantenemos retorno False por ahora.
             logger.warning("No se encontraron filas con Fecha y Estado 'Hecho'.")
+            
+            # DEBUG: Imprimir qué está viendo para diagnóstico
+            logger.info("=== DEBUG: Contenido de filas detectadas ===")
+            for i, r in enumerate(rows_data):
+                row_items = sorted(r['items'], key=lambda x: x['center']['x'])
+                txt = " ".join([item['text'] for item in row_items])
+                logger.info(f"Fila {i} (Y={int(r['y_center'])}): {txt}")
+            logger.info("============================================")
+            
             return False
 
         # 4. Iterar Candidatos y Verificar Diagnóstico
@@ -377,14 +449,12 @@ RESPONDE SOLO EN FORMATO JSON:
             y_center = cand['y_center']
             logger.info(f"--- Verificando Candidato #{idx+1} (Y={y_center}) ---")
             
-            # Recorte 20px para extraer linea limpia
-            crop_img = self.get_crop_image(img_bgr, y_center)
+            # USAR EL TEXTO YA DETECTADO (Más robusto que re-hacer OCR con recorte)
+            # El paso anterior ya demostró que este texto tiene buena calidad (encontró fecha y estado)
+            ocr_text_candidate = cand.get('full_text', "")
+            logger.info(f"Texto OCR Candidato: '{ocr_text_candidate}'")
             
-            # OCR en Crop (Tesseract)
-            ocr_text_crop = self.execute_ocr_basic(crop_img, psm=6)
-            logger.info(f"Texto OCR en Crop: '{ocr_text_crop}'")
-            
-            ocr_norm = self.normalize_text(ocr_text_crop)
+            ocr_norm = self.normalize_text(ocr_text_candidate)
             target_norm = self.normalize_text(target_diag)
             
             # Verificación Local (Fuzzy)
@@ -396,7 +466,7 @@ RESPONDE SOLO EN FORMATO JSON:
             
             # Verificación LLM (DeepSeek)
             logger.info("⚠️ No hubo match local claro. Consultando LLM...")
-            is_match_llm = self.call_llm_text_verification(ocr_text_crop, target_diag)
+            is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag)
             
             if is_match_llm:
                 logger.info("✅ MATCH LLM CONFIRMADO")
@@ -413,6 +483,12 @@ RESPONDE SOLO EN FORMATO JSON:
         screen_y = int(self.region[1] + y_center)
         pyautogui.click(screen_x, screen_y, button='right')
         logger.info(f"Click secundario realizado en {screen_x}, {screen_y}")
+
+        # Nuevo click offset 50, 215
+        new_x = screen_x + 50
+        new_y = screen_y + 215
+        pyautogui.click(new_x, new_y, button='left')
+        logger.info(f"Click izquierdo realizado en {new_x}, {new_y}")
 
 def main():
     setup_logging()

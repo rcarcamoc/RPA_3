@@ -22,6 +22,7 @@ class NodeType(Enum):
     DELAY = "delay"
     START = "start"
     END = "end"
+    WORKFLOW = "workflow"
 
 
 @dataclass
@@ -69,6 +70,8 @@ class Node:
             return DecisionNode.from_dict(data)
         elif node_type == NodeType.LOOP:
             return LoopNode.from_dict(data)
+        elif node_type == NodeType.WORKFLOW:
+            return WorkflowNode.from_dict(data)
         else:
             return Node(
                 id=data["id"],
@@ -167,6 +170,8 @@ class LoopNode(Node):
     iterable: str = ""     # Nombre variable para list
     condition: str = ""    # Condición para while
     loop_var: str = "item"  # Variable para el item actual o índice
+    workflow_path: str = "" # Opcional: Workflow a ejecutar en cada iteración
+    error_delay: int = 0    # Segundos a esperar si ocurre un error antes de continuar
     type: NodeType = field(default=NodeType.LOOP, init=False)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -177,7 +182,9 @@ class LoopNode(Node):
             "iterations": self.iterations,
             "iterable": self.iterable,
             "condition": self.condition,
-            "loopVar": self.loop_var
+            "loopVar": self.loop_var,
+            "workflow_path": self.workflow_path,
+            "error_delay": self.error_delay
         })
         return data
     
@@ -192,10 +199,38 @@ class LoopNode(Node):
         node.iterable = data.get("iterable", "")
         node.condition = data.get("condition", "")
         node.loop_var = data.get("loopVar", "item")
+        node.workflow_path = data.get("workflow_path", "")
+        node.error_delay = data.get("error_delay", 0)
         node.on_error = data.get("on_error", "stop")
         node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})
         node.type = NodeType.LOOP
+        return node
+
+
+@dataclass
+class WorkflowNode(Node):
+    """Nodo que ejecuta otro workflow anidado"""
+    workflow_path: str = ""
+    type: NodeType = field(default=NodeType.WORKFLOW, init=False)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        data = super().to_dict()
+        data.update({
+            "workflow_path": self.workflow_path
+        })
+        return data
+    
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> 'WorkflowNode':
+        node = object.__new__(WorkflowNode)
+        node.id = data["id"]
+        node.label = data["label"]
+        node.workflow_path = data.get("workflow_path", "")
+        node.on_error = data.get("on_error", "stop")
+        node.enabled = data.get("enabled", True)
+        node.position = data.get("position", {"x": 0, "y": 0})
+        node.type = NodeType.WORKFLOW
         return node
 
 
