@@ -37,7 +37,15 @@ class BusquedaPacienteAutomation:
     def __init__(self):
         self.app = None
         self.executor = None
+        self.executor = None
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Init Visual Feedback
+        try:
+            from rpa_framework.utils.visual_feedback import VisualFeedback
+            self.vf = VisualFeedback()
+        except:
+            self.vf = None
         
     def db_update_status(self, status='En Proceso', obs=None):
         """Actualiza el estado en la BD"""
@@ -145,15 +153,20 @@ class BusquedaPacienteAutomation:
         logger.info(f"🚀 Iniciando ejecución: {results['total_actions']} acciones")
         
         try:
-            # Acción 2: CLICK en PatientId
+            # Acción 2: CLICK en PatientId (Robusto)
             try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'mtbPatientId1'},
-                    position={'x': 368, 'y': 194},
-                    timestamp=datetime.fromisoformat("2026-01-02T07:36:53.452761")
-                )
-                self.executor.execute(action)
+                base_x, base_y = 368, 194
+                logger.info(f"Ejecutando clic robusto en PatientId ({base_x}, {base_y})")
+                
+                if self.vf: self.vf.highlight_click(base_x, base_y)
+                
+                pyautogui.moveTo(base_x, base_y, duration=0.2)
+                time.sleep(0.5) # Pausa sobre la coordenada
+                
+                pyautogui.mouseDown(base_x, base_y, button='left')
+                time.sleep(0.15)
+                pyautogui.mouseUp(base_x, base_y, button='left')
+                
                 results["completed"] += 1
                 logger.info(f"[2/5] ✅ click en PatientId")
             except Exception as e:
@@ -178,7 +191,13 @@ class BusquedaPacienteAutomation:
                     logger.info("Foco establecido por selector")
                 except Exception as e:
                     logger.warning(f"No se pudo encontrar mtbPatientId1 por selector, usando fallback a coordenadas (368, 194): {e}")
-                    pyautogui.click(368, 194)
+                    if self.vf: self.vf.highlight_click(368, 194)
+                    
+                    pyautogui.moveTo(368, 194, duration=0.2)
+                    time.sleep(0.5)
+                    pyautogui.mouseDown(368, 194, button='left')
+                    time.sleep(0.15)
+                    pyautogui.mouseUp(368, 194, button='left')
                 
                 time.sleep(1) 
                 
@@ -191,31 +210,49 @@ class BusquedaPacienteAutomation:
             except Exception as e:
                 self.fatal_error(f"Fallo al escribir ID de paciente: {e}")
 
-            # Acción 4: CLICK btnSearch
+            # Acción 4: CLICK btnSearch (Robusto)
             try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'btnSearch'},
-                    position={'x': 1702, 'y': 291},
-                    timestamp=datetime.fromisoformat("2026-01-02T07:37:04.786888")
-                )
-                self.executor.execute(action)
+                base_x, base_y = 1702, 291
+                logger.info(f"Ejecutando clic robusto en btnSearch ({base_x}, {base_y})")
+                
+                if self.vf: self.vf.highlight_click(base_x, base_y)
+                
+                pyautogui.moveTo(base_x, base_y, duration=0.2)
+                time.sleep(0.5)
+                
+                pyautogui.mouseDown(base_x, base_y, button='left')
+                time.sleep(0.15)
+                pyautogui.mouseUp(base_x, base_y, button='left')
+                
                 results["completed"] += 1
                 logger.info(f"[4/5] ✅ click Search")
             except Exception as e:
                 self.fatal_error(f"No se pudo hacer clic en botón Buscar: {e}")
 
-            # Acción 5: DOUBLE_CLICK (Simulado con 2 clicks directos)
+            # Acción 5: DOUBLE_CLICK Robusto
             try:
                 base_x, base_y = 1010, 368
-                logger.info(f"Realizando doble clic simulado en ({base_x}, {base_y})")
+                logger.info(f"Realizando doble clic robusto en ({base_x}, {base_y})")
                 
-                pyautogui.click(base_x, base_y)
+                if self.vf: self.vf.highlight_click(base_x, base_y)
+                
+                pyautogui.moveTo(base_x, base_y, duration=0.2)
+                time.sleep(0.5)
+                
+                # Clic 1
+                pyautogui.mouseDown(base_x, base_y, button='left')
                 time.sleep(0.1)
-                pyautogui.click(base_x, base_y)
+                pyautogui.mouseUp(base_x, base_y, button='left')
+                
+                time.sleep(0.1)
+                
+                # Clic 2
+                pyautogui.mouseDown(base_x, base_y, button='left')
+                time.sleep(0.1)
+                pyautogui.mouseUp(base_x, base_y, button='left')
                 
                 results["completed"] += 1
-                logger.info(f"[5/5] ✅ double_click (simulado)")
+                logger.info(f"[5/5] ✅ double_click (robusto)")
             except Exception as e:
                 self.fatal_error(f"No se pudo hacer doble clic en el paciente: {e}")
 

@@ -1,0 +1,181 @@
+import psutil
+import mysql.connector
+import sys
+import tkinter as tk
+from tkinter import font as tkfont
+import subprocess
+import os
+
+# Nombre de este nodo para el registro
+NODO_ACTUAL = "Verifica VPN"
+
+def db_update(estado, observacion=None):
+    """
+    Gestiona las actualizaciones en la base de datos ris.registro_acciones.
+    """
+    try:
+        conn = mysql.connector.connect(
+            host='localhost',
+            user='root',
+            password='',
+            database='ris',
+            connect_timeout=5
+        )
+        cursor = conn.cursor()
+        
+        if estado == 'En Proceso':
+            # Inicio del script: actualiza el nodo actual y el timestamp
+            query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
+            cursor.execute(query, (NODO_ACTUAL, estado))
+        elif estado == 'Error':
+            # Cierre por error: registra el estado y la observación corta
+            query = "UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE estado = 'En Proceso'"
+            # Limitamos la observación a un largo razonable
+            msg_corto = (observacion[:250] + '...') if observacion and len(observacion) > 250 else observacion
+            cursor.execute(query, (msg_corto,))
+            
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Advertencia: No se pudo actualizar la base de datos: {e}")
+
+def vpn_conectada_palo_alto():
+    """
+    Verifica si la VPN de Palo Alto está activa buscando una interfaz 
+    con IP en el rango 10.x.x.x que no sea APIPA.
+    """
+    try:
+        stats = psutil.net_if_stats()
+        addrs = psutil.net_if_addrs()
+        for iface, stat in stats.items():
+            if stat.isup and stat.speed > 0:  # UP y con velocidad
+                for addr_obj in addrs.get(iface, []):
+                    # Verificamos IPv4 y rango 10.
+                    if (addr_obj.family.name == 'AF_INET' and 
+                        addr_obj.address.startswith('10.') and 
+                        not addr_obj.address.startswith('169.254')):
+                        print(f"VPN detectada: {iface} UP con IP {addr_obj.address}")
+                        return True
+    except Exception as e:
+        print(f"Error verificando interfaces: {e}")
+        
+    print("No VPN detectada.")
+    return False
+
+def abrir_globalprotect():
+    """
+    Inicia la aplicación GlobalProtect de Palo Alto.
+    """
+    path = r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe"
+    if os.path.exists(path):
+        try:
+            subprocess.Popen([path])
+            print("Iniciando GlobalProtect...")
+        except Exception as e:
+            print(f"Error al abrir GlobalProtect: {e}")
+    else:
+        print("No se encontró PanGPA.exe")
+
+def mostrar_popup_vpn():
+    """
+    Muestra una ventana llamativa que pide al usuario conectar la VPN.
+    """
+    root = tk.Tk()
+    root.title("CONEXIÓN VPN REQUERIDA")
+    
+    # Hacer que la ventana aparezca al frente
+    root.attributes("-topmost", True)
+    
+    # Dimensiones y posición central
+    w, h = 500, 450
+    ws = root.winfo_screenwidth()
+    hs = root.winfo_screenheight()
+    x = (ws/2) - (w/2)
+    y = (hs/2) - (h/2)
+    root.geometry('%dx%d+%d+%d' % (w, h, x, y))
+    
+    root.configure(bg="#1a1a1a")  # Fondo oscuro elegante
+
+    # Fuentes
+    title_font = tkfont.Font(family="Segoe UI", size=20, weight="bold")
+    msg_font = tkfont.Font(family="Segoe UI", size=12)
+    btn_font = tkfont.Font(family="Segoe UI", size=11, weight="bold")
+
+    # Contenedor principal
+    frame = tk.Frame(root, bg="#1a1a1a", padx=30, pady=30)
+    frame.pack(expand=True, fill="both")
+
+    # Ícono/Título
+    lbl_icon = tk.Label(frame, text="🔒", font=("Segoe UI", 48), bg="#1a1a1a", fg="#e74c3c")
+    lbl_icon.pack()
+
+    lbl_titulo = tk.Label(frame, text="VPN DESCONECTADA", font=title_font, bg="#1a1a1a", fg="#ffffff")
+    lbl_titulo.pack(pady=(0, 10))
+
+    lbl_msg = tk.Label(frame, 
+                       text="El sistema está esperando a que inicie la VPN.\nPor favor, conéctese para continuar con el proceso.", 
+                       font=msg_font, bg="#1a1a1a", fg="#bdc3c7", justify="center")
+    lbl_msg.pack(pady=(0, 25))
+
+    # Botones con estilo
+    btn_gp = tk.Button(frame, text="🚀 RE-INICIAR GLOBALPROTECT", command=abrir_globalprotect,
+                      font=btn_font, bg="#3498db", fg="white", activebackground="#2980b9",
+                      relief="flat", cursor="hand2", width=25, pady=8)
+    btn_gp.pack(pady=5)
+
+    def check_done():
+        root.destroy()
+
+    btn_ok = tk.Button(frame, text="✅ YA ESTOY CONECTADO", command=check_done,
+                      font=btn_font, bg="#27ae60", fg="white", activebackground="#219150",
+                      relief="flat", cursor="hand2", width=25, pady=8)
+    btn_ok.pack(pady=5)
+
+    def cancelar():
+        msg = "El usuario canceló la espera de VPN."
+        print(msg)
+        # Gestionar error de negocio deteniendo el workflow
+        db_update('Error', observacion=msg)
+        root.destroy()
+        sys.exit(1)
+
+    btn_cancel = tk.Button(frame, text="❌ CANCELAR PROCESO", command=cancelar,
+                          font=btn_font, bg="#c0392b", fg="white", activebackground="#a93226",
+                          relief="flat", cursor="hand2", width=25, pady=8)
+    btn_cancel.pack(pady=5)
+
+    root.mainloop()
+
+def main():
+    try:
+        # 1. Al inicio debe existir siempre el UPDATE a 'En Proceso'
+        db_update('En Proceso')
+        
+        # 2. Lógica del script: Verificar VPN
+        # Usamos un loop para esperar hasta que la VPN esté activa
+        while not vpn_conectada_palo_alto():
+            # Siempre intentamos abrir el programa automáticamente si no hay conexión
+            abrir_globalprotect()
+            # Mostramos el popup para que el usuario sepa que estamos esperando
+            mostrar_popup_vpn()
+        
+        print("VPN OK. Procediendo...")
+        
+    except Exception as e:
+        # Flujo de Cierre para errores:
+        desc_falla = str(e)
+        
+        # A. Capturar la falla (except)
+        
+        # B. Realizar el UPDATE en la tabla ris.registro_acciones
+        db_update('Error', observacion=desc_falla)
+        
+        # C. Cerrar cualquier recurso abierto (en este script solo era la DB ya cerrada)
+        
+        # D. Notificar al motor de Workflows y salir
+        print(f"ERROR: {desc_falla}") # Esto aparecerá en el log de la UI
+        sys.exit(1) # Código 1 indica fallo y detiene el workflow
+
+if __name__ == "__main__":
+    main()

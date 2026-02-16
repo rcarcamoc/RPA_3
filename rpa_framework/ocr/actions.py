@@ -11,6 +11,11 @@ import cv2
 from .engine import OCREngine
 from .matcher import OCRMatcher
 
+try:
+    from utils.visual_feedback import VisualFeedback
+except ImportError:
+    VisualFeedback = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +46,8 @@ class OCRActions:
         self.delay = delay
         self.last_screenshot = None
         self.last_ocr_results = None
+        
+        self.vf = VisualFeedback() if VisualFeedback else None
         
         logger.info("OCRActions inicializado")
     
@@ -200,6 +207,9 @@ class OCRActions:
         
         # Hacer click
         try:
+            if self.vf:
+                self.vf.highlight_click(click_x, click_y)
+                
             pyautogui.click(
                 x=click_x,
                 y=click_y,
@@ -294,6 +304,9 @@ class OCRActions:
         
         # Triple-click para seleccionar
         try:
+            if self.vf:
+                self.vf.highlight_click(click_x, click_y)
+
             pyautogui.click(click_x, click_y, clicks=3, interval=0.1)
             time.sleep(self.delay)
             
@@ -394,6 +407,9 @@ class OCRActions:
         
         try:
             # Click en la posición
+            if self.vf:
+                self.vf.highlight_click(click_x, click_y)
+
             pyautogui.click(click_x, click_y)
             time.sleep(0.2)
             
@@ -458,6 +474,9 @@ class OCRActions:
         click_y = int(best_match['center']['y'] + offset_y)
         
         try:
+            if self.vf:
+                self.vf.highlight_click(click_x, click_y)
+
             pyautogui.moveTo(click_x, click_y)
             time.sleep(self.delay)
             
@@ -536,6 +555,19 @@ class OCRActions:
             logger.info(f"Screenshot guardado en: {filepath}")
         except Exception as e:
             logger.error(f"Error guardando screenshot: {e}")
+            raise
+
+    def save_processed_screenshot(self, filepath: str):
+        """Guardar screenshot procesado (preprocesado) como imagen"""
+        if not hasattr(self.ocr_engine, 'last_processed_image') or self.ocr_engine.last_processed_image is None:
+            logger.warning("No hay imagen procesada disponible, guardando original.")
+            return self.save_screenshot(filepath)
+        
+        try:
+            cv2.imwrite(filepath, self.ocr_engine.last_processed_image)
+            logger.info(f"Screenshot procesado guardado en: {filepath}")
+        except Exception as e:
+            logger.error(f"Error guardando screenshot procesado: {e}")
             raise
 
 

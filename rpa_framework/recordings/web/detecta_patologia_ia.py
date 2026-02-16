@@ -15,9 +15,14 @@ import re
 import requests
 import json
 import logging
+import os
+from dotenv import load_dotenv
 from rapidfuzz import fuzz, process
 from typing import Tuple, Optional, List
 from datetime import datetime
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar logging
 logging.basicConfig(
@@ -42,9 +47,13 @@ DB_CONFIG = {
 }
 
 # Configuración LLM (OpenRouter)
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    logger.error("OPENROUTER_API_KEY no está configurada en el archivo .env")
+    raise ValueError("OPENROUTER_API_KEY no está configurada")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL_ID = "tngtech/deepseek-r1t2-chimera:free"
+
 
 # Umbral de similitud fuzzy
 FUZZY_THRESHOLD = 70

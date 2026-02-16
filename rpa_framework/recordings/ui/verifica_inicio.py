@@ -16,7 +16,11 @@ from datetime import datetime
 import pyautogui
 from pywinauto import Desktop
 import pywinauto.findwindows as fw
+import subprocess
 import re
+
+# Variable de espera definida al inicio
+WAIT_TIMEOUT = 61
 
 # Agregar raíz del proyecto al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -83,44 +87,61 @@ class VerificaInicioAutomation:
         return False
 
     def run(self) -> dict:
-        """Busca el patrón de inicio en pantalla."""
-        logger.info(f"Iniciando verificacion de inicio (max 10 min, cada 10s)")
+        """Busca el patrón de inicio en pantalla con reintentos."""
+        logger.info(f"Iniciando verificacion de inicio (ciclo reintento: {WAIT_TIMEOUT}s)")
         logger.info(f"Imagen de referencia: {self.image_path}")
         
         # DB Tracking: Start
         self.db_update_status('En Proceso')
         
-        start_time = time.time()
-        found = False
-        elapsed = 0
+        total_start_time = time.time()
         
-        while elapsed < self.max_wait_seconds:
-            # Intentar poner Carestream RIS en primer plano antes de comparar
-            self.focus_carestream_ris()
+        while True:
+            start_time = time.time()
+            found = False
+            elapsed = 0
             
-            try:
-                # Intentar localizar la imagen en pantalla con el nivel de confianza solicitado
-                location = pyautogui.locateOnScreen(self.image_path, confidence=self.confidence_threshold)
+            logger.info("Iniciando ciclo de búsqueda de 61 segundos...")
+            
+            while elapsed < WAIT_TIMEOUT:
+                # Intentar poner Carestream RIS en primer plano antes de comparar
+                self.focus_carestream_ris()
                 
-                if location:
-                    logger.info("Pantalla de inicio detectada (similitud >= 70%)")
-                    found = True
-                    break
-                else:
-                    logger.info(f"Escaneando pantalla... ({elapsed}s trascurridos)")
+                try:
+                    # Intentar localizar la imagen en pantalla con el nivel de confianza solicitado
+                    location = pyautogui.locateOnScreen(self.image_path, confidence=self.confidence_threshold)
                     
-            except Exception:
-                # No mostramos error aqui porque usualmente es solo que la imagen no esta presente aun
-                logger.info(f"Escaneando pantalla... ({elapsed}s trascurridos)")
-            
-            time.sleep(self.interval_seconds)
-            elapsed = int(time.time() - start_time)
+                    if location:
+                        logger.info("Pantalla de inicio detectada (similitud >= 70%)")
+                        found = True
+                        break
+                    else:
+                        logger.info(f"Escaneando pantalla... ({elapsed}s trascurridos)")
+                        
+                except Exception:
+                    logger.info(f"Escaneando pantalla... ({elapsed}s trascurridos)")
+                
+                time.sleep(self.interval_seconds)
+                elapsed = int(time.time() - start_time)
 
-        if found:
-            return {"status": "SUCCESS", "message": "Inicio verificado"}
-        else:
-            logger.error("No se encontro la pantalla de inicio tras 10 minutos.")
-            return {"status": "FAILED", "reason": "Timeout: No se encontro la pantalla de inicio"}
+            if found:
+                return {"status": "SUCCESS", "message": "Inicio verificado"}
+            
+            # Si no se encontró en el ciclo de 61s, ejecutar login y reintentar
+            logger.warning(f"No se encontro la pantalla en {WAIT_TIMEOUT}s. Ejecutando ingresa_user_pacs.py...")
+            
+            login_script = Path(__file__).parent / "ingresa_user_pacs.py"
+            try:
+                # Ejecutamos el script de login y esperamos a que termine
+                subprocess.run([sys.executable, str(login_script)], check=False)
+                logger.info("Script de login ejecutado. Volviendo a comprobar inicio...")
+            except Exception as e:
+                logger.error(f"Error al ejecutar el script de login: {e}")
+            
+            # Verificamos si hemos excedido el tiempo total de seguridad (10 minutos)
+            if (time.time() - total_start_time) > self.max_wait_seconds:
+                logger.error(f"No se encontro la pantalla tras {self.max_wait_seconds/60} minutos de intentos fallidos.")
+                return {"status": "FAILED", "reason": "Timeout total: Fallo persistente tras multiples intentos"}
 
 def main():
     """Punto de entrada principal."""

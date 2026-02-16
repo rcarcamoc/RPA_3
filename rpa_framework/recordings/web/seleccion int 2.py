@@ -194,6 +194,39 @@ class WebAutomation:
              
         return element
     
+
+    def _visual_highlight(self, element):
+        """Intenta resaltar visualmente el elemento usando VisualFeedback"""
+        try:
+             # Lazy import
+            try:
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+            except ImportError:
+                return
+
+            # Calcular coordenadas de pantalla usando JS
+            screen_rect = self.driver.execute_script("""
+                var rect = arguments[0].getBoundingClientRect();
+                var borderLeft = (window.outerWidth - window.innerWidth) / 2;
+                var navHeight = window.outerHeight - window.innerHeight - borderLeft;
+                
+                return {
+                    x: rect.left + window.screenX + borderLeft,
+                    y: rect.top + window.screenY + navHeight,
+                    width: rect.width,
+                    height: rect.height
+                };
+            """, element)
+            
+            final_x = screen_rect['x'] + screen_rect['width']/2
+            final_y = screen_rect['y'] + screen_rect['height']/2
+             
+            vf.highlight_click(final_x, final_y)
+        except Exception as e:
+            pass
+
     def save_screenshot(self, base64_data: str, filename: str):
         """Saves a screenshot from base64"""
         if not base64_data or not HAS_PIL:
@@ -236,6 +269,7 @@ class WebAutomation:
             # Primary: CSS selector for the Select2 container link/button
             element = self.find_element(r"""//div[@id='s2id_filtro_cliente']/a""", r"""div#s2id_filtro_cliente > a""", clickable=True)
             if element:
+                self._visual_highlight(element)
                 element.click() 
                 time.sleep(1.0)
             else:
@@ -255,6 +289,7 @@ class WebAutomation:
             element = self.find_element(r"""//div[@id='select2-drop']//input[contains(@class,'select2-input')]""", r"""#select2-drop input.select2-input""", clickable=True)
             
             if element:
+                self._visual_highlight(element)
                 element.clear()
                 element.send_keys('integramedica')
                 time.sleep(1.5) # Wait for filtering
@@ -270,6 +305,7 @@ class WebAutomation:
             print('[ACTION] CLICK on: ')
             element = self.find_element(r"""//input[contains(@class, '__rpa-highlight')]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
             if element:
+                self._visual_highlight(element)
                 element.click()
                 time.sleep(0.1)
 
@@ -278,6 +314,7 @@ class WebAutomation:
             print('[ACTION] CLICK on:  Buscar estudios')
             element = self.find_element(r"""//*[@id='buscar']""", r"""button#buscar""", clickable=True)
             if element:
+                self._visual_highlight(element)
                 element.click()
                 time.sleep(0.5)
 

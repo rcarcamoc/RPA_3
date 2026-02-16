@@ -10,6 +10,7 @@ Descripción: Valida que la conexión a la base de datos MySQL 'ris' esté activ
 import sys
 import ctypes
 import os
+import time
 
 try:
     import mysql.connector
@@ -41,48 +42,48 @@ def launch_wamp():
         print(f"❌ No se encontró WampManager en: {wamp_path}")
 
 def check_connection():
-    connection = None
-    try:
-        # Parámetros tomados de rpa_framework/recordings/ocr/busqueda_triple_combinada.py
-        config = {
-            'host': 'localhost',
-            'user': 'root',
-            'password': '',
-            'database': 'ris'
-        }
-        
-        print(f"Intentando conectar a MySQL en {config['host']}...")
-        
-        connection = mysql.connector.connect(**config)
-        
-        if connection.is_connected():
-            db_info = connection.get_server_info()
-            print(f"Exito: Conexión activa a MySQL Server versión {db_info}")
-            print(f"Base de datos seleccionada: {config['database']}")
-            sys.exit(0) # Salida exitosa
+    """
+    Intenta conectar a MySQL. Si falla, inicia WAMP y reintenta cada 10 segundos
+    hasta que la conexión sea exitosa.
+    """
+    wamp_launched = False
+    config = {
+        'host': 'localhost',
+        'user': 'root',
+        'password': '',
+        'database': 'ris'
+    }
+    
+    while True:
+        connection = None
+        try:
+            print(f"[{time.strftime('%H:%M:%S')}] Intentando conectar a MySQL en {config['host']}...")
             
-    except Error as e:
-        print(f"Error: Falló la conexión a la base de datos.")
-        print(f"Detalle: {e}")
-        
-        # Acción de recuperación: Abrir WampManager
-        launch_wamp()
-        
-        sys.exit(1) # Salida con error (aunque intentamos recuperar, esta ejecución falló)
-        
-    except Exception as e:
-        print(f"Error: Ocurrió un error inesperado al comprobar la conexión.")
-        print(f"Detalle: {e}")
-        
-        # Intento de recuperación también aquí por sie s error de red local
-        launch_wamp()
-        
-        sys.exit(1) # Salida con error
-        
-    finally:
-        if connection and connection.is_connected():
-            connection.close()
-            print("Conexión cerrada.")
+            # Agregamos un timeout corto para la conexión para que no cuelgue demasiado
+            connection = mysql.connector.connect(**config, connect_timeout=5)
+            
+            if connection.is_connected():
+                db_info = connection.server_info
+                print(f"✓ Éxito: Conexión activa a MySQL Server versión {db_info}")
+                print(f"✓ Base de datos seleccionada: {config['database']}")
+                sys.exit(0) # Salida exitosa del script
+                
+        except (Error, Exception) as e:
+            print(f"⚠️ Falló la conexión a la base de datos.")
+            print(f"   Detalle: {e}")
+            
+            if not wamp_launched:
+                launch_wamp()
+                wamp_launched = True
+                print("⏳ Se ha solicitado el inicio de WAMP. Esperando que los servicios se activen...")
+            
+            print("⏳ Reintentando en 10 segundos...")
+            time.sleep(10)
+            
+        finally:
+            if connection and connection.is_connected():
+                connection.close()
 
 if __name__ == "__main__":
     check_connection()
+

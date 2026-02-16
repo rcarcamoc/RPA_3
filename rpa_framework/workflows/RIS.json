@@ -47,7 +47,7 @@
         "x": -608.0,
         "y": -6.0
       },
-      "script": "web\\busca_doctor.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\busca_doctor.py",
       "command": "",
       "output_variable": "",
       "command_type": "custom",
@@ -64,7 +64,7 @@
         "x": -574.0,
         "y": 106.0
       },
-      "script": "web\\derecta_patologia.py",
+      "script": "web\\detecta_patologia_ia.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -106,8 +106,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -604.0,
-        "y": -429.0
+        "x": -235.0,
+        "y": -367.0
       },
       "script": "sistema\\check_db_connection.py",
       "command": "",
@@ -126,6 +126,23 @@
         "x": -601.0,
         "y": -550.0
       }
+    },
+    {
+      "id": "n9_0",
+      "type": "action",
+      "label": "Verifica VPN",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -221.0,
+        "y": -515.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
     }
   ],
   "edges": [
@@ -155,6 +172,10 @@
     },
     {
       "from": "n8_0",
+      "to": "n9_0"
+    },
+    {
+      "from": "n9_0",
       "to": "2537e2dc"
     }
   ],
