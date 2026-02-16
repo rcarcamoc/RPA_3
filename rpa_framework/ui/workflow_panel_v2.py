@@ -31,7 +31,9 @@ class WorkflowPanelV2(QWidget):
         self.canvas.node_selected.connect(self.on_node_selected)
         self.canvas.connection_created.connect(self.on_connection_created)
         self.canvas.connection_deleted.connect(self.on_connection_deleted)
-        
+        # Connect drop signal to handler
+        self.canvas.node_dropped.connect(self.create_node_from_palette)
+         
         # For drag and drop creation -> Canvas needs to call parent
         # We'll monkey patch or ensure canvas calls 'create_node_from_palette'
         

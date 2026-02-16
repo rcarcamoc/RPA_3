@@ -14,8 +14,22 @@ import time
 import psutil
 import logging
 
+import logging
+import sys
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Visual Feedback Helper
+def get_vf():
+    try:
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+        from rpa_framework.utils.visual_feedback import VisualFeedback
+        return VisualFeedback()
+    except:
+        return None
+
+vf = get_vf()
 
 # =====================================================
 # CONFIGURACIÓN - TODOS los programas Carestream
@@ -118,7 +132,10 @@ def abrir_vue_pacs():
     logger.info("   CPU estabilizada")
 
     # DEBUG
-    time.sleep(3)
+    if vf:
+        vf.wait(3, "Debug Listar Ventanas...")
+    else:
+        time.sleep(3)
     debug_listar_ventanas()
 
     # Tomar ventana PRINCIPAL (soluciona las 2 ventanas)
@@ -138,7 +155,10 @@ def abrir_vue_pacs():
     except:
         logger.info("   No enabled (normal)")
 
-    time.sleep(5)
+    if vf:
+        vf.wait(5, "Finalizando apertura Vue PACS...")
+    else:
+        time.sleep(5)
     logger.info(f"LISTA: '{titulo_real}'")
     print(f"\nVue PACS listo!\nhwnd: {main_window.handle}")
     
@@ -151,7 +171,10 @@ def main():
     
     try:
         cerrar_todos_carestream()
-        time.sleep(3)  # Pausa para estabilidad
+        if vf:
+            vf.wait(3, "Pausa estabilidad...")
+        else:
+            time.sleep(3)  # Pausa para estabilidad
         
         return abrir_vue_pacs()
         

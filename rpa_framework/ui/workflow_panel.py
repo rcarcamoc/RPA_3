@@ -610,6 +610,7 @@ class WorkflowCanvas(QGraphicsView):
     connection_created = pyqtSignal(str, str) # from_id, to_id
     connection_deleted = pyqtSignal(str, str) # from_id, to_id
     edge_split_requested = pyqtSignal(object, str, str) # node_item, from_id, to_id
+    node_dropped = pyqtSignal(object, object) # node_def, pos
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -929,7 +930,12 @@ class WorkflowCanvas(QGraphicsView):
         # Pero WorkflowCanvas no tiene señal definida para esto aun, vamos a usar una referencia al padre o emitir
         # Hack: self.parentWidget() es el layout container, seguimos subiendo
         
-        # Mejor opcion: Agregar nueva señal a WorkflowCanvas
+        # Emitir señal de drop
+        if self.receivers(self.node_dropped) > 0:
+            self.node_dropped.emit(node_def, pos)
+            return
+
+        # Fallback: Buscar padre manualmente (para compatibilidad legacy)
         parent = self.parentWidget()
         while parent and not hasattr(parent, 'create_node_from_palette'):
             parent = parent.parentWidget()

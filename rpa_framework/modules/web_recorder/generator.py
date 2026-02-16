@@ -226,6 +226,57 @@ class WebAutomation:
              
         return element
     
+    def _visual_highlight(self, element):
+        """Intenta resaltar visualmente el elemento usando VisualFeedback"""
+        try:
+             # Lazy import relative to script location
+            try:
+                # Add project root to path if not present (assuming script is 3 levels deep)
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+            except ImportError:
+                return
+
+            # Calcular coordenadas de pantalla usando JS
+            screen_rect = self.driver.execute_script("""
+                var rect = arguments[0].getBoundingClientRect();
+                var borderLeft = (window.outerWidth - window.innerWidth) / 2;
+                var navHeight = window.outerHeight - window.innerHeight - borderLeft;
+                
+                return {
+                    x: rect.left + window.screenX + borderLeft,
+                    y: rect.top + window.screenY + navHeight,
+                    width: rect.width,
+                    height: rect.height
+                };
+            """, element)
+            
+            final_x = screen_rect['x'] + screen_rect['width']/2
+            final_y = screen_rect['y'] + screen_rect['height']/2
+             
+            vf.highlight_click(final_x, final_y)
+        except Exception:
+            pass
+            
+    def _visual_wait(self, seconds, message="Esperando..."):
+        """Espera con feedback visual si el tiempo es considerable"""
+        if seconds < 2.0:
+            time.sleep(seconds)
+            return
+            
+        try:
+             # Lazy import
+            try:
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+                vf.wait(seconds, message)
+            except ImportError:
+                time.sleep(seconds)
+        except Exception:
+            time.sleep(seconds)
+
     def save_screenshot(self, base64_data: str, filename: str):
         """Saves a screenshot from base64"""
         if not base64_data or not HAS_PIL:
@@ -373,6 +424,7 @@ if __name__ == "__main__":
         code += f"            # 1. Open Dropdown\n"
         code += f'            element = self.find_element(r"""{opener_xpath}""", r"""{opener_css}""", clickable=True)\n'
         code += "            if element:\n"
+        code += "                self._visual_highlight(element)\n"
         code += "                element.click()\n"
         code += "                time.sleep(1.0)\n"
         code += "            else:\n"
@@ -389,6 +441,7 @@ if __name__ == "__main__":
         code += "\n            # 3. Search & Enter\n"
         code += '            element = self.find_element(r"""//div[@id=\'select2-drop\']//input[contains(@class,\'select2-input\')]""", r"""#select2-drop input.select2-input""", clickable=True)\n'
         code += "            if element:\n"
+        code += "                self._visual_highlight(element)\n"
         code += "                element.clear()\n"
         code += f"                element.send_keys(r'{value}')\n"
         code += "                time.sleep(1.5) # Wait for filtering\n"
@@ -413,7 +466,7 @@ if __name__ == "__main__":
             if action.action_type == 'page_load':
                 code += f"            print('[ACTION] Loading page: {action.url}')\n"
                 code += f"            self.driver.get('{action.url}')\n"
-                code += "            time.sleep(2)\n"
+                code += "            self._visual_wait(2.0, 'Cargando página')\n"
             
             elif action.action_type in ['click', 'dblclick', 'contextmenu']:
                 xpath = action.element_info.xpath
@@ -430,8 +483,9 @@ if __name__ == "__main__":
                     # Pass both xpath and css for fallback, and ensure clickable
                     code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
                     code += "            if element:\n"
-                    # code += "                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)\n"
-                    # code += "                time.sleep(1.0)\n"
+                    code += "                # self.driver.execute_script('arguments[0].scrollIntoView(true);', element)\n"
+                    code += "                self._visual_highlight(element)\n"
+                    code += "                time.sleep(0.5)\n"
                     
                     if action.action_type == 'click':
                         # Prefer standard click for better event triggering, fallback to JS if needed?
@@ -452,6 +506,7 @@ if __name__ == "__main__":
                     code += f"            print('[ACTION] Typing text')\n"
                     code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
                     code += "            if element:\n"
+                    code += "                self._visual_highlight(element)\n"
                     code += "                element.clear()\n"
                     code += f"                element.send_keys(r'{value}')\n"
                     code += "                time.sleep(1.0)\n"
@@ -464,6 +519,7 @@ if __name__ == "__main__":
                     code += f"            print('[ACTION] Selecting option')\n"
                     code += f'            element = self.find_element(r"""{xpath}""", r"""{css}""", clickable=True)\n'
                     code += "            if element:\n"
+                    code += "                self._visual_highlight(element)\n"
                     code += f"                Select(element).select_by_value(r'{value}')\n"
                     code += "                time.sleep(1.0)\n"
 

@@ -7,6 +7,14 @@ from typing import List, Dict, Union, Optional
 import logging
 import os
 from pathlib import Path
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+# Importar utilidades de preprocesamiento
+try:
+    from recordings.ocr.utilidades.preproceso_ocr import preprocess_high_fidelity
+    HAS_PREPROCESS_UTILS = True
+except ImportError:
+    HAS_PREPROCESS_UTILS = False
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +30,13 @@ class OCREngine:
     
     def __init__(
         self,
-        engine: str = 'easyocr',
-        language: str = 'es',
+        engine: str = 'tesseract',
+        language: str = 'spa',
         confidence_threshold: float = 0.5,
         use_gpu: bool = False,
-        model_storage_dir: Optional[str] = None
+        model_storage_dir: Optional[str] = None,
+        custom_config: str = '',
+        preprocess: bool = False
     ):
         """
         Inicializar motor OCR.
@@ -42,7 +52,11 @@ class OCREngine:
         self.language = language
         self.confidence_threshold = confidence_threshold
         self.use_gpu = use_gpu
+        self.custom_config = custom_config
+        self.preprocess = preprocess
         self.reader = None
+        self.last_processed_image = None
+        self.scale_factor = 1.0  # Factor de escala aplicado en preprocesamiento
         
         logger.info(f"Inicializando OCR Engine: {engine} (idioma: {language})")
         
@@ -140,7 +154,7 @@ class OCREngine:
             logger.error(f"Error en extracción OCR ({self.engine}): {e}")
             raise
 
-    def _resize_if_needed(self, image: np.ndarray, max_dimension: int = 4096) -> np.ndarray:
+    def _resize_if_needed(self, image: np.ndarray, max_dimension: int = 6000) -> np.ndarray:
         """
         Redimensiona la imagen si excede las dimensiones máximas.
         Ayuda a reducir el consumo de memoria y mejorar la velocidad.
@@ -198,22 +212,52 @@ class OCREngine:
     
     def _extract_tesseract(self, image: np.ndarray, detail: bool) -> List[Dict]:
         """Extracción con Tesseract"""
-        # Convertir BGR a RGB
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Validar si la imagen ya es escala de grises o binaria
+        if len(image.shape) == 2:
+            image_rgb = image # Ya es 1 canal (Grises/BW)
+        else:
+            # Convertir BGR a RGB solo si tiene 3 canales
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Aplicar nuevo preprocesamiento si está activado
+        if self.preprocess:
+             pil_img = Image.fromarray(image_rgb)
+             pil_img = self._preprocess_image_pil(pil_img)
+             image_to_process = pil_img
+             
+             # Convertir a numpy BGR para guardar como debug
+             processed_np = np.array(pil_img)
+             if len(processed_np.shape) == 2:  # Escala de grises
+                 self.last_processed_image = cv2.cvtColor(processed_np, cv2.COLOR_GRAY2BGR)
+             else:
+                 self.last_processed_image = cv2.cvtColor(processed_np, cv2.COLOR_RGB2BGR)
+        else:
+             image_to_process = image_rgb
+             # Si no hay preprocesamiento, la imagen procesada es la original (asegurar BGR para consistencia)
+             if len(image.shape) == 2:
+                 self.last_processed_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+             elif image.shape[2] == 3:
+                 self.last_processed_image = image
+             else:
+                 self.last_processed_image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR) if image.shape[2] == 4 else image
         
         # Usar pytesseract con output_type
         try:
             from pytesseract import Output
             data = pytesseract.image_to_data(
-                image_rgb,
+                image_to_process,
                 lang=self.language,
-                output_type=Output.DICT
+                output_type=Output.DICT,
+                config=self.custom_config
             )
         except:
             # Fallback para versiones antiguas
-            data = pytesseract.image_to_data(image_rgb, lang=self.language)
+            data = pytesseract.image_to_data(image_to_process, lang=self.language, config=self.custom_config)
         
         text_data = []
+        # Obtener factor de escala si se aplicó preprocesamiento
+        scale = self.scale_factor if self.preprocess else 1.0
+        
         for i in range(len(data['text'])):
             text = data['text'][i].strip()
             
@@ -227,10 +271,17 @@ class OCREngine:
             if confidence < self.confidence_threshold:
                 continue
             
-            x = int(data['left'][i])
-            y = int(data['top'][i])
-            w = int(data['width'][i])
-            h = int(data['height'][i])
+            # Coordenadas en imagen escalada
+            x_scaled = int(data['left'][i])
+            y_scaled = int(data['top'][i])
+            w_scaled = int(data['width'][i])
+            h_scaled = int(data['height'][i])
+            
+            # Normalizar coordenadas a imagen original
+            x = x_scaled / scale
+            y = y_scaled / scale
+            w = w_scaled / scale
+            h = h_scaled / scale
             
             text_info = {
                 'text': text,
@@ -259,7 +310,7 @@ class OCREngine:
     
     def _preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Preprocesar imagen para mejorar OCR.
+        Preprocesar imagen para mejorar OCR (CV2).
         
         Aplicable cuando la calidad es baja.
         """
@@ -279,6 +330,45 @@ class OCREngine:
         #                                   cv2.THRESH_BINARY, 11, 2)
         
         return enhanced
+
+    def _preprocess_image_pil(self, img: Image.Image) -> Image.Image:
+        """
+        Preprocesar imagen usando el módulo de utilidades.
+        Wrapper para mantener compatibilidad.
+        """
+        if HAS_PREPROCESS_UTILS:
+            # Usar el módulo optimizado
+            processed, scale = preprocess_high_fidelity(img, scale_factor=3, threshold_floor=100)
+            self.scale_factor = scale
+            return processed
+        else:
+            # Fallback: implementación interna básica
+            logger.warning("Módulo preproceso_ocr no disponible, usando fallback básico")
+            return self._preprocess_image_pil_fallback(img)
+    
+    def _preprocess_image_pil_fallback(self, img: Image.Image) -> Image.Image:
+        """
+        Preprocesamiento básico de fallback.
+        """
+        # Convertir PIL (RGB) a Numpy (RGB)
+        img_np = np.array(img)
+        
+        # Escalar 3x
+        scale = 3
+        self.scale_factor = scale
+        upscaled = cv2.resize(img_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+        
+        # Convertir a Grises
+        gray = cv2.cvtColor(upscaled, cv2.COLOR_RGB2GRAY)
+        
+        # Binarización
+        _, thresh_base = cv2.threshold(gray, 100, 255, cv2.THRESH_TOZERO)
+        _, final_binary = cv2.threshold(thresh_base, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Inversión
+        final_bw = cv2.bitwise_not(final_binary)
+        
+        return Image.fromarray(final_bw)
     
     def extract_language(self, image: Union[str, np.ndarray]) -> str:
         """Detectar idioma predominante en imagen (solo EasyOCR)"""

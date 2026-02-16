@@ -152,6 +152,41 @@ class BuscadorDoctorSelenium:
             logger.error(f"✗ Error al extraer dato: {e}")
             raise
 
+        except Exception as e:
+            logger.error(f"✗ Error al intentar hacer click en el doctor: {e}")
+            return False
+
+    def _visual_highlight(self, element):
+        """Intenta resaltar visualmente el elemento usando VisualFeedback"""
+        try:
+             # Lazy import
+            try:
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+            except ImportError:
+                return
+
+            # Calcular coordenadas de pantalla usando JS (aproximación)
+            screen_rect = self.driver.execute_script("""
+                var rect = arguments[0].getBoundingClientRect();
+                var borderLeft = (window.outerWidth - window.innerWidth) / 2;
+                var navHeight = window.outerHeight - window.innerHeight - borderLeft;
+                return {
+                    x: rect.left + window.screenX + borderLeft,
+                    y: rect.top + window.screenY + navHeight,
+                    width: rect.width,
+                    height: rect.height
+                };
+            """, element)
+            
+            final_x = screen_rect['x'] + screen_rect['width']/2
+            final_y = screen_rect['y'] + screen_rect['height']/2
+             
+            vf.highlight_click(final_x, final_y)
+        except Exception:
+            pass
+
     def click_vinculo_doctor(self) -> bool:
         """
         Busca el primer vínculo de doctor (patrón 'Folio / Nombre') en la tabla y le hace click.
@@ -181,6 +216,8 @@ class BuscadorDoctorSelenium:
                             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
                             time.sleep(0.5)
                             
+                            self._visual_highlight(link)
+                            
                             # Intentar click estándar
                             link.click()
                             time.sleep(1.0) # Esperar a que reaccione la página
@@ -189,6 +226,7 @@ class BuscadorDoctorSelenium:
                             logger.warning(f"Click estándar falló, intentando JS: {e}")
                             try:
                                 link = cells[1].find_element(By.TAG_NAME, "a")
+                                self._visual_highlight(link)
                                 self.driver.execute_script("arguments[0].click();", link)
                                 time.sleep(1.0)
                                 return True

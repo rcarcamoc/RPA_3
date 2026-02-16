@@ -9,6 +9,7 @@ def execute_ocr_click_0():
     y hace click en su ubicación.
     """
     import sys
+    import time
     import os
     # Add framework root to path to allow importing 'ocr'
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -57,12 +58,42 @@ def execute_ocr_click_0():
         # Inicializar acciones
         actions = OCRActions(engine, matcher, delay=0.3)
         
-        # Ejecutar acción configurando la región de búsqueda
-        result = actions.click_on_text(
-            search_term='búsqueda de pacientes',
+        # Buscar texto para clic robusto
+        matches = actions.capture_and_find(
+            search_term='búsqueda',
             fuzzy=True,
             region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
         )
+        
+        if matches:
+            best = matches[0]
+            click_x = int(best['center']['x'])
+            click_y = int(best['center']['y'])
+            
+            # Highlight visual
+            try:
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+                vf.highlight_click(click_x, click_y)
+            except: pass
+            
+            # Simular clic robusto (mouseDown + wait + mouseUp)
+            import pyautogui
+            pyautogui.moveTo(click_x, click_y, duration=0.2)
+            time.sleep(0.5) # Pausa solicitada sobre la coordenada
+            pyautogui.mouseDown(click_x, click_y, button='left')
+            time.sleep(0.15)
+            pyautogui.mouseUp(click_x, click_y, button='left')
+            time.sleep(0.3)
+            
+            result = {
+                'action': 'click',
+                'status': 'success',
+                'text_found': best['text'],
+                'position': {'x': click_x, 'y': click_y}
+            }
+        else:
+            result = {'status': 'error', 'error': 'No se encontró el texto'}
         
         # Verificar si se encontró y cliqueó con éxito
         if not result or result.get('status') != 'success':

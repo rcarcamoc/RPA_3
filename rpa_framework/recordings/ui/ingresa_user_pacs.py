@@ -9,6 +9,7 @@ Total de acciones: 6
 import sys
 import time
 import logging
+import random
 from pathlib import Path
 from datetime import datetime
 
@@ -149,10 +150,12 @@ class IngresaUserPacsAutomation:
         try:
             # Acción 1: CLICK Username
             try:
+                # Mover cursor a la ubicación antes del clic
+                pyautogui.moveTo(980, 435, duration=0.5)
                 action = Action(
-                    type=ActionType.CLICK,
+                    type=ActionType.DOUBLE_CLICK,
                     selector={'automation_id': 'txtUsername'},
-                    position={'x': 981, 'y': 430},
+                    position={'x': 980, 'y': 435},
                     timestamp=datetime.fromisoformat("2026-01-02T06:52:04.414338")
                 )
                 self.executor.execute(action)
@@ -172,17 +175,18 @@ class IngresaUserPacsAutomation:
                 logger.error(f"[1-2] Error ingresando usuario: {e}")
 
             # Acción 3: CLICK Password
+            
             try:
+                # Acción 3: KEY_PRESS TAB
                 action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'txtPassword'},
-                    position={'x': 985, 'y': 473},
-                    timestamp=datetime.fromisoformat("2026-01-02T06:52:13.702181")
+                    type=ActionType.KEY_PRESS,
+                    key_code="TAB",
+                    timestamp=datetime.fromisoformat("2026-02-11T13:49:58.955496")
                 )
                 self.executor.execute(action)
                 results["completed"] += 1
-                logger.info("[3/6] click (txtPassword)")
-                time.sleep(1)
+                logger.info("[3/6] TAB para pasar a password")
+                time.sleep(0.5)
                 
                 # Acción 4: TYPE_TEXT (Estrategia Directa)
                 logger.info("Escribiendo password...")
@@ -195,37 +199,29 @@ class IngresaUserPacsAutomation:
                 results["errors"].append({"action_idx": 3, "type": "input_pass", "reason": str(e)})
                 logger.error(f"[3-4] Error ingresando password: {e}")
 
-            # Acción 5: CLICK Login
+            # Acción 5: CLICK Login Robusto
             try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'btnLogin'},
-                    position={'x': 1005, 'y': 572},
-                    timestamp=datetime.fromisoformat("2026-01-02T06:52:21.553766")
-                )
-                self.executor.execute(action)
+                base_x, base_y = 980, 572
+                logger.info(f"Ejecutando clic robusto en ({base_x}, {base_y})")
+                
+                # Asegurar foco moviendo el mouse primero (humanizado)
+                pyautogui.moveTo(base_x, base_y, duration=0.5)
+                
+                # Simular clic humano: Presionar, esperar 150ms, soltar
+                pyautogui.mouseDown(base_x, base_y, button='left')
+                time.sleep(0.15) 
+                pyautogui.mouseUp(base_x, base_y, button='left')
+                
                 results["completed"] += 1
-                logger.info("[5/6] click")
+                logger.info("[5/6] clic robusto completado")
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 5, "type": "click", "reason": str(e)})
-                logger.error(f"[5/6] click: {e}")
+                logger.error(f"[5/6] clic: {e}")
 
-            # Acción 6: CLICK Final
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'position': {'x': 415, 'y': 315}},
-                    position={'x': 415, 'y': 315},
-                    timestamp=datetime.fromisoformat("2026-01-02T06:52:26.366618")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info("[6/6] click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 6, "type": "click", "reason": str(e)})
-                logger.error(f"[6/6] click: {e}")
+            # Espera para permitir la transición de ventana
+            time.sleep(1)
+
 
             
             results["status"] = "SUCCESS" if results["failed"] == 0 else "PARTIAL"

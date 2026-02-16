@@ -10,8 +10,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -424.0,
-        "y": -606.0
+        "x": -635.0,
+        "y": -624.0
       }
     },
     {
@@ -92,7 +92,7 @@
         "x": -425.0,
         "y": -89.0
       },
-      "script": "ocr\\ocr_click_0.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ocr\\busca_busqueda de pacientes.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -109,7 +109,7 @@
         "x": -423.0,
         "y": 2.0
       },
-      "script": "ui\\busqueda_paciente.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\busqueda_paciente.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -166,13 +166,26 @@
       "command_type": "",
       "program_path": "",
       "process_name": ""
+    },
+    {
+      "id": "n11_0",
+      "type": "action",
+      "label": "comprueba vpn",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -390.0,
+        "y": -630.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
     }
   ],
   "edges": [
-    {
-      "from": "n1_0",
-      "to": "n2_0"
-    },
     {
       "from": "n2_0",
       "to": "n3_0"
@@ -204,6 +217,14 @@
     {
       "from": "n9_0",
       "to": "n10_0"
+    },
+    {
+      "from": "n1_0",
+      "to": "n11_0"
+    },
+    {
+      "from": "n11_0",
+      "to": "n2_0"
     }
   ],
   "variables": {}

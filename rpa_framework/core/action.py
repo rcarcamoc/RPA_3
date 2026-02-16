@@ -10,6 +10,7 @@ class ActionType(str, Enum):
     TYPE_TEXT = "type"
     KEY_PRESS = "key"
     KEY_COMBINATION = "key_combination"
+    MOVE = "move"
     WAIT = "wait"
     VALIDATE = "validate"
 

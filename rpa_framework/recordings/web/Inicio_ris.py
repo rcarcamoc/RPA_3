@@ -235,6 +235,41 @@ class WebAutomation:
              
         return element
     
+    
+    def _visual_highlight(self, element):
+        """Intenta resaltar visualmente el elemento usando VisualFeedback"""
+        try:
+             # Lazy import
+            try:
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                vf = VisualFeedback()
+            except ImportError:
+                return
+
+            # Calcular coordenadas de pantalla usando JS
+            # Asumimos Chrome/Edge
+            screen_rect = self.driver.execute_script("""
+                var rect = arguments[0].getBoundingClientRect();
+                var borderLeft = (window.outerWidth - window.innerWidth) / 2; // Estimado
+                var navHeight = window.outerHeight - window.innerHeight - borderLeft; // Estimado
+                
+                return {
+                    x: rect.left + window.screenX + borderLeft,
+                    y: rect.top + window.screenY + navHeight,
+                    width: rect.width,
+                    height: rect.height
+                };
+            """, element)
+            
+            final_x = screen_rect['x'] + screen_rect['width']/2
+            final_y = screen_rect['y'] + screen_rect['height']/2
+             
+            vf.highlight_click(final_x, final_y)
+        except Exception as e:
+            # print(f"[WARNING] Visual Highlight failed: {e}")
+            pass
+
     def save_screenshot(self, base64_data: str, filename: str):
         """Saves a screenshot from base64"""
         if not base64_data or not HAS_PIL:
@@ -344,6 +379,7 @@ class WebAutomation:
             element = self.find_element(r"""//*[@id='mostrar']""", r"""a#mostrar""", clickable=True)
             if element:
                 # Se utiliza click via JS para evitar que Selenium haga scroll automático al elemento
+                self._visual_highlight(element)
                 self.driver.execute_script('arguments[0].click();', element)
                 # Esperar a que el botón de búsqueda sea visible (máximo 15 segundos)
                 # Esto es más eficiente que un sleep fijo de 10 segundos

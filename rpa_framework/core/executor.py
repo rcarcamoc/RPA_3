@@ -43,8 +43,17 @@ class ActionExecutor:
         
         if action.wait_before > 0:
             logger.debug(f"Esperando {action.wait_before}s...")
+            # Usar VisualFeedback si es posible para countdown, si no, sleep normal
+            # Por ahora mantenemos sleep simple ya que el user pidió prioridad en CLICKS primero
             time.sleep(action.wait_before)
         
+        # Integración Visual Feedback Global
+        try:
+            from utils.visual_feedback import VisualFeedback
+            self.vf = VisualFeedback()
+        except:
+            self.vf = None
+
         if action.type == ActionType.CLICK:
             return self._execute_click(action)
         elif action.type == ActionType.DOUBLE_CLICK:
@@ -59,10 +68,14 @@ class ActionExecutor:
             return self._execute_wait(action)
         elif action.type == ActionType.VALIDATE:
             return self._execute_validate(action)
+        elif action.type == ActionType.MOVE:
+            return self._execute_move(action)
         else:
             logger.warning(f"Tipo desconocido: {action.type}")
             return False
     
+    # _highlight_click REMOVIDO - Se usa utils.visual_feedback.VisualFeedback
+
     def _execute_click(self, action: Action) -> bool:
         """Click con fallback."""
         max_retries = self.config.get("click_retries", 2)
@@ -77,11 +90,21 @@ class ActionExecutor:
                         app_context=action.app_context
                     )
                     logger.info(f"Click [{attempt}/{max_retries}] por selector")
+                    
+                    # Highlight selector center
+                    try:
+                        rect = element.rectangle()
+                        cx, cy = rect.mid_point()
+                        if self.vf: self.vf.highlight_click(cx, cy)
+                    except Exception as e:
+                        logger.debug(f"Error visual highlight: {e}")
+                        
                     element.click_input() # Use click_input consistently for UIA
                 else:
                     logger.info(f"Click [{attempt}/{max_retries}] por coordenadas")
                     import pyautogui
                     x, y = action.position["x"], action.position["y"]
+                    if self.vf: self.vf.highlight_click(x, y)
                     pyautogui.click(x, y)
                 
                 logger.info(f"Click exitoso")
@@ -97,6 +120,7 @@ class ActionExecutor:
                     try:
                         import pyautogui
                         x, y = action.position["x"], action.position["y"]
+                        if self.vf: self.vf.highlight_click(x, y)
                         pyautogui.click(x, y)
                         return True
                     except Exception as ex:
@@ -122,11 +146,21 @@ class ActionExecutor:
                         app_context=action.app_context
                     )
                     logger.info(f"Double Click [{attempt}/{max_retries}] por selector")
+                    
+                    # Highlight selector center
+                    try:
+                        rect = element.rectangle()
+                        cx, cy = rect.mid_point()
+                        if self.vf: self.vf.highlight_click(cx, cy)
+                    except:
+                        pass
+
                     element.double_click_input() # pywinauto double click
                 else:
                     logger.info(f"Double Click [{attempt}/{max_retries}] por coordenadas")
                     import pyautogui
                     x, y = action.position["x"], action.position["y"]
+                    if self.vf: self.vf.highlight_click(x, y)
                     pyautogui.doubleClick(x, y)
                 
                 logger.info(f"Double Click exitoso")
@@ -140,6 +174,7 @@ class ActionExecutor:
                     try:
                         import pyautogui
                         x, y = action.position["x"], action.position["y"]
+                        if self.vf: self.vf.highlight_click(x, y)
                         pyautogui.doubleClick(x, y)
                         return True
                     except Exception as ex:
@@ -270,3 +305,15 @@ class ActionExecutor:
         """Validación."""
         logger.info(f"Validando: {action.validation_rule}")
         return True
+
+    def _execute_move(self, action: Action) -> bool:
+        """Mueve el puntero a la posición especificada."""
+        try:
+            import pyautogui
+            x, y = action.position["x"], action.position["y"]
+            logger.info(f"Moviendo puntero a ({x}, {y})")
+            pyautogui.moveTo(x, y, duration=0.5) # Duración pequeña para que se vea el movimiento
+            return True
+        except Exception as e:
+            logger.error(f"Error moviendo puntero: {e}")
+            return False
