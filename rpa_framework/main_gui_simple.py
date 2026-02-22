@@ -41,6 +41,7 @@ try:
     from ui.panels.ocr_panel import OCRPanel
     from ui.panels.web_record_panel import WebRecordPanel
     from ui.workflow_panel_v2 import WorkflowPanelV2
+    from ui.panels.debug_panel import DebugPanel
 
     
 except ImportError as e:
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(ReplayPanel(self.config), "Reproducir")
         tabs.addTab(OCRPanel(self), "OCR")
         tabs.addTab(WebRecordPanel(self.config), "Web Recorder")
+        tabs.addTab(DebugPanel(self.config), "🐛 Debug")
 
      
         

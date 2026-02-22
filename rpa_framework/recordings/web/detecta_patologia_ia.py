@@ -51,8 +51,16 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
     logger.error("OPENROUTER_API_KEY no está configurada en el archivo .env")
     raise ValueError("OPENROUTER_API_KEY no está configurada")
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-MODEL_ID = "tngtech/deepseek-r1t2-chimera:free"
+
+# Lista de modelos para fallback (siguiendo referencia)
+MODELS = [
+    "tngtech/deepseek-r1t2-chimera:free",
+    "openai/gpt-oss-120b:free",
+    "arcee-ai/trinity-large-preview:free",
+    "deepseek/deepseek-r1-0528:free"
+]
 
 
 # Umbral de similitud fuzzy
@@ -126,6 +134,7 @@ def cargar_datos(engine: sqlalchemy.Engine) -> Tuple[pd.DataFrame, list]:
 def consultar_llm_patologia(diagnostico: str, lista_patologias: List[str]) -> Optional[str]:
     """
     Consulta al LLM si el diagnóstico corresponde a alguna de las patologías listadas.
+    Implementa fallback entre varios modelos gratuitos si falla uno.
     """
     logger.info(f"🤖 Consultando LLM para diagnóstico: '{diagnostico[:50]}...'")
     
@@ -153,44 +162,63 @@ FORMATO DE RESPUESTA JSON:
 }}
 """
 
-    try:
-        response = requests.post(
-            f"{OPENROUTER_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://rpa-framework.local"
-            },
-            json={
-                "model": MODEL_ID,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
-                "max_tokens": 500,
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        content = result['choices'][0]['message'].get('content', '')
-        
-        # Extraer JSON
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            patologia = data.get('patologia_detectada')
+    for current_model in MODELS:
+        try:
+            logger.info(f"Intentando con modelo: {current_model}")
+            response = requests.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://rpa-framework.local"
+                },
+                json={
+                    "model": current_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": 800,
+                },
+                timeout=30
+            )
             
-            # Validar que la patología retornada esté en la lista original (seguridad)
-            if patologia and patologia in lista_patologias:
-                logger.info(f"✅ LLM detectó: {patologia}")
-                return patologia
-            elif patologia:
-                logger.warning(f"⚠️ LLM retornó '{patologia}' pero no coincide exactamente con la lista.")
-        
-        return None
+            if response.status_code == 404:
+                logger.warning(f"⚠️ Modelo {current_model} no encontrado (404). Probando siguiente...")
+                continue
+            elif response.status_code == 429:
+                logger.warning(f"⚠️ Límite de cuota alcanzado para {current_model} (429). Probando siguiente...")
+                continue
+                
+            response.raise_for_status()
+            result = response.json()
+            content = result['choices'][0]['message'].get('content', '')
+            
+            # Extraer JSON
+            match = re.search(r'\{.*\}', content, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                patologia = data.get('patologia_detectada')
+                
+                # Validar que la patología retornada esté en la lista original (seguridad)
+                if patologia and patologia in lista_patologias:
+                    logger.info(f"✅ LLM detectó: {patologia} (Modelo: {current_model})")
+                    return patologia
+                elif patologia:
+                    logger.warning(f"⚠️ LLM retornó '{patologia}' pero no coincide exactamente con la lista.")
+            
+            # Si el modelo respondió pero no detectó nada, no intentamos con otros modelos
+            # a menos que haya sido un error de parsing o similar. 
+            # En este caso, si patologia_detectada es null, asumimos que no hay match.
+            return None
 
-    except Exception as e:
-        logger.error(f"Error en consulta LLM: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"Error con modelo {current_model}: {e}")
+            if current_model == MODELS[-1]:
+                logger.error("Todos los modelos han fallado.")
+            else:
+                logger.info("Probando con el siguiente modelo de respaldo...")
+            continue
+            
+    return None
 
 # ============================================================================
 # LÓGICA DE DETECCIÓN

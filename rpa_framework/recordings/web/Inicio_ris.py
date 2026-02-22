@@ -397,6 +397,7 @@ class WebAutomation:
             print(f"[ERROR] Error during execution: {e}")
             # Update database for error
             self.db_finish(success=False)
+            sys.exit(1)
             # traceback.print_exc()
         finally:
             self._cleanup()

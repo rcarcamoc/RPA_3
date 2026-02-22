@@ -30,7 +30,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class PatologiaCritica,ConCierreOkAutomation:
+class PatologiaCriticaConCierreOkAutomation:
     """Automatización generada: patologia_critica,_con_cierre_ok"""
     
     def __init__(self):
@@ -58,7 +58,80 @@ class PatologiaCritica,ConCierreOkAutomation:
             logger.info(f"[DB] Tracking actualizado: {script_name} ({status})")
         except Exception as e:
             logger.warning(f"[DB Error] {e}")
+
+    def db_get_detected_patology(self):
+        """Obtiene la patología detectada de la BD para el registro en proceso."""
+        if not HAS_MYSQL:
+            return None
+        try:
+            conn = mysql.connector.connect(
+                host='localhost',
+                user='root',
+                password='',
+                database='ris'
+            )
+            cursor = conn.cursor()
+            query = "SELECT patologia_critica_detectada FROM registro_acciones WHERE estado = 'En Proceso' LIMIT 1"
+            cursor.execute(query)
+            result = cursor.fetchone()
+            conn.close()
+            if result and result[0]:
+                return result[0]
+            return None
+        except Exception as e:
+            logger.warning(f"[DB Get Error] {e}")
+            return None
+
+
+    def stop_with_error(self, message):
+        """Gestiona el error, actualiza la BD y detiene la ejecución de forma controlada."""
+        logger.error(f"❌ ERROR: {message}")
+        
+        # Actualización de Estado (SQL)
+        if HAS_MYSQL:
+            try:
+                conn = mysql.connector.connect(
+                    host='localhost',
+                    user='root',
+                    password='',
+                    database='ris'
+                )
+                cursor = conn.cursor()
+                # Query solicitado: UPDATE ris.registro_acciones SET estado = 'Error', observacion = ...
+                query = "UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE estado = 'En Proceso'"
+                cursor.execute(query, (message[:254],))
+                conn.commit()
+                conn.close()
+                logger.info(f"[DB] Estado de error actualizado: {message}")
+            except Exception as db_e:
+                logger.warning(f"[DB Error during stop_with_error] {db_e}")
+
+        # Cerrar cualquier recurso abierto (navegador, base de datos).
+        # (En este script los recursos se abren y cierran puntualmente)
+        
+        # Código de Salida (Python)
+        import sys
+        print(f"ERROR: {message}") # Esto aparecerá en el log de la UI
+        sys.exit(1) # Código 1 indica fallo y detiene el workflow
+
     
+    def _robust_execute(self, action: Action):
+        """Asegura el foco del elemento antes de ejecutar la acción (especialmente para clics)."""
+        if action.selector and action.type in [ActionType.CLICK, ActionType.DOUBLE_CLICK]:
+            try:
+                # Intentar encontrar el elemento para darle foco previo
+                element = self.executor.selector_helper.find_element(
+                    action.selector, 
+                    timeout=3
+                )
+                logger.debug(f"Forzando foco en elemento: {action.selector}")
+                element.set_focus()
+                time.sleep(0.3) # Pausa para que el programa legacy procese el foco
+            except Exception as e:
+                logger.debug(f"No se pudo dar foco previo (procediendo con ejecución normal): {e}")
+        
+        return self.executor.execute(action)
+
     def setup(self) -> bool:
         """Conecta a la aplicación objetivo."""
         logger.info("Configurando conexión a la aplicación...")
@@ -100,270 +173,170 @@ class PatologiaCritica,ConCierreOkAutomation:
         self.db_update_status('En Proceso')
         
         try:
-            # Acción 1: CLICK
+            # Acción 1: Cambiar a la ventana de Carestream RIS
             try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'Appid: {6D809377-6AF0-444B-8957-A3773F02200E}\\Carestream\\RIS\\Carestream RIS.exe'},
-                    position={'x': 955, 'y': 1061},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:36.573090")
-                )
-                self.executor.execute(action)
+                time.sleep(1)
+                logger.info("Buscando y enfocando la ventana de Carestream RIS...")
+                
+                # Estrategia de conexión robusta con reintentos
+                connected = False
+                for attempt in range(1, 4):
+                    try:
+                        logger.debug(f"Intento {attempt} de conexión a Carestream RIS...")
+                        # 1. Buscar por título para obtener un handle estable
+                        titulos = findwindows.find_elements(title_re=".*Carestream RIS V11.*", backend='uia')
+                        
+                        if titulos:
+                            logger.info(f"Ventana encontrada por título: {titulos[0].name}")
+                            self.app = Application(backend='uia').connect(handle=titulos[0].handle)
+                        else:
+                            # 2. Fallback a conectar por process path o title_re directo
+                            try:
+                                self.app = Application(backend='uia').connect(path="Carestream RIS.exe")
+                            except:
+                                self.app = Application(backend='uia').connect(title_re=".*Carestream RIS V11.*")
+                        
+                        # 3. Validar existencia y dar foco (específico en vez de top_window)
+                        main_window = self.app.window(title_re=".*Carestream RIS V11.*")
+                        if main_window.exists(timeout=5):
+                            main_window.set_focus()
+                            # A veces requiere un segundo intento o esperar un poco
+                            time.sleep(0.5)
+                            main_window.set_focus()
+                            connected = True
+                            break
+                        else:
+                            logger.warning(f"Intento {attempt}: La ventana no parece estar lista")
+                            
+                    except Exception as connect_e:
+                        logger.warning(f"Intento {attempt} fallido: {connect_e}")
+                        time.sleep(2) # Esperar antes de reintentar
+                
+                if not connected:
+                    # Fallback final: intentar top_window pero con captura de error
+                    try:
+                        logger.info("Intentando fallback final con top_window...")
+                        window = self.app.top_window()
+                        window.set_focus()
+                    except Exception as final_e:
+                        raise Exception(f"Fallo total al conectar con Carestream RIS: {final_e}")
+                
+                # Actualizar el executor con el nuevo contexto de aplicación
+                self.executor = ActionExecutor(self.app, {})
+                
                 results["completed"] += 1
-                logger.info(f"[1/16] ✅ click")
+                logger.info("[1/16] ✅ Ventana de Carestream RIS enfocada")
             except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 1, "type": "click", "reason": str(e)})
-                logger.error(f"[1/16] ❌ click: {e}")
+                self.stop_with_error(f"No se pudo encontrar o activar la ventana de Carestream RIS: {e}")
 
-            # Acción 2: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'tabControl1'},
-                    position={'x': 692, 'y': 84},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:39.561316")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[2/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 2, "type": "click", "reason": str(e)})
-                logger.error(f"[2/16] ❌ click: {e}")
+            # Acción 2: CLICK en resultado critico
+            # Mover antes de hacer clic
+            time.sleep(1)
+            self.executor.execute(Action(
+                type=ActionType.MOVE,
+                position={'x': 692, 'y': 84},
+                timestamp=datetime.now()
+            ))
+            action = Action(
+                type=ActionType.DOUBLE_CLICK,
+                selector={'automation_id': 'tabControl1'},
+                position={'x': 692, 'y': 84},
+                timestamp=datetime.fromisoformat("2026-01-14T15:10:39.561316")
+            )
+            self._robust_execute(action)
+            results["completed"] += 1
+            logger.info(f"[2/16] ✅ double_click")
 
-            # Acción 3: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'cbxClResultadocritico1'},
-                    position={'x': 233, 'y': 126},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:42.178933")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[3/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 3, "type": "click", "reason": str(e)})
-                logger.error(f"[3/16] ❌ click: {e}")
 
-            # Acción 4: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'name': 'Sí', 'control_type': 'ListItem'},
-                    position={'x': 201, 'y': 182},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:43.561504")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[4/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 4, "type": "click", "reason": str(e)})
-                logger.error(f"[4/16] ❌ click: {e}")
+            # Acción 3: CLICK en combobox resultado critico
+            # Mover antes de hacer clic
+            time.sleep(1)
+            self.executor.execute(Action(
+                type=ActionType.MOVE,
+                position={'x': 295, 'y': 123},
+                timestamp=datetime.now()
+            ))
+            action = Action(
+                type=ActionType.CLICK,
+                selector={'automation_id': 'cbxClResultadocritico1'},
+                position={'x': 295, 'y': 123},
+                timestamp=datetime.fromisoformat("2026-01-14T15:10:42.178933")
+            )
+            self._robust_execute(action)
+            results["completed"] += 1
+            logger.info(f"[3/16] ✅ click robusto")
 
-            # Acción 5: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'cbxClCodigodiagnostico1'},
-                    position={'x': 201, 'y': 184},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:44.998266")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[5/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 5, "type": "click", "reason": str(e)})
-                logger.error(f"[5/16] ❌ click: {e}")
+            # Acción 4: CLICK en si resultado critico
+            # Mover antes de hacer clic
+            time.sleep(1)
+            self.executor.execute(Action(
+                type=ActionType.MOVE,
+                
+                position={'x': 201, 'y': 182},
+                timestamp=datetime.now()
+            ))
+            action = Action(
+                type=ActionType.CLICK,
+                selector={'name': 'Sí', 'control_type': 'ListItem'},
+                position={'x': 201, 'y': 182},
+                timestamp=datetime.fromisoformat("2026-01-14T15:10:43.561504")
+            )
+            self._robust_execute(action)
+            results["completed"] += 1
+            logger.info(f"[4/16] ✅ click robusto")
+
+
+            # Acción 5: CLICK (ComboBox)
+            # Mover antes de hacer clic para asegurar foco
+            time.sleep(1)
+            self.executor.execute(Action(
+                type=ActionType.MOVE,
+                position={'x': 612, 'y': 185},
+                timestamp=datetime.now()
+            ))
+            action = Action(
+                type=ActionType.CLICK,
+                selector={'automation_id': 'cbxClCodigodiagnostico1'},
+                position={'x': 612, 'y': 185},
+                timestamp=datetime.fromisoformat("2026-01-14T15:10:44.998266")
+            )
+            self._robust_execute(action)
+            results["completed"] += 1
+            logger.info(f"[5/16] ✅ click robusto (ComboBox)")
+
 
             # Acción 6: TYPE_TEXT
-            try:
-                action = Action(
-                    type=ActionType.TYPE_TEXT,
-                    text='f',
-                    selector={'automation_id': 'cbxClCodigodiagnostico1'},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:49.226758")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[6/16] ✅ type_text")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 6, "type": "type_text", "reason": str(e)})
-                logger.error(f"[6/16] ❌ type_text: {e}")
-
-            # Acción 7: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'name': 'FRACTURA DE COLUMNA COMO PRIMER HALLAZGO', 'control_type': 'ListItem'},
-                    position={'x': 252, 'y': 215},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:10:53.821614")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[7/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 7, "type": "click", "reason": str(e)})
-                logger.error(f"[7/16] ❌ click: {e}")
-
-            # Acción 8: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'Appid: {6D809377-6AF0-444B-8957-A3773F02200E}\\Carestream\\PACS\\cshpacs\\mv_client\\mp.exe'},
-                    position={'x': 914, 'y': 1065},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:00.418500")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[8/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 8, "type": "click", "reason": str(e)})
-                logger.error(f"[8/16] ❌ click: {e}")
-
-            # Acción 9: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'name': 'scn_confirm', 'control_type': 'SplitButton'},
-                    position={'x': 42, 'y': 92},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:13.056271")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[9/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 9, "type": "click", "reason": str(e)})
-                logger.error(f"[9/16] ❌ click: {e}")
-
-            # Acción 10: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': 'Appid: {6D809377-6AF0-444B-8957-A3773F02200E}\\Carestream\\RIS\\Carestream RIS.exe'},
-                    position={'x': 961, 'y': 1061},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:24.182067")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[10/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 10, "type": "click", "reason": str(e)})
-                logger.error(f"[10/16] ❌ click: {e}")
-
-            # Acción 11: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': '45681940'},
-                    position={'x': 529, 'y': 62},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:30.336727")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[11/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 11, "type": "click", "reason": str(e)})
-                logger.error(f"[11/16] ❌ click: {e}")
-
-            # Acción 12: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': '45681940'},
-                    position={'x': 672, 'y': 60},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:31.595248")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[12/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 12, "type": "click", "reason": str(e)})
-                logger.error(f"[12/16] ❌ click: {e}")
-
-            # Acción 13: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': '[Editor] Edit Area'},
-                    position={'x': 570, 'y': 162},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:36.198004")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[13/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 13, "type": "click", "reason": str(e)})
-                logger.error(f"[13/16] ❌ click: {e}")
-
-            # Acción 14: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': '45681940'},
-                    position={'x': 523, 'y': 63},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:38.382372")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[14/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 14, "type": "click", "reason": str(e)})
-                logger.error(f"[14/16] ❌ click: {e}")
-
-            # Acción 15: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'automation_id': '45681940'},
-                    position={'x': 688, 'y': 59},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:39.975784")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[15/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 15, "type": "click", "reason": str(e)})
-                logger.error(f"[15/16] ❌ click: {e}")
-
-            # Acción 16: CLICK
-            try:
-                action = Action(
-                    type=ActionType.CLICK,
-                    selector={'position': {'x': 1807, 'y': 157}},
-                    position={'x': 1807, 'y': 157},
-                    timestamp=datetime.fromisoformat("2026-01-14T15:11:45.320354")
-                )
-                self.executor.execute(action)
-                results["completed"] += 1
-                logger.info(f"[16/16] ✅ click")
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({"action_idx": 16, "type": "click", "reason": str(e)})
-                logger.error(f"[16/16] ❌ click: {e}")
-
+            time.sleep(1)
             
-            results["status"] = "SUCCESS" if results["failed"] == 0 else "PARTIAL"
+            # Obtener el texto dinámico de la BD
+            patologia_detectada = self.db_get_detected_patology()
+            text_to_type = 'f' # Default fallback
+            if patologia_detectada:
+                text_to_type = patologia_detectada[0].lower()
+                logger.info(f"Usando primera letra de '{patologia_detectada}': '{text_to_type}'")
+            else:
+                logger.warning("No se pudo obtener patologia_critica_detectada de la BD, usando fallback 'f'")
+
+            action = Action(
+                type=ActionType.TYPE_TEXT,
+                text=text_to_type,
+                selector={'automation_id': 'cbxClCodigodiagnostico1'},
+                timestamp=datetime.fromisoformat("2026-01-14T15:10:49.226758")
+            )
+            self.executor.execute(action)
+            results["completed"] += 1
+            logger.info(f"[6/16] ✅ type_text ('{text_to_type}')")
+
+
+
+
+
+
+            results["status"] = "SUCCESS"
             
         except Exception as e:
-            logger.error(f"❌ Error crítico: {e}")
-            results["status"] = "FAILED"
-            results["errors"].append({"reason": str(e)})
-            self.db_update_status('error')
+            self.stop_with_error(str(e))
+
         
         results["end_time"] = datetime.now().isoformat()
         
@@ -381,7 +354,7 @@ def main():
     """Punto de entrada principal."""
     setup_logging()
     
-    automation = PatologiaCritica,ConCierreOkAutomation()
+    automation = PatologiaCriticaConCierreOkAutomation()
     results = automation.run()
     
     print("\n" + "="*50)
