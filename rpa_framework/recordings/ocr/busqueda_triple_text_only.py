@@ -672,6 +672,7 @@ RESPONDE SOLO EN FORMATO JSON:
         # 2. Combinación de teclas Ctrl+D
         pyautogui.hotkey('ctrl', 'd')
         logger.info("Combinación Ctrl+D ejecutada")
+        time.sleep(5)
 
 def main():
     setup_logging()

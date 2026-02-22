@@ -46,6 +46,7 @@ class WorkflowExecutor:
         self.logger = WorkflowLogger(log_path)
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
+        self.active_process = None
         
         self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
         self.logger.log(f"   Variables iniciales: {self.context}")
@@ -127,6 +128,15 @@ class WorkflowExecutor:
         """Detiene la ejecución del workflow"""
         self.should_stop = True
         self.logger.log("⏹️ Deteniendo workflow...")
+        if self.active_process:
+            try:
+                self.logger.log(f"   Matando proceso activo (PID: {self.active_process.pid})...")
+                self.active_process.terminate()
+                self.active_process.wait(timeout=3)
+                if self.active_process.poll() is None:
+                    self.active_process.kill()
+            except Exception as e:
+                self.logger.log(f"⚠️ Error al detener proceso: {e}")
     
     def _execute_node(self, node: Node) -> Optional[str]:
         """
@@ -179,11 +189,16 @@ class WorkflowExecutor:
              try:
                 # Preparar entorno
                 env = os.environ.copy()
+                # Ensure vars are strings
                 for key, value in self.context.items():
-                    env[f"VAR_{key}"] = str(value)
+                    try:
+                        env[f"VAR_{key}"] = str(value)
+                    except:
+                        pass
                 
                 # Ejecutar comando en Shell con Popen para streaming
-                process = subprocess.Popen(
+                # Usamos shell=True por compatibilidad con comandos complejos de Windows
+                self.active_process = subprocess.Popen(
                     node.command,
                     shell=True,
                     stdout=subprocess.PIPE,
@@ -192,35 +207,45 @@ class WorkflowExecutor:
                     encoding='utf-8',
                     env=env,
                     bufsize=1,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    errors='replace' # Reemplazar caracteres no válidos en lugar de crash
                 )
+                process = self.active_process
                 
                 # Leer salida en tiempo real
                 full_output = []
                 while True:
-                    line = process.stdout.readline()
-                    if not line and process.poll() is not None:
+                    try:
+                        line = process.stdout.readline()
+                        if not line and process.poll() is not None:
+                            break
+                        if line:
+                            clean_line = line.strip()
+                            if clean_line:
+                                self.logger.log(f"   [CMD] {clean_line}")
+                                full_output.append(clean_line)
+                    except Exception as pipe_e:
+                        self.logger.log(f"⚠️ Error leyendo salida del comando: {pipe_e}", "WARNING")
                         break
-                    if line:
-                        clean_line = line.strip()
-                        if clean_line:
-                            self.logger.log(f"   [CMD] {clean_line}")
-                            full_output.append(clean_line)
                 
-                returncode = process.poll()
+                returncode = process.wait(timeout=5) if process.poll() is not None else process.poll()
+                # If it's still running for some reason, we might need a timeout or poll again
+                if returncode is None:
+                    returncode = process.poll()
                 
                 if returncode == 0:
                      self.logger.log(f"✅ Comando ejecutado exitosamente")
                      # Guardar salida en variable si se especificó
                      if node.output_variable:
-                        output_str = "".join(full_output).strip()
+                        output_str = "\n".join(full_output).strip()
                         self.context[node.output_variable] = output_str
                         self.logger.log(f"   Salida guardada en '{node.output_variable}': {output_str[:50]}...")
                 else:
                      self.logger.log(f"❌ Error en comando (código {returncode})")
                      
                      try:
-                         enviar_alerta_todos(f"❌ <b>Error en Comando</b>\nNodo: {node.label}\nComando falló con código de salida: {returncode}")
+                         ultimo_error = "\n".join(full_output[-3:]) if full_output else "Sin salida devuelta."
+                         enviar_alerta_todos(f"❌ <b>Error en Comando</b>\nNodo: {node.label}\nComando falló con código {returncode}\nDetalle:\n<code>{ultimo_error}</code>")
                      except Exception as tel_e:
                          self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
                      
@@ -228,7 +253,7 @@ class WorkflowExecutor:
                          raise RuntimeError(f"Comando falló con código {returncode}")
                      
              except Exception as e:
-                 self.logger.log(f"❌ Error ejecutando comando: {e}")
+                 self.logger.log(f"❌ Excepción ejecutando comando: {e}")
                  try:
                      enviar_alerta_todos(f"❌ <b>Excepción en Comando</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
                  except Exception as tel_e:
@@ -313,7 +338,7 @@ class WorkflowExecutor:
             else:
                 exec_cwd = current_cwd
 
-            process = subprocess.Popen(
+            self.active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -324,6 +349,7 @@ class WorkflowExecutor:
                 bufsize=1,
                 universal_newlines=True
             )
+            process = self.active_process
             
             # Leer salida en tiempo real
             full_stdout = []

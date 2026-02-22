@@ -61,19 +61,26 @@ class WorkflowExecutorWorker(QThread):
             current_node_id = [None]  # Usamos lista para poder modificar en closure
             
             def patched_log(message, level="INFO"):
-                original_log(message, level)
-                self.log_update.emit(f"[{level}] {message}")
-                
-                # Detectar inicio de nodo
-                if "📍 Nodo actual:" in message:
-                    # Buscar el nodo por label
-                    for node in self.workflow.nodes:
-                        if f"Nodo actual: {node.label}" in message:
-                            if current_node_id[0]:
-                                self.node_finished.emit(current_node_id[0])
-                            current_node_id[0] = node.id
-                            self.node_started.emit(node.id)
-                            break
+                try:
+                    original_log(message, level)
+                    self.log_update.emit(f"[{level}] {message}")
+                    
+                    # Detectar inicio de nodo
+                    if "📍 Nodo actual:" in message:
+                        # Buscar el nodo por label
+                        for node in self.workflow.nodes:
+                            if f"Nodo actual: {node.label}" in message:
+                                if current_node_id[0]:
+                                    self.node_finished.emit(current_node_id[0])
+                                current_node_id[0] = node.id
+                                self.node_started.emit(node.id)
+                                break
+                except Exception as log_e:
+                    # Si falla el log parcheado, al menos intentamos el original
+                    try:
+                        original_log(f"Error en patched_log: {log_e}", "ERROR")
+                    except:
+                        pass
             
             self.executor.logger.log = patched_log
             

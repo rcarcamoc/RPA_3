@@ -26,6 +26,7 @@ WAIT_TIMEOUT = 61
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from utils.logging_setup import setup_logging
+from utils.telegram_manager import enviar_alerta_todos
 
 # Configuración de MySQL (opcional, siguiendo el estándar del proyecto)
 try:
@@ -155,6 +156,10 @@ def main():
         return 0
     else:
         print(f"Error: {results.get('reason', 'Desconocido')}")
+        try:
+            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: verifica_inicio</b>\\nNo se pudo detectar PACS:\\n<code>{results.get('reason', 'Desconocido')}</code>")
+        except:
+            pass
         return 1
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -635.0,
-        "y": -624.0
+        "x": -913.0,
+        "y": -630.0
       }
     },
     {
@@ -174,10 +174,27 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -390.0,
-        "y": -630.0
+        "x": -384.0,
+        "y": -625.0
       },
       "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n12_0",
+      "type": "action",
+      "label": "verifica open",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -616.0,
+        "y": -624.0
+      },
+      "script": "sistema\\verifica_openrouter.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -219,12 +236,16 @@
       "to": "n10_0"
     },
     {
-      "from": "n1_0",
-      "to": "n11_0"
-    },
-    {
       "from": "n11_0",
       "to": "n2_0"
+    },
+    {
+      "from": "n1_0",
+      "to": "n12_0"
+    },
+    {
+      "from": "n12_0",
+      "to": "n11_0"
     }
   ],
   "variables": {}

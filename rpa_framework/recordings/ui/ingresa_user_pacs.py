@@ -21,6 +21,7 @@ import pyautogui
 from core.executor import ActionExecutor
 from core.action import Action, ActionType
 from utils.logging_setup import setup_logging
+from utils.telegram_manager import enviar_alerta_todos
 
 # Configuración de MySQL (opcional)
 try:
@@ -257,7 +258,14 @@ def main():
     print(f"Fallidas: {results['failed']}")
     print("="*50)
     
-    return 0 if results["status"] == "SUCCESS" else 1
+    if results["status"] != "SUCCESS":
+        try:
+            errores = "\\n".join([f"- Acción {e.get('action_idx', '?')}: {e.get('reason', 'Error general')}" for e in results.get('errors', [])])
+            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: ingresa_user_pacs</b>\\nFallaron acciones durante el login:\\n<code>{errores}</code>")
+        except:
+            pass
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
