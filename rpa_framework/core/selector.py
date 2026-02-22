@@ -167,30 +167,36 @@ class WindowsSelector:
                 kwargs = {}
                 if "automation_id" in selector:
                     kwargs["auto_id"] = selector["automation_id"]
-                elif "name" in selector and "control_type" in selector:
+                
+                if "name" in selector:
                     kwargs["title"] = selector["name"]
+                
+                if "title_re" in selector:
+                    kwargs["title_re"] = selector["title_re"]
+                
+                if "control_type" in selector:
                     kwargs["control_type"] = selector["control_type"]
-                elif "class_name" in selector:
+                
+                if "class_name" in selector:
                     kwargs["class_name"] = selector["class_name"]
-                elif "position" in selector:
-                    # Posición es caso especial
+
+                # Lógica especial para posición
+                if "position" in selector:
                     pos_data = selector["position"]
                     if isinstance(pos_data, dict):
                          x = int(pos_data["x"])
                          y = int(pos_data["y"])
                     else:
-                         # Asumir tupla/lista
                          x, y = int(pos_data[0]), int(pos_data[1])
                          
                     from pywinauto import Desktop
                     element = Desktop(backend='uia').from_point(x, y)
-                    # wait visible might fail if element is virtual or under mouse
-                    # element.wait("visible", timeout=timeout) 
-                    # from_point returns element immediately. check if exists?
                     logger.info(f"Elemento encontrado por posición ({x}, {y})")
                     return element
-                else:
-                    raise ValueError(f"Selector no reconocido: {selector}")
+                
+                # Validar que tengamos al menos un criterio si no es por posición
+                if not kwargs:
+                    raise ValueError(f"Selector no reconocido o vacío: {selector}")
                 
                 # 3. Buscar elemento (child_window si tenemos parent específico, o window si es root)
                 if parent != self.root:

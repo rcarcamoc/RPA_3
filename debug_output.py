@@ -1,3 +1,4 @@
+# HOOK BLOCK MOCK
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
@@ -115,23 +116,6 @@ class PatologiaCriticaConCierreOkAutomation:
         sys.exit(1) # Código 1 indica fallo y detiene el workflow
 
     
-    def _robust_execute(self, action: Action):
-        """Asegura el foco del elemento antes de ejecutar la acción (especialmente para clics)."""
-        if action.selector and action.type in [ActionType.CLICK, ActionType.DOUBLE_CLICK]:
-            try:
-                # Intentar encontrar el elemento para darle foco previo
-                element = self.executor.selector_helper.find_element(
-                    action.selector, 
-                    timeout=3
-                )
-                logger.debug(f"Forzando foco en elemento: {action.selector}")
-                element.set_focus()
-                time.sleep(0.3) # Pausa para que el programa legacy procese el foco
-            except Exception as e:
-                logger.debug(f"No se pudo dar foco previo (procediendo con ejecución normal): {e}")
-        
-        return self.executor.execute(action)
-
     def setup(self) -> bool:
         """Conecta a la aplicación objetivo."""
         logger.info("Configurando conexión a la aplicación...")
@@ -173,6 +157,7 @@ class PatologiaCriticaConCierreOkAutomation:
         self.db_update_status('En Proceso')
         
         try:
+            _rpa_step_hook(1)
             # Acción 1: Cambiar a la ventana de Carestream RIS
             try:
                 time.sleep(1)
@@ -184,7 +169,7 @@ class PatologiaCriticaConCierreOkAutomation:
                     try:
                         logger.debug(f"Intento {attempt} de conexión a Carestream RIS...")
                         # 1. Buscar por título para obtener un handle estable
-                        titulos = findwindows.find_elements(title_re=".*Carestream RIS V11.*", backend='uia')
+                        titulos = findwindows.find_elements(title_re=".*Carestream RIS.*", backend='uia')
                         
                         if titulos:
                             logger.info(f"Ventana encontrada por título: {titulos[0].name}")
@@ -194,10 +179,10 @@ class PatologiaCriticaConCierreOkAutomation:
                             try:
                                 self.app = Application(backend='uia').connect(path="Carestream RIS.exe")
                             except:
-                                self.app = Application(backend='uia').connect(title_re=".*Carestream RIS V11.*")
+                                self.app = Application(backend='uia').connect(title_re=".*Carestream RIS.*")
                         
                         # 3. Validar existencia y dar foco (específico en vez de top_window)
-                        main_window = self.app.window(title_re=".*Carestream RIS V11.*")
+                        main_window = self.app.window(title_re=".*Carestream RIS.*")
                         if main_window.exists(timeout=5):
                             main_window.set_focus()
                             # A veces requiere un segundo intento o esperar un poco
@@ -229,7 +214,8 @@ class PatologiaCriticaConCierreOkAutomation:
             except Exception as e:
                 self.stop_with_error(f"No se pudo encontrar o activar la ventana de Carestream RIS: {e}")
 
-            # Acción 2: CLICK en resultado critico
+            _rpa_step_hook(2)
+ # Acción 2: CLICK en resultado critico
             # Mover antes de hacer clic
             time.sleep(1)
             self.executor.execute(Action(
@@ -243,12 +229,13 @@ class PatologiaCriticaConCierreOkAutomation:
                 position={'x': 692, 'y': 84},
                 timestamp=datetime.fromisoformat("2026-01-14T15:10:39.561316")
             )
-            self._robust_execute(action)
+            self.executor.execute(action)
             results["completed"] += 1
-            logger.info(f"[2/16] ✅ double_click")
+            logger.info(f"[2/16] ✅ click")
 
 
-            # Acción 3: CLICK en combobox resultado critico
+            _rpa_step_hook(3)
+         # Acción 3: CLICK en combobox resultado critico
             # Mover antes de hacer clic
             time.sleep(1)
             self.executor.execute(Action(
@@ -262,11 +249,12 @@ class PatologiaCriticaConCierreOkAutomation:
                 position={'x': 295, 'y': 123},
                 timestamp=datetime.fromisoformat("2026-01-14T15:10:42.178933")
             )
-            self._robust_execute(action)
+            self.executor.execute(action)
             results["completed"] += 1
-            logger.info(f"[3/16] ✅ click robusto")
+            logger.info(f"[3/16] ✅ click")
 
-            # Acción 4: CLICK en si resultado critico
+            _rpa_step_hook(4)
+                        # Acción 4: CLICK en si resultado critico
             # Mover antes de hacer clic
             time.sleep(1)
             self.executor.execute(Action(
@@ -281,12 +269,13 @@ class PatologiaCriticaConCierreOkAutomation:
                 position={'x': 201, 'y': 182},
                 timestamp=datetime.fromisoformat("2026-01-14T15:10:43.561504")
             )
-            self._robust_execute(action)
+            self.executor.execute(action)
             results["completed"] += 1
-            logger.info(f"[4/16] ✅ click robusto")
+            logger.info(f"[4/16] ✅ click")
 
 
-            # Acción 5: CLICK (ComboBox)
+            _rpa_step_hook(5)
+   # Acción 5: CLICK (ComboBox)
             # Mover antes de hacer clic para asegurar foco
             time.sleep(1)
             self.executor.execute(Action(
@@ -300,11 +289,12 @@ class PatologiaCriticaConCierreOkAutomation:
                 position={'x': 612, 'y': 185},
                 timestamp=datetime.fromisoformat("2026-01-14T15:10:44.998266")
             )
-            self._robust_execute(action)
+            self.executor.execute(action)
             results["completed"] += 1
-            logger.info(f"[5/16] ✅ click robusto (ComboBox)")
+            logger.info(f"[5/16] ✅ click (ComboBox)")
 
 
+            _rpa_step_hook(6)
             # Acción 6: TYPE_TEXT
             time.sleep(1)
             

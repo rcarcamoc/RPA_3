@@ -669,21 +669,9 @@ RESPONDE SOLO EN FORMATO JSON:
         # Esperar a que el menú contextual aparezca y se estabilice
         time.sleep(1.2)
 
-        # 2. Click Izquierdo (con offset, Humanizado)
-        new_x = screen_x + self.OFFSET_X
-        new_y = screen_y + self.OFFSET_Y
-        
-        if self.vf: self.vf.highlight_click(new_x, new_y)
-        
-        # Mover suavemente hacia la opción del menú
-        pyautogui.moveTo(new_x, new_y, duration=0.4, tween=pyautogui.easeOutQuad)
-        time.sleep(0.1)
-        
-        # Click manual (Left)
-        pyautogui.mouseDown(button='left')
-        time.sleep(0.1)
-        pyautogui.mouseUp(button='left')
-        logger.info(f"Click izquierdo realizado en {new_x}, {new_y} (Offset: {self.OFFSET_X}, {self.OFFSET_Y})")
+        # 2. Combinación de teclas Ctrl+D
+        pyautogui.hotkey('ctrl', 'd')
+        logger.info("Combinación Ctrl+D ejecutada")
 
 def main():
     setup_logging()

@@ -1,3 +1,4 @@
+import sys
 import time
 import os
 import re
@@ -108,7 +109,7 @@ class ExtractorPDFDoctor:
         """
         Busca una pestaña que parezca ser un PDF (blob: o .pdf),
         descarga el contenido y extrae los datos solicitados.
-        PROTEGE la ventana cuyo título comienza con 'RIS'.
+        PROTEGE la ventana cuyo título comienza embargo esta con 'RIS'.
         """
         try:
             handles = self.driver.window_handles
@@ -282,13 +283,13 @@ class ExtractorPDFDoctor:
             if match_body:
                 raw_diagnostico = match_body.group(1)
                 
-                # Examen es hasta el primer salto de página (relativo al inicio del diagnóstico)
+                # Segmento de examen es hasta el primer salto de página
                 if PAGE_MARKER in raw_diagnostico:
-                    examen = raw_diagnostico.split(PAGE_MARKER)[0].strip()
+                    segmento_examen = raw_diagnostico.split(PAGE_MARKER)[0].strip()
                 else:
-                    examen = raw_diagnostico.strip()
+                    segmento_examen = raw_diagnostico.strip()
                 
-                # Diagnóstico es todo, reemplzando el marcador por un salto de línea real
+                # Diagnóstico es todo el contenido
                 diagnostico = raw_diagnostico.replace(PAGE_MARKER, "\n").strip()
                 
                 # Limpieza solicitada por el usuario
@@ -301,10 +302,13 @@ class ExtractorPDFDoctor:
                 ]
                 for p in limpiar:
                     diagnostico = re.sub(p, "", diagnostico, flags=re.IGNORECASE | re.MULTILINE)
-                    examen = re.sub(p, "", examen, flags=re.IGNORECASE | re.MULTILINE)
+                    segmento_examen = re.sub(p, "", segmento_examen, flags=re.IGNORECASE | re.MULTILINE)
                 
                 diagnostico = diagnostico.strip()
-                examen = examen.strip()
+                
+                # Para el campo 'examen', tomamos SOLO la primera fila (línea) no vacía
+                lineas_examen = [l.strip() for l in segmento_examen.splitlines() if l.strip()]
+                examen = lineas_examen[0] if lineas_examen else "NO ENCONTRADO"
 
             # 3. Fecha Examen
             match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', text_content, re.IGNORECASE)
@@ -358,10 +362,12 @@ def main():
         else:
             print("✗ No se pudieron obtener datos del PDF.")
             bd.db_update_tracking(status='error')
+            sys.exit(1)
 
     except Exception as e:
         logger.error(f"Error fatal: {e}")
         bd.db_update_tracking(status='error')
+        sys.exit(1)
     finally:
         # Aquí se podría liberar el driver si no se usa más, pero usualmente 
         # en estos scripts RIS se deja abierto el navegador.

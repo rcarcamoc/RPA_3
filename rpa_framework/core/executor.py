@@ -70,6 +70,8 @@ class ActionExecutor:
             return self._execute_validate(action)
         elif action.type == ActionType.MOVE:
             return self._execute_move(action)
+        elif action.type == ActionType.PRESS:
+            return self._execute_press(action)
         else:
             logger.warning(f"Tipo desconocido: {action.type}")
             return False
@@ -99,13 +101,19 @@ class ActionExecutor:
                     except Exception as e:
                         logger.debug(f"Error visual highlight: {e}")
                         
-                    element.click_input() # Use click_input consistently for UIA
+                    # Soporte para clic sostenido si duration > 0
+                    if action.duration > 0:
+                        element.press_mouse()
+                        time.sleep(action.duration)
+                        element.release_mouse()
+                    else:
+                        element.click_input() # Use click_input consistently for UIA
                 else:
                     logger.info(f"Click [{attempt}/{max_retries}] por coordenadas")
                     import pyautogui
                     x, y = action.position["x"], action.position["y"]
                     if self.vf: self.vf.highlight_click(x, y)
-                    pyautogui.click(x, y)
+                    pyautogui.click(x, y, duration=action.duration)
                 
                 logger.info(f"Click exitoso")
                 return True
@@ -175,7 +183,10 @@ class ActionExecutor:
                         import pyautogui
                         x, y = action.position["x"], action.position["y"]
                         if self.vf: self.vf.highlight_click(x, y)
-                        pyautogui.doubleClick(x, y)
+                        # Doble click más robusto por coordenadas: click + delay + click
+                        pyautogui.click(x, y)
+                        time.sleep(0.1)
+                        pyautogui.click(x, y)
                         return True
                     except Exception as ex:
                         logger.error(f"Fallback coordenadas también falló: {ex}")
@@ -185,6 +196,29 @@ class ActionExecutor:
                 else:
                     logger.error(f"Double Click final fallido")
                     return False
+
+    def _execute_press(self, action: Action) -> bool:
+        """Sostiene el clic durante un tiempo (clic largo)."""
+        duration = action.duration if action.duration > 0 else 1.0
+        try:
+            if action.selector:
+                element = self.selector_helper.find_element(action.selector)
+                element.set_focus()
+                element.press_mouse()
+                time.sleep(duration)
+                element.release_mouse()
+            elif action.position:
+                import pyautogui
+                x, y = action.position["x"], action.position["y"]
+                pyautogui.mouseDown(x, y)
+                time.sleep(duration)
+                pyautogui.mouseUp(x, y)
+            else:
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error en PRESS: {e}")
+            return False
     
     def _execute_type_text(self, action: Action) -> bool:
         """Type con selector o foco."""

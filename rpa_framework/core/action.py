@@ -13,6 +13,7 @@ class ActionType(str, Enum):
     MOVE = "move"
     WAIT = "wait"
     VALIDATE = "validate"
+    PRESS = "press"
 
 @dataclass(frozen=True)
 class Action:
@@ -29,6 +30,7 @@ class Action:
     combination: Optional[str] = None
     clipboard_content: Optional[str] = None
     validation_rule: Optional[str] = None
+    duration: float = 0.0
     
     app_context: Optional[Dict] = None
     modifiers: Optional[Dict[str, bool]] = None
