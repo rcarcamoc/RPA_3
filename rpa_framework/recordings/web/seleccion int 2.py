@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
+# Importar para alertas de telegram
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.telegram_manager import enviar_alerta_todos
+
 try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -327,6 +331,15 @@ class WebAutomation:
             print(f"[ERROR] Error during execution: {e}")
             # Inform error
             self.db_update_node(status='error')
+            
+            # Enviar alerta a Telegram
+            try:
+                enviar_alerta_todos(f"❌ <b>Error Crítico en el script: seleccion int 2</b>\\nFallo durante la ejecución:\\n<code>{str(e)}</code>")
+            except Exception as tel_e:
+                print(f"[WARNING] Falló envío Telegram: {tel_e}")
+                
+            # Salir abruptamente para que el engine capture el error globalmente
+            sys.exit(1)
         finally:
             self._cleanup()
     

@@ -30,6 +30,9 @@ try:
     from selenium.webdriver.support.ui import WebDriverWait, Select
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.chrome.options import Options as ChromeOptions
+    
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+    from utils.telegram_manager import enviar_alerta_todos
 except ImportError:
     print("Error: Missing 'selenium' library. Install it with: pip install selenium")
     sys.exit(1)
@@ -397,6 +400,10 @@ class WebAutomation:
             print(f"[ERROR] Error during execution: {e}")
             # Update database for error
             self.db_finish(success=False)
+            try:
+                enviar_alerta_todos(f"❌ <b>Error Crítico en el script: Inicio_ris</b>\\nExcepción: {str(e)}")
+            except:
+                pass
             sys.exit(1)
             # traceback.print_exc()
         finally:

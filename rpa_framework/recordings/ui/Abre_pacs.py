@@ -29,6 +29,12 @@ def get_vf():
     except:
         return None
 
+try:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+    from utils.telegram_manager import enviar_alerta_todos
+except ImportError:
+    pass
+
 vf = get_vf()
 
 # =====================================================
@@ -127,9 +133,12 @@ def abrir_vue_pacs():
     pid = app.process
     logger.info(f"   PID: {pid}")
 
-    # Esperar CPU
-    app.wait_cpu_usage_lower(threshold=15, timeout=180)
-    logger.info("   CPU estabilizada")
+    # Esperar CPU (Reducido para reintento rápido si se cuelga)
+    try:
+        app.wait_cpu_usage_lower(threshold=15, timeout=10)
+        logger.info("   CPU estabilizada")
+    except:
+        logger.warning("   CPU no estabilizada en 10s, intentando continuar...")
 
     # DEBUG
     if vf:
@@ -145,9 +154,13 @@ def abrir_vue_pacs():
     titulo_real = main_window.window_text()
     logger.info(f"   '{titulo_real}' hwnd: {main_window.handle}")
 
-    # Esperas seguras
-    main_window.wait("exists visible", timeout=30)
-    logger.info("   Visible")
+    # Esperas seguras - REINTENTO SI DEMORA
+    try:
+        main_window.wait("exists visible", timeout=10)
+        logger.info("   Visible")
+    except Exception as e:
+        logger.error(f"   PACS demoró demasiado en abrir (> 10s). Forzando reintento...")
+        raise Exception("Timeout apertura PACS")
 
     try:
         main_window.wait("enabled", timeout=20)
@@ -169,19 +182,31 @@ def main():
     logger.info("RPA CARESTREAM: CIERRE TOTAL + VUE PACS")
     logger.info("=" * 70)
     
-    try:
-        cerrar_todos_carestream()
-        if vf:
-            vf.wait(3, "Pausa estabilidad...")
-        else:
-            time.sleep(3)  # Pausa para estabilidad
-        
-        return abrir_vue_pacs()
-        
-    except Exception as e:
-        logger.error(f"\nERROR: {e}")
-        debug_listar_ventanas()
-        raise
+    intentos = 0
+    while True:
+        intentos += 1
+        logger.info(f"Intento de apertura #{intentos}")
+        try:
+            cerrar_todos_carestream()
+            if vf:
+                vf.wait(3, f"Pausa estabilidad (Intento {intentos})...")
+            else:
+                time.sleep(3)  # Pausa para estabilidad
+            
+            return abrir_vue_pacs()
+            
+        except Exception as e:
+            logger.error(f"\nERROR en intento {intentos}: {e}")
+            # debug_listar_ventanas() # Opcional, puede ensuciar el log
+            try:
+                # Solo enviar alerta si falla demasiadas veces o si es un error inesperado
+                if intentos % 5 == 0:
+                    enviar_alerta_todos(f"⚠️ <b>Aviso en Abre_pacs</b>\nReintentando apertura de PACS (Intento {intentos})...\n<code>{str(e)}</code>")
+            except:
+                pass
+            
+            logger.info("Esperando 10 segundos antes del próximo reintento...")
+            time.sleep(10)
 
 if __name__ == "__main__":
     app, window = main()

@@ -10,6 +10,11 @@ import logging
 import mysql.connector
 import re
 from difflib import SequenceMatcher
+import os
+
+# Agregando para telegram_manager
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.telegram_manager import enviar_alerta_todos
 
 logging.basicConfig(
     level=logging.INFO,
@@ -444,8 +449,12 @@ def main():
         if buscador.verificar_sin_resultados():
             bd.registrar_sin_resultados()
             print("Terminando script: Tabla sin resultados.")
+            try:
+                enviar_alerta_todos("⚠️ <b>Script: busca_doctor</b>\\nScript finalizado: Sin resultados en la lista para procesar.")
+            except:
+                pass
             # Terminar con error en consola como solicitado (sys.exit(1))
-            sys.exit("Script finalizado: Sin resultados para trabajar")
+            sys.exit(1)
 
         nombre_medico = buscador.extraer_primer_medico()
         
@@ -483,11 +492,16 @@ def main():
             print("No encontrado en la web")
             bd.db_update_tracking(status='En Proceso')
 
-    except Exception:
+    except Exception as e:
         # Tracking de error
         bd.db_update_tracking(status='error')
         import traceback
         traceback.print_exc()
+        try:
+            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: busca_doctor</b>\\nExcepción:\\n<code>{str(e)}</code>")
+        except:
+            pass
+        sys.exit(1)
     
     finally:
         try:

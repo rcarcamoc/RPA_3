@@ -20,6 +20,11 @@ from dotenv import load_dotenv
 from rapidfuzz import fuzz, process
 from typing import Tuple, Optional, List
 from datetime import datetime
+import sys
+
+# Agregar al sys.path para imports globales
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.telegram_manager import enviar_alerta_todos
 
 # Cargar variables de entorno
 load_dotenv()
@@ -402,6 +407,12 @@ def main():
         
     except Exception as e:
         logger.error(f"\n[ERROR] CRITICO: {e}")
+        try:
+            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: detecta_patologia_ia</b>\\nFallo durante la ejecución:\\n<code>{str(e)}</code>")
+        except Exception as tel_e:
+            logger.warning(f"[WARNING] Falló envío Telegram: {tel_e}")
+            
+        sys.exit(1)
     finally:
         if engine:
             engine.dispose()

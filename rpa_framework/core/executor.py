@@ -103,9 +103,13 @@ class ActionExecutor:
                         
                     # Soporte para clic sostenido si duration > 0
                     if action.duration > 0:
-                        element.press_mouse()
-                        time.sleep(action.duration)
-                        element.release_mouse()
+                        try:
+                            element.press_mouse_input()
+                            time.sleep(action.duration)
+                            element.release_mouse_input()
+                        except:
+                            # Fallback si no soporta _input
+                            element.click_input()
                     else:
                         element.click_input() # Use click_input consistently for UIA
                 else:
@@ -129,7 +133,8 @@ class ActionExecutor:
                         import pyautogui
                         x, y = action.position["x"], action.position["y"]
                         if self.vf: self.vf.highlight_click(x, y)
-                        pyautogui.click(x, y)
+                        # Usar duration también en el fallback
+                        pyautogui.click(x, y, duration=action.duration if action.duration > 0 else 0.1)
                         return True
                     except Exception as ex:
                         logger.error(f"Fallback coordenadas también falló: {ex}")

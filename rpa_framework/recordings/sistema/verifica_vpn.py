@@ -15,6 +15,78 @@ except ImportError:
 # Nombre de este nodo para el registro
 NODO_ACTUAL = "Verifica VPN"
 
+def ejecutar_clics_vpn():
+    """
+    Ejecuta los clics grabados en ksy.py pero integrados aquí 
+    para automatizar la conexión de la VPN.
+    """
+    try:
+        from pywinauto import Application
+        from core.executor import ActionExecutor
+        from core.action import Action, ActionType
+        from datetime import datetime
+        import time
+
+        print("Iniciando automatización de clics para conexión VPN...")
+        
+        # Setup similar a ksy.py
+        try:
+            app = Application(backend='uia').connect(path="explorer.exe")
+        except:
+            app = Application(backend='uia')
+        
+        executor = ActionExecutor(app, {})
+
+        # Acción 1: CLICK Conectar inicial
+        action = Action(
+            type=ActionType.CLICK,
+            selector={'name': 'Conectar', 'control_type': 'Button'},
+            position={'x': 1747, 'y': 1003},
+            duration=0.5,
+            wait_before=1.0,
+            timestamp=datetime.now()
+        )
+        executor.execute(action)
+
+        # Acción 2: CLICK Campo de texto
+        action = Action(
+            type=ActionType.CLICK,
+            selector={'automation_id': '1167'},
+            position={'x': 1746, 'y': 911},
+            duration=0.8,
+            wait_before=1.5,
+            timestamp=datetime.now()
+        )
+        executor.execute(action)
+
+        # Acción 3: TYPE_TEXT Contraseña
+        action = Action(
+            type=ActionType.TYPE_TEXT,
+            text='Mim21556167#',
+            wait_before=1.0,
+            timestamp=datetime.now()
+        )
+        executor.execute(action)
+
+        # Acción 4: Presionar ENTER después de la contraseña
+        print("Presionando ENTER y esperando 20 segundos para la conexión...")
+        action_enter = Action(
+            type=ActionType.KEY_PRESS,
+            key_code='ENTER',
+            wait_before=0.5,
+            timestamp=datetime.now()
+        )
+        executor.execute(action_enter)
+
+        # Esperar 20 segundos para que la conexión se estabilice
+        time.sleep(20)
+        
+        print("Automatización de clics y espera completada.")
+        return True
+    except Exception as e:
+        print(f"Error en automatización de clics: {e}")
+        return False
+
 def db_update(estado, observacion=None):
     """
     Gestiona las actualizaciones en la base de datos ris.registro_acciones.
@@ -165,8 +237,11 @@ def main():
         while not vpn_conectada_palo_alto():
             # Siempre intentamos abrir el programa automáticamente si no hay conexión
             abrir_globalprotect()
-            # Mostramos el popup para que el usuario sepa que estamos esperando
-            mostrar_popup_vpn()
+            # Intentamos automatizar la conexión con los clics de ksy.py
+            ejecutar_clics_vpn()
+            # Si después de los clics sigue desconectada, mostramos el popup para ayuda manual
+            if not vpn_conectada_palo_alto():
+                mostrar_popup_vpn()
         
         print("VPN OK. Procediendo...")
         

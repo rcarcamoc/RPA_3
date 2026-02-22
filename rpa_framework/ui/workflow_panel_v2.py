@@ -396,8 +396,8 @@ class WorkflowPanelV2(QWidget):
         self.append_log("🚀 Iniciando ejecución del workflow...", "INFO")
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(lambda msg: self.append_log(msg, "INFO"))
-        self.worker.finished.connect(lambda res: self.append_log("✅ Ejecución finalizada correctamente.", "SUCCESS"))
-        self.worker.error.connect(lambda err: self.append_log(f"❌ Error en ejecución: {err}", "ERROR"))
+        self.worker.finished.connect(self.on_execution_finished)
+        self.worker.error.connect(self.on_execution_finished)
         self.worker.start()
         self.act_run.setEnabled(False)
         self.act_stop.setEnabled(True)
@@ -405,7 +405,17 @@ class WorkflowPanelV2(QWidget):
     def stop_workflow(self):
         if self.worker:
             self.worker.stop()
-            self.append_log("🛑 Ejecución detenida por el usuario.", "WARNING")
+            self.append_log("🛑 Solicitando detención...", "WARNING")
+        
+    def on_execution_finished(self, result):
+        """Called when worker finished (success or error)"""
+        if isinstance(result, str): # Error message
+            self.append_log(f"❌ Error en ejecución: {result}", "ERROR")
+        elif isinstance(result, dict) and result.get("status") == "stopped":
+            self.append_log("⏹️ Ejecución detenida.", "WARNING")
+        else:
+            self.append_log("✅ Ejecución finalizada.", "SUCCESS")
+            
         self.act_run.setEnabled(True)
         self.act_stop.setEnabled(False)
     

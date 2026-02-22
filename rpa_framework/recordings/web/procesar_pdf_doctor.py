@@ -12,6 +12,10 @@ from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 
+# Agregar al path para uso global
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.telegram_manager import enviar_alerta_todos
+
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 # Silenciar logs ruidosos
@@ -362,11 +366,19 @@ def main():
         else:
             print("✗ No se pudieron obtener datos del PDF.")
             bd.db_update_tracking(status='error')
+            try:
+                enviar_alerta_todos("⚠️ <b>Script: procesar_pdf_doctor</b>\\nNo se pudieron obtener datos del PDF objetivo.")
+            except:
+                pass
             sys.exit(1)
 
     except Exception as e:
         logger.error(f"Error fatal: {e}")
         bd.db_update_tracking(status='error')
+        try:
+            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: procesar_pdf_doctor</b>\\nExcepción:\\n<code>{str(e)}</code>")
+        except:
+            pass
         sys.exit(1)
     finally:
         # Aquí se podría liberar el driver si no se usa más, pero usualmente 
