@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, WorkflowNode
 from core.logger import WorkflowLogger
+from utils.telegram_manager import enviar_alerta_todos
 import mysql.connector
 from mysql.connector import Error as MySQLError
 
@@ -109,6 +110,11 @@ class WorkflowExecutor:
         except Exception as e:
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
+            
+            try:
+                enviar_alerta_todos(f"❌ <b>Error Crítico en Workflow '{self.workflow.name}'</b>\nSe detuvo la ejecución inesperadamente:\n<code>{str(e)}</code>")
+            except Exception as tel_e:
+                self.logger.log(f"⚠️ Error enviando alerta de Telegram: {tel_e}")
             
             return {
                 "status": "error",
@@ -213,11 +219,21 @@ class WorkflowExecutor:
                 else:
                      self.logger.log(f"❌ Error en comando (código {returncode})")
                      
+                     try:
+                         enviar_alerta_todos(f"❌ <b>Error en Comando</b>\nNodo: {node.label}\nComando falló con código de salida: {returncode}")
+                     except Exception as tel_e:
+                         self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+                     
                      if getattr(node, 'on_error', 'stop') == 'stop':
                          raise RuntimeError(f"Comando falló con código {returncode}")
                      
              except Exception as e:
                  self.logger.log(f"❌ Error ejecutando comando: {e}")
+                 try:
+                     enviar_alerta_todos(f"❌ <b>Excepción en Comando</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
+                 except Exception as tel_e:
+                     self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+                 
                  if getattr(node, 'on_error', 'stop') == 'stop':
                      raise e
              
@@ -348,11 +364,25 @@ class WorkflowExecutor:
                         continue
             else:
                 self.logger.log(f"❌ Error en script (código {returncode})")
+                
+                try:
+                    # Capturar la última línea de la salida como posible mensaje de error, si lo hay
+                    ultimo_log = "\n".join(full_stdout[-3:]) if full_stdout else "Sin salida devuelta."
+                    enviar_alerta_todos(f"❌ <b>Error en Script</b>\nNodo: {node.label}\nScript falló con código {returncode}\nUltimos logs:\n<code>{ultimo_log}</code>")
+                except Exception as tel_e:
+                    self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+                
                 if getattr(node, 'on_error', 'stop') == 'stop':
                     raise RuntimeError(f"Script falló con código {returncode}")
             
         except Exception as e:
             self.logger.log(f"❌ Error: {str(e)}")
+            
+            try:
+                enviar_alerta_todos(f"❌ <b>Excepción en Script</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
+            except Exception as tel_e:
+                self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+                
             if getattr(node, 'on_error', 'stop') == 'stop':
                 raise e
         
