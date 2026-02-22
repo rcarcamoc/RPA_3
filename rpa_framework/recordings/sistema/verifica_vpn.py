@@ -6,6 +6,12 @@ from tkinter import font as tkfont
 import subprocess
 import os
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+try:
+    from utils.telegram_manager import enviar_alerta_todos
+except ImportError:
+    def enviar_alerta_todos(msg): pass
+
 # Nombre de este nodo para el registro
 NODO_ACTUAL = "Verifica VPN"
 
@@ -81,6 +87,8 @@ def mostrar_popup_vpn():
     """
     Muestra una ventana llamativa que pide al usuario conectar la VPN.
     """
+    enviar_alerta_todos("🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\nLa VPN se encuentra desconectada. El proceso está pausado esperando conexión.")
+    
     root = tk.Tk()
     root.title("CONEXIÓN VPN REQUERIDA")
     

@@ -35,6 +35,12 @@ except ImportError:
     logger.warning("⚠️ VisualFeedback no disponible")
     vf = None
 
+try:
+    from utils.telegram_manager import enviar_alerta_todos
+except ImportError:
+    def enviar_alerta_todos(msg): pass
+
+
 # Configuración de MySQL (opcional)
 try:
     import mysql.connector
@@ -199,6 +205,8 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
         # Mostrar alerta al usuario pidiendo acción
         msg = "No se pudo encontrar la barra de Word.\n\nPor favor:\n1. Asegúrate que Word esté abierto y visible.\n2. Ponlo en primer plano."
         title = "RPA - Word No Encontrado"
+        
+        enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{msg}")
         
         button_pressed = ctypes.windll.user32.MessageBoxW(0, msg, title, 0x05 | 0x30 | 0x40000)
         
@@ -417,6 +425,9 @@ class Test1Automation:
                             # Preguntar al usuario con 3 opciones: Sí / No / Reintentar
                             msg = "El texto ha sido pegado.\n\n¿Es correcto el formato y contenido?\n\n• SÍ: Guardar y continuar\n• NO: Cancelar sin guardar\n• CANCELAR: Reintentar pegado"
                             title = "Validación de Pegado"
+                            
+                            enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{msg}")
+                            
                             # Flags: MB_YESNOCANCEL (3) | MB_ICONQUESTION (20) | MB_TOPMOST (40000) | MB_SETFOREGROUND (10000)
                             layout_confirm = ctypes.windll.user32.MessageBoxW(0, msg, title, 0x03 | 0x20 | 0x40000 | 0x10000)
                             

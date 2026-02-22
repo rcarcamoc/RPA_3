@@ -2,11 +2,18 @@ import requests
 import json
 import time
 import sys
+import subprocess
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuración
-TOKEN = "8405468652:AAFlNkJRkkrrhfUgdJ-ecdotLhMjnvcIVnc"
-USUARIOS_FILE = "usuarios.json"
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+if not TOKEN:
+    print("Warning: TELEGRAM_BOT_TOKEN environment variable not set. Please create a .env file with the token.")
+
+USUARIOS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usuarios.json")
 
 def cargar_usuarios():
     if os.path.exists(USUARIOS_FILE):
@@ -26,7 +33,7 @@ def registrar_usuarios():
     Escucha mensajes nuevos para registrar usuarios/grupos que usen /start.
     Implementación 'lite' usando requests (basada en tu documentación).
     """
-    print("--- 📡 Escuchando nuevos suscriptores (Presiona Ctrl+C para detener) ---")
+    print("--- Escuchando nuevos suscriptores (Presiona Ctrl+C para detener) ---")
     print("Instrucciones: Envía /start al bot desde el grupo o chat privado.")
     
     ultimo_update_id = 0
@@ -56,8 +63,8 @@ def registrar_usuarios():
                         if chat_id not in usuarios:
                             usuarios.append(chat_id)
                             guardar_usuarios(usuarios)
-                            print(f"✅ Nuevo suscriptor: {chat_title} (ID: {chat_id})")
-                            enviar_mensaje(chat_id, f"✅ Te has suscrito a las alertas de Atrys RPA en {chat_title}.")
+                            print(f"[OK] Nuevo suscriptor: {chat_title} (ID: {chat_id})")
+                            enviar_mensaje(chat_id, f"Te has suscrito a las alertas de Atrys RPA en {chat_title}.")
                         else:
                             enviar_mensaje(chat_id, "Ya estás suscrito.")
                             
@@ -65,8 +72,8 @@ def registrar_usuarios():
                         if chat_id in usuarios:
                             usuarios.remove(chat_id)
                             guardar_usuarios(usuarios)
-                            print(f"❌ Desuscrito: {chat_title} (ID: {chat_id})")
-                            enviar_mensaje(chat_id, "❌ Te has desuscrito de las alertas.")
+                            print(f"[X] Desuscrito: {chat_title} (ID: {chat_id})")
+                            enviar_mensaje(chat_id, "Te has desuscrito de las alertas.")
             
             time.sleep(1)
         except KeyboardInterrupt:

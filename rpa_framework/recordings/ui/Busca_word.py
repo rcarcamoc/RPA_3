@@ -22,6 +22,12 @@ except ImportError:
     print("⚠️ VisualFeedback no disponible")
     vf = None
 
+try:
+    from utils.telegram_manager import enviar_alerta_todos
+except ImportError:
+    def enviar_alerta_todos(msg): pass
+
+
 
 def humanized_click(x, y, clicks=1, interval=0.1):
     """
@@ -303,6 +309,8 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
         
         msg = "No se pudo encontrar la barra de Word.\n\nPor favor:\n1. Asegúrate que Word esté abierto y visible.\n2. Ponlo en primer plano."
         title = "RPA - Word No Encontrado"
+        
+        enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{msg}")
         
         button_pressed = ctypes.windll.user32.MessageBoxW(0, msg, title, 0x05 | 0x30 | 0x40000)
         
