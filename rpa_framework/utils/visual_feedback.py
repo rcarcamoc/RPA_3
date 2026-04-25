@@ -294,3 +294,213 @@ class VisualFeedback:
         # Bloquear hilo actual
         time.sleep(seconds)
 
+    def show_confirm(self, title: str, message: str, btn_yes: str = "Reintentar", btn_no: str = "Cancelar") -> bool:
+        """
+        Muestra un diálogo de confirmación personalizado.
+        Retorna True si se presiona el botón Yes (Reintentar), False si No (Cancelar).
+        Es bloqueante en el hilo que lo llama.
+        """
+        result = {"value": False}
+        
+        def _on_click(val):
+            result["value"] = val
+            root.destroy()
+
+        root = tk.Tk()
+        root.title(title)
+        root.attributes("-topmost", True)
+        
+        # Estilo premium
+        bg_color = "#2c3e50"
+        fg_color = "#ecf0f1"
+        btn_yes_color = "#27ae60"
+        btn_no_color = "#c0392b"
+        
+        root.configure(bg=bg_color)
+        root.overrideredirect(True) # Quitar bordes para que sea más premium
+        
+        # Centrar en pantalla
+        root.update_idletasks()
+        w, h = 400, 200
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        root.geometry(f"{w}x{h}+{x}+{y}")
+        
+        # Borde
+        frame = tk.Frame(root, bg=bg_color, highlightbackground="#34495e", highlightthickness=2)
+        frame.pack(fill="both", expand=True)
+        
+        tk.Label(frame, text=title, bg="#34495e", fg=fg_color, font=("Segoe UI", 12, "bold"), pady=10).pack(fill="x")
+        
+        tk.Label(frame, text=message, bg=bg_color, fg=fg_color, font=("Segoe UI", 10), pady=20, wraplength=350).pack()
+        
+        btn_frame = tk.Frame(frame, bg=bg_color, pady=10)
+        btn_frame.pack()
+        
+        tk.Button(btn_frame, text=btn_yes, command=lambda: _on_click(True), 
+                  bg=btn_yes_color, fg="white", font=("Segoe UI", 10, "bold"), 
+                  padx=20, relief="flat", cursor="hand2").pack(side="left", padx=10)
+        
+        tk.Button(btn_frame, text=btn_no, command=lambda: _on_click(False), 
+                  bg=btn_no_color, fg="white", font=("Segoe UI", 10, "bold"), 
+                  padx=20, relief="flat", cursor="hand2").pack(side="left", padx=10)
+        
+        root.mainloop()
+        return result["value"]
+
+    def show_synonym_dialog(self, db_name: str, ocr_text: str) -> dict:
+        """
+        Muestra un diálogo enriquecido cuando falla la búsqueda OCR/LLM.
+        Presenta:
+          - El nombre que viene de la base de datos (examen buscado)
+          - El texto que encontró el OCR (mejor candidato)
+          - Un campo de texto para escribir un sinónimo / alternativa
+
+        Retorna un dict con:
+          {
+            "action":   "save_retry"  → guardó sinónimo y reintenta
+                        "retry"       → solo reintenta (sin sinónimo)
+                        "cancel"      → cancela el proceso
+            "synonym":  str | ""      → texto ingresado por el usuario
+          }
+        """
+        result = {"action": "cancel", "synonym": ""}
+        # Usamos lista mutable para que los callbacks accedan al widget entry
+        # después de crearlo (evita el problema de StringVar sin root en Python 3.13)
+        entry_ref = []
+
+        def _on_save_retry():
+            result["action"] = "save_retry"
+            result["synonym"] = entry_ref[0].get().strip() if entry_ref else ""
+            root.destroy()
+
+        def _on_retry():
+            result["action"] = "retry"
+            result["synonym"] = ""
+            root.destroy()
+
+        def _on_cancel():
+            result["action"] = "cancel"
+            result["synonym"] = ""
+            root.destroy()
+
+        root = tk.Tk()
+        root.title("⚠️ Búsqueda Fallida")
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+
+        # Paleta de colores premium
+        C_BG      = "#1e2733"
+        C_PANEL   = "#263040"
+        C_BORDER  = "#3a4a5e"
+        C_TITLE   = "#f39c12"
+        C_FG      = "#ecf0f1"
+        C_DIM     = "#8899aa"
+        C_TAG_BG  = "#2d3f55"
+        C_INPUT   = "#0d1520"
+        C_GREEN   = "#27ae60"
+        C_BLUE    = "#2980b9"
+        C_RED     = "#c0392b"
+
+        root.configure(bg=C_BG)
+        root.overrideredirect(True)
+
+        # Tamaño y centrado
+        W, H = 520, 400
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        x = (sw // 2) - (W // 2)
+        y = (sh // 2) - (H // 2)
+        root.geometry(f"{W}x{H}+{x}+{y}")
+
+        # ─── Barra de título personalizada ───────────────────────────────────
+        title_bar = tk.Frame(root, bg="#c0392b", height=40)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+
+        tk.Label(
+            title_bar,
+            text="  ⚠️  Búsqueda Fallida — Gestión de Sinónimos",
+            bg="#c0392b", fg="white",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w"
+        ).pack(side="left", padx=8, fill="y")
+
+        # ─── Cuerpo principal ─────────────────────────────────────────────────
+        body = tk.Frame(root, bg=C_BG, padx=18, pady=14)
+        body.pack(fill="both", expand=True)
+
+        def _label_row(parent, tag, value, tag_color=C_TITLE):
+            row = tk.Frame(parent, bg=C_BG)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=tag, bg=C_TAG_BG, fg=tag_color,
+                     font=("Segoe UI", 8, "bold"),
+                     width=14, anchor="center", relief="flat",
+                     padx=4, pady=2).pack(side="left")
+            tk.Label(row, text=value or "(sin texto)", bg=C_PANEL, fg=C_FG,
+                     font=("Consolas", 9),
+                     wraplength=340, anchor="w", justify="left",
+                     padx=8, pady=4, relief="flat").pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        # Examen buscado (BD)
+        _label_row(body, "  BD (buscado)", db_name, C_TITLE)
+
+        # Texto OCR encontrado
+        _label_row(body, "  OCR (encontrado)", ocr_text if ocr_text else "—  (no se encontró texto)", C_BLUE)
+
+        # Separador
+        tk.Frame(body, bg=C_BORDER, height=1).pack(fill="x", pady=10)
+
+        # Instrucción
+        tk.Label(
+            body,
+            text="💡  Escribe un sinónimo o nombre alternativo del examen\n"
+                 "    para buscarlo nuevamente en el PACS:",
+            bg=C_BG, fg=C_DIM,
+            font=("Segoe UI", 9),
+            justify="left", anchor="w"
+        ).pack(fill="x", pady=(0, 6))
+
+        # Campo de entrada (sin StringVar para compatibilidad Python 3.13+)
+        entry_frame = tk.Frame(body, bg=C_BORDER, pady=1, padx=1)
+        entry_frame.pack(fill="x")
+        entry = tk.Entry(
+            entry_frame,
+            bg=C_INPUT, fg=C_FG,
+            insertbackground=C_FG,
+            font=("Segoe UI", 11),
+            relief="flat", bd=6
+        )
+        entry.pack(fill="x")
+        entry_ref.append(entry)   # guardar referencia para los callbacks
+        entry.focus_set()
+        # Enter = Guardar y reintentar
+        entry.bind("<Return>", lambda _e: _on_save_retry())
+
+        # ─── Botones ──────────────────────────────────────────────────────────
+        tk.Frame(body, bg=C_BORDER, height=1).pack(fill="x", pady=10)
+
+        btn_frame = tk.Frame(body, bg=C_BG)
+        btn_frame.pack()
+
+        def _btn(parent, text, cmd, color, width=16):
+            b = tk.Button(
+                parent, text=text, command=cmd,
+                bg=color, fg="white",
+                font=("Segoe UI", 9, "bold"),
+                relief="flat", cursor="hand2",
+                width=width, pady=6,
+                activebackground=color, activeforeground="white"
+            )
+            b.pack(side="left", padx=5)
+            return b
+
+        _btn(btn_frame, "💾 Guardar y Reintentar", _on_save_retry, C_GREEN, 20)
+        _btn(btn_frame, "🔄 Solo Reintentar",      _on_retry,      C_BLUE,  16)
+        _btn(btn_frame, "❌ Cancelar",             _on_cancel,     C_RED,   12)
+
+        root.mainloop()
+        return result
+
