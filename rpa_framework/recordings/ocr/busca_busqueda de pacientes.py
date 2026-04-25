@@ -11,6 +11,10 @@ def execute_ocr_click_0():
     import sys
     import time
     import os
+    
+    # Delay inicial de 2 segundos solicitado
+    time.sleep(2)
+    
     # Add framework root to path to allow importing 'ocr'
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
@@ -58,13 +62,38 @@ def execute_ocr_click_0():
         # Inicializar acciones
         actions = OCRActions(engine, matcher, delay=0.3)
         
-        # Buscar texto para clic robusto
-        matches = actions.capture_and_find(
-            search_term='búsqueda',
-            fuzzy=True,
-            region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
-        )
+        # Buscar texto para clic robusto con reintentos
+        delays = [5, 3, 5]
+        matches = None
         
+        for attempt, delay in enumerate(delays):
+            if delay > 0:
+                print(f"Intento {attempt + 1}: Reintentando en {delay} segundos...")
+                time.sleep(delay)
+            
+            matches = actions.capture_and_find(
+                search_term='búsqueda',
+                fuzzy=True,
+                region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
+            )
+            if matches:
+                break
+        
+        # Si falla tras los reintentos automáticos, solicitar intervención del usuario
+        if not matches:
+            import pyautogui
+            pyautogui.alert(
+                text='No se encontró el botón "búsqueda" después de varios intentos.\n\nPor favor, asegúrese de que el menú lateral del RIS esté visible y presione OK para reintentar.',
+                title='RPA - Intervención Requerida'
+            )
+            # Intento final tras la intervención
+            matches = actions.capture_and_find(
+                search_term='búsqueda',
+                fuzzy=True,
+                region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
+            )
+
+        result = None
         if matches:
             best = matches[0]
             click_x = int(best['center']['x'])
@@ -93,23 +122,50 @@ def execute_ocr_click_0():
                 'position': {'x': click_x, 'y': click_y}
             }
         else:
-            result = {'status': 'error', 'error': 'No se encontró el texto'}
+            # Si aún no se encuentra, se marcará como error
+            result = {
+                'action': 'click',
+                'status': 'error',
+                'message': 'No se encontró el texto "búsqueda" tras reintentos e intervención manual'
+            }
+
         
         # Verificar si se encontró y cliqueó con éxito
         if not result or result.get('status') != 'success':
-            db_update(status='Error', obs='error en busqueda de pacientes')
-            print("ERROR: no encontro busqueda de pacientes")
+            error_obs = 'No se encontró el texto "búsqueda" en el menú lateral'
+            db_update(status='Error', obs=error_obs)
+            
+            # Notificación Visual y Telegram
+            try:
+                from utils.telegram_manager import enviar_alerta_todos
+                from rpa_framework.utils.visual_feedback import VisualFeedback
+                
+                vf = VisualFeedback()
+                vf.show_persistent_message(f"❌ ERROR: {error_obs}", "error_ocr", bg_color="#F44336", fg_color="#FFFFFF")
+                
+                msg_telegram = f"❌ <b>Error OCR: busca_busqueda de pacientes</b>\n{error_obs}\nPor favor, verifique que el menú del RIS esté visible."
+                enviar_alerta_todos(msg_telegram)
+            except Exception as tel_err:
+                print(f"Error al enviar notificaciones: {tel_err}")
+
+            print(f"ERROR: {error_obs}")
             sys.exit(1)
             
         return result
     
     except SystemExit:
-        # Re-lanzar sys.exit para que el proceso termine
         sys.exit(1)
     except Exception as e:
-        print(f"Excepción crítica: {e}")
-        db_update(status='Error', obs=f'Excepción: {str(e)}')
-        print("ERROR: no encontro busqueda de pacientes")
+        error_msg = f'Excepción crítica: {str(e)}'
+        print(error_msg)
+        db_update(status='Error', obs=error_msg)
+        
+        # Notificación en caso de excepción
+        try:
+            from utils.telegram_manager import enviar_alerta_todos
+            enviar_alerta_todos(f"❌ <b>Error Crítico: busca_busqueda de pacientes</b>\n{error_msg}")
+        except: pass
+        
         sys.exit(1)
 
 
