@@ -1096,62 +1096,26 @@ def main():
         if found:
             sys.exit(0)
 
-        # ── Si todos los reintentos automáticos fallaron ───────────────────
-        logger.warning("⚠️ Todos los reintentos fallaron. Mostrando diálogo al usuario.")
-
-        if search.vf:
-            dialog_result = search.vf.show_synonym_dialog(
-                db_name=target_diag_raw or "(desconocido)",
-                ocr_text=last_ocr_text
-            )
-
-            action   = dialog_result.get("action", "cancel")
-            synonym  = dialog_result.get("synonym", "").strip()
-
-            if action == "save_retry":
-                # Guardar sinónimo en BD y reintentar con ese término
-                if synonym:
-                    search.guardar_sinonimo(
-                        examen=target_diag_raw or "",
-                        ocr_text=last_ocr_text,
-                        sugerencia=synonym
-                    )
-                    msg_telegram = f"💾 Sinónimo guardado: '{synonym}'. Reintentando búsqueda..."
-                    logger.info(msg_telegram)
-                    try:
-                        enviar_alerta_todos(f"💾 <b>Sinónimo registrado</b>\n{msg_telegram}")
-                    except:
-                        pass
-                    override_diag = synonym
-                else:
-                    # Botón 'Guardar y Reintentar' sin texto → reintentar sin sinónimo
-                    override_diag = None
-                time.sleep(1)
-                continue  # Vuelt a al inicio del while
-
-            elif action == "retry":
-                msg_telegram = "🔄 El usuario solicitó reintentar sin cambios."
-                logger.info(msg_telegram)
-                try:
-                    enviar_alerta_todos(f"🔄 <b>Búsqueda: Reintentando</b>\n{msg_telegram}")
-                except:
-                    pass
-                override_diag = None
-                time.sleep(1)
-                continue  # Vuelta al inicio del while
-
-            else:  # cancel
-                msg_telegram = "❌ El proceso fue cancelado por el usuario tras fallo de OCR/LLM."
-                logger.info(msg_telegram)
-                try:
-                    enviar_alerta_todos(f"❌ <b>Búsqueda: Cancelada</b>\n{msg_telegram}")
-                except:
-                    pass
-                search.update_db_error("Cancelado por usuario tras fall o de búsqueda")
-                sys.exit(1)
-        else:
-            # Fallback: sin interfaz visual
-            search.update_db_error("Fallo búsqueda sin interfaz de usuario")
+        # ── Si todos los reintentos automáticos fallaron, terminar con error ──────────────────
+        logger.warning("⚠️ Todos los reintentos fallaron. Notificando y terminando.")
+        error_msg = f"Búsqueda fallida: no se encontró '{target_diag_raw}' (OCR detectó: '{last_ocr_text}') tras {search.MAX_RETRIES + 1} intentos."
+        
+        _error_handler_llamado = False
+        for _mod in ['utils.error_handler', 'rpa_framework.utils.error_handler']:
+            try:
+                import importlib
+                _eh = importlib.import_module(_mod)
+                _eh.handle_error_and_exit("busqueda_triple_text_only.py", error_msg)
+                _error_handler_llamado = True
+                break
+            except Exception as _e:
+                logger.warning(f"No se pudo importar {_mod}: {_e}")
+        
+        if not _error_handler_llamado:
+            try:
+                enviar_alerta_todos(f"❌ <b>Búsqueda Fallida</b>\n{error_msg}")
+            except: pass
+            search.update_db_error(error_msg)
             sys.exit(1)
 
 if __name__ == "__main__":

@@ -313,12 +313,20 @@ class ActualizaEstadoAutomation:
                 # Verificar tiempo transcurrido
                 elapsed = time.time() - start_loop_time
                 if elapsed > max_wait_time:
-                    logger.error(f"❌ Se excedió el tiempo máximo de reintentos ({max_wait_time/60} minutos). Finalizando script.")
-                    results["status"] = "TIMEOUT"
-                    results["errors"].append({"reason": "Timeout de 3 minutos excedido sin detectar 'Aprobado'"})
-                    self.db_update_status('Terminado - Pending')
-                    results["end_time"] = datetime.now().isoformat()
-                    return results
+                    timeout_msg = f"Se excedió el tiempo máximo de espera ({max_wait_time//60} minutos) sin detectar 'Aprobado'."
+                    logger.error(f"❌ {timeout_msg}")
+                    try:
+                        try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+                        handle_error_and_exit("actualiza_estado.py", timeout_msg)
+                    except ImportError:
+                        self.db_update_status('Terminado - Pending')
+                        results["status"] = "TIMEOUT"
+                        results["errors"].append({"reason": timeout_msg})
+                        results["end_time"] = datetime.now().isoformat()
+                        return results
 
                 intentos_refresh += 1
                 logger.info(f"🔄 Intento de validación #{intentos_refresh} (Tiempo transcurrido: {int(elapsed)}s)...")

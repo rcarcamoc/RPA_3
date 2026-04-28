@@ -35,6 +35,14 @@ try:
 except ImportError:
     enviar_alerta_todos = None
 
+try:
+    from utils.error_handler import handle_error_and_exit
+except ImportError:
+    try:
+        from rpa_framework.utils.error_handler import handle_error_and_exit
+    except ImportError:
+        handle_error_and_exit = None
+
 def get_vf():
     return vf_instance
 
@@ -226,22 +234,11 @@ def main():
                 logger.error("Se agotaron los reintentos.")
 
     # Si llegamos aquí, fallaron todos los intentos
-    msg_error = (
-        f"❌ <b>Error Crítico: Abre_pacs.py</b>\n"
-        f"No se pudo abrir el PACS después de {MAX_INTENTOS} intentos.\n"
-        f"Último error: <code>{ultimo_error}</code>"
-    )
-    
-    if enviar_alerta_todos:
-        try:
-            enviar_alerta_todos(msg_error)
-            logger.info("Alerta de Telegram enviada.")
-        except Exception as te:
-            logger.error(f"No se pudo enviar alerta Telegram: {te}")
+    msg = f"No se pudo abrir el PACS después de {MAX_INTENTOS} intentos. Último error: {ultimo_error}"
+    if handle_error_and_exit:
+        handle_error_and_exit("Abre_pacs.py", msg)
     else:
-        logger.warning("Telegram Manager no disponible para enviar alerta.")
-
-    raise Exception(f"Falla crítica tras {MAX_INTENTOS} intentos: {ultimo_error}")
+        raise Exception(msg)
 
 if __name__ == "__main__":
     app, window = main()

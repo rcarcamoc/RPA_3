@@ -214,12 +214,20 @@ def main():
         print("ok")
         return 0
     else:
-        print(f"Error: {results.get('reason', 'Desconocido')}")
+        reason = results.get('reason', 'No se validó el contenido visual del RIS tras el tiempo de espera.')
+        print(f"Error: {reason}")
         try:
-            msg = f"❌ <b>Error de Inicio Visual (Similitud)</b>\nNo se pudo validar la carga visual del RIS.\n<code>{results.get('reason')}</code>"
-            enviar_alerta_todos(msg)
-        except: pass
-        return 1
+            try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("verifica_inicio_v4_similitud.py", reason)
+        except ImportError:
+            try:
+                msg = f"❌ <b>Error de Inicio Visual (Similitud)</b>\nNo se pudo validar la carga visual del RIS.\n<code>{reason}</code>"
+                enviar_alerta_todos(msg)
+            except: pass
+            return 1
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -128,14 +128,9 @@ def execute_ocr_click_0():
                 if best_res:
                     print(f"  ⏳ Mejor intento OCR: '{best_res['text']}' (Similitud: {highest_score}% - Se requiere >= 75%)")
         
-        # Si falla tras los reintentos automáticos, solicitar intervención del usuario
+        # Si falla tras los reintentos automáticos, hacemos un intento final sin intervención
         if not matches:
-            import pyautogui
-            pyautogui.alert(
-                text='No se encontró el botón de búsqueda (Búsqueda / Patient Search) después de varios intentos.\n\nPor favor, asegúrese de que el menú lateral del RIS esté visible y presione OK para reintentar.',
-                title='RPA - Intervención Requerida'
-            )
-            # Intento final usando el mismo método exclusivo
+
             actions.capture_screenshot(region=region)
             ocr_results = engine.extract_text_with_location(actions.last_screenshot)
             for res in ocr_results:
@@ -203,23 +198,15 @@ def execute_ocr_click_0():
         # Verificar si se encontró y cliqueó con éxito
         if not result or result.get('status') != 'success':
             error_obs = 'No se encontró el botón "Búsqueda" o "Patient Search" en el menú lateral'
-            db_update(status='Error', obs=error_obs)
-            
-            # Notificación Visual y Telegram
             try:
-                from utils.telegram_manager import enviar_alerta_todos
-                from rpa_framework.utils.visual_feedback import VisualFeedback
-                
-                vf = VisualFeedback()
-                vf.show_persistent_message(f"❌ ERROR: {error_obs}", "error_ocr", bg_color="#F44336", fg_color="#FFFFFF")
-                
-                msg_telegram = f"❌ <b>Error OCR: busca_busqueda de pacientes</b>\n{error_obs}\nPor favor, verifique que el menú del RIS esté visible."
-                enviar_alerta_todos(msg_telegram)
-            except Exception as tel_err:
-                print(f"Error al enviar notificaciones: {tel_err}")
-
-            print(f"ERROR: {error_obs}")
-            sys.exit(1)
+                try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("busca_busqueda de pacientes", error_obs)
+            except ImportError:
+                print(f"ERROR: {error_obs}")
+                sys.exit(1)
             
         return result
     
@@ -227,16 +214,15 @@ def execute_ocr_click_0():
         sys.exit(1)
     except Exception as e:
         error_msg = f'Excepción crítica: {str(e)}'
-        print(error_msg)
-        db_update(status='Error', obs=error_msg)
-        
-        # Notificación en caso de excepción
         try:
-            from utils.telegram_manager import enviar_alerta_todos
-            enviar_alerta_todos(f"❌ <b>Error Crítico: busca_busqueda de pacientes</b>\n{error_msg}")
-        except: pass
-        
-        sys.exit(1)
+            try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("busca_busqueda de pacientes", error_msg)
+        except ImportError:
+            print(error_msg)
+            sys.exit(1)
 
 
 # Alias para compatibilidad
