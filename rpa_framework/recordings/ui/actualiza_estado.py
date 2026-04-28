@@ -317,9 +317,9 @@ class ActualizaEstadoAutomation:
                     logger.error(f"❌ {timeout_msg}")
                     try:
                         try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                            from utils.error_handler import handle_error_and_exit
+                        except ImportError:
+                            from rpa_framework.utils.error_handler import handle_error_and_exit
                         handle_error_and_exit("actualiza_estado.py", timeout_msg)
                     except ImportError:
                         self.db_update_status('Terminado - Pending')

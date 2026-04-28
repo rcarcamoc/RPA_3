@@ -160,12 +160,12 @@ def main():
         print(f"❌ Error en API Key: {msg}")
         error_msg = f"La API Key de OpenRouter ha fallado o no está configurada. Error: {msg}"
         try:
-            try:
             from utils.error_handler import handle_error_and_exit
         except ImportError:
             from rpa_framework.utils.error_handler import handle_error_and_exit
+        try:
             handle_error_and_exit("verifica_openrouter.py", error_msg)
-        except ImportError:
+        except Exception:
             try:
                 enviar_alerta_todos(f"⚠️ <b>ALERTA DE SISTEMA</b> ⚠️\n\nLa API Key de OpenRouter ha fallado.\n<b>Error:</b> {msg}")
             except:

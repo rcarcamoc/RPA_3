@@ -263,9 +263,9 @@ def main():
         errores = "\\n".join([f"- Acción {e.get('action_idx', '?')}: {e.get('reason', 'Error general')}" for e in results.get('errors', [])])
         try:
             try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                from utils.error_handler import handle_error_and_exit
+            except ImportError:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
             handle_error_and_exit("ingresa_user_pacs.py", f"Fallaron acciones durante el login:\\n{errores}")
         except Exception as e:
             logger.error(f"Error invocado manejador de errores: {e}")

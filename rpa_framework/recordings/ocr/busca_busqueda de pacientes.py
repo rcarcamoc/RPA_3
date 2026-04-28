@@ -200,9 +200,9 @@ def execute_ocr_click_0():
             error_obs = 'No se encontró el botón "Búsqueda" o "Patient Search" en el menú lateral'
             try:
                 try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                    from utils.error_handler import handle_error_and_exit
+                except ImportError:
+                    from rpa_framework.utils.error_handler import handle_error_and_exit
                 handle_error_and_exit("busca_busqueda de pacientes", error_obs)
             except ImportError:
                 print(f"ERROR: {error_obs}")
@@ -216,9 +216,9 @@ def execute_ocr_click_0():
         error_msg = f'Excepción crítica: {str(e)}'
         try:
             try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                from utils.error_handler import handle_error_and_exit
+            except ImportError:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
             handle_error_and_exit("busca_busqueda de pacientes", error_msg)
         except ImportError:
             print(error_msg)
