@@ -13,27 +13,30 @@ import re
 import time
 import psutil
 import logging
-
-import logging
 import sys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Visual Feedback Helper
-def get_vf():
-    try:
-        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-        from rpa_framework.utils.visual_feedback import VisualFeedback
-        return VisualFeedback()
-    except:
-        return None
+# Configurar path para importar utilidades
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
+# Importar utilidades
+try:
+    from rpa_framework.utils.visual_feedback import VisualFeedback
+    vf_instance = VisualFeedback()
+except:
+    vf_instance = None
 
 try:
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-    from utils.telegram_manager import enviar_alerta_todos
+    from rpa_framework.utils.telegram_manager import enviar_alerta_todos
 except ImportError:
-    pass
+    enviar_alerta_todos = None
+
+def get_vf():
+    return vf_instance
 
 vf = get_vf()
 
@@ -45,11 +48,14 @@ RUTA_EXE = r"C:\Program Files\Carestream\PACS\cshpacs\mv_client\mp.exe"
 # Lista de TODOS los títulos a cerrar
 TITULOS_CARESTREAM = [
     "Carestream Vue PACS",
+    "Carestream RIS",
     "Carestream RIS V11 Client",
     "RIS Client",
     "Carestream Radiology Client",
     "Carestream Vue RIS",
-    "PACS - Carestream"
+    "PACS - Carestream",
+    "Workflow Information Management",
+    "Philips Workflow Information Management"
 ]
 
 # Procesos conocidos que deben cerrarse
@@ -58,6 +64,7 @@ PROCESOS_CARESTREAM = [
     "csps_win.exe", 
     "RISClient.exe", 
     "CarestreamRIS.exe",
+    "Vue RIS.exe",
     "vv_client.exe"
 ]
 
@@ -81,7 +88,7 @@ def cerrar_todos_carestream():
     """Cierra TODOS los programas Carestream (ventanas y procesos)."""
     logger.info("Iniciando limpieza agresiva de programas Carestream...")
     
-    # 1. CERRAR POR VENTANAS (Intento grácil)
+    # 1. CERRAR POR VENTANAS (Intento grácil, luego forzoso)
     for titulo in TITULOS_CARESTREAM:
         try:
             # Usamos regex para encontrar cualquier ventana que contenga el título
@@ -92,15 +99,25 @@ def cerrar_todos_carestream():
                     try:
                         # Conectamos por handle para ser específicos
                         app_tmp = Application(backend="win32").connect(handle=hwnd, timeout=1)
-                        app_tmp.window(handle=hwnd).close()
+                        # Usar kill() en lugar de close() para forzar el cierre del proceso asociado
+                        app_tmp.kill()
                         time.sleep(0.5)
                     except:
                         pass
         except:
             pass
 
-    # 2. MATAR PROCESOS (Fuerza bruta para múltiples instancias)
-    logger.info("   Limpiando procesos remanentes...")
+    # 2. MATAR PROCESOS POR POWERSHELL (Nombres de Administrador de Tareas)
+    logger.info("   Buscando procesos por Descripción / Nombre en Administrador de Tareas...")
+    ps_cmd = 'Get-Process | Where-Object { $_.Description -match "Carestream Radiology Client|Carestream Vue PACS|Carestream RIS" -or $_.MainWindowTitle -match "Carestream" } | Where-Object { $_.Name -notmatch "svchost|carestream_host" } | Stop-Process -Force'
+    try:
+        import subprocess
+        subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+    except Exception as e:
+        logger.warning(f"Error al ejecutar powershell stop-process: {e}")
+
+    # 3. MATAR PROCESOS (Fuerza bruta para múltiples instancias)
+    logger.info("   Limpiando procesos remanentes por ejecutable...")
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             name_lower = proc.info['name'].lower()
@@ -182,10 +199,13 @@ def main():
     logger.info("RPA CARESTREAM: CIERRE TOTAL + VUE PACS")
     logger.info("=" * 70)
     
+    MAX_INTENTOS = 3
     intentos = 0
-    while True:
+    ultimo_error = ""
+
+    while intentos < MAX_INTENTOS:
         intentos += 1
-        logger.info(f"Intento de apertura #{intentos}")
+        logger.info(f"Intento de apertura #{intentos} / {MAX_INTENTOS}")
         try:
             cerrar_todos_carestream()
             if vf:
@@ -196,17 +216,32 @@ def main():
             return abrir_vue_pacs()
             
         except Exception as e:
+            ultimo_error = str(e)
             logger.error(f"\nERROR en intento {intentos}: {e}")
-            # debug_listar_ventanas() # Opcional, puede ensuciar el log
-            try:
-                # Solo enviar alerta si falla demasiadas veces o si es un error inesperado
-                if intentos % 5 == 0:
-                    enviar_alerta_todos(f"⚠️ <b>Aviso en Abre_pacs</b>\nReintentando apertura de PACS (Intento {intentos})...\n<code>{str(e)}</code>")
-            except:
-                pass
             
-            logger.info("Esperando 10 segundos antes del próximo reintento...")
-            time.sleep(10)
+            if intentos < MAX_INTENTOS:
+                logger.info("Esperando 10 segundos antes del próximo reintento...")
+                time.sleep(10)
+            else:
+                logger.error("Se agotaron los reintentos.")
+
+    # Si llegamos aquí, fallaron todos los intentos
+    msg_error = (
+        f"❌ <b>Error Crítico: Abre_pacs.py</b>\n"
+        f"No se pudo abrir el PACS después de {MAX_INTENTOS} intentos.\n"
+        f"Último error: <code>{ultimo_error}</code>"
+    )
+    
+    if enviar_alerta_todos:
+        try:
+            enviar_alerta_todos(msg_error)
+            logger.info("Alerta de Telegram enviada.")
+        except Exception as te:
+            logger.error(f"No se pudo enviar alerta Telegram: {te}")
+    else:
+        logger.warning("Telegram Manager no disponible para enviar alerta.")
+
+    raise Exception(f"Falla crítica tras {MAX_INTENTOS} intentos: {ultimo_error}")
 
 if __name__ == "__main__":
     app, window = main()

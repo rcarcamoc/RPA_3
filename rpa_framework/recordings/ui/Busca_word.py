@@ -11,6 +11,10 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox
 import ctypes # Para message box nativo sin conflictos de TK
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 
 # Configuración de Paths para importar utils
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -261,6 +265,37 @@ def realizar_accion_en_bloque(bloque_info, accion="click_centro", offset_y=100):
         humanized_click(target_x, center_y)
     
     print(f"✓ Acción completada")
+    
+def pegar_texto_todas_las_tecnicas(texto_emergencia=None):
+    """
+    Intenta pegar texto usando 3 técnicas distintas para asegurar robustez.
+    """
+    print("\n📋 Iniciando secuencia de PEGADO ROBUSTO...")
+    
+    # Técnica 1: Ctrl + V (Estándar)
+    print("  → Intentando técnica 1: Ctrl + V")
+    if vf: vf.show_persistent_message("Pegando (Ctrl+V)...", "paste", bg_color="#2196F3")
+    pyautogui.hotkey('ctrl', 'v')
+    time.sleep(1.5) # Espera mayor para que Word procese
+    
+    # Técnica 2: Shift + Insert (Alternativa de Windows)
+    print("  → Intentando técnica 2: Shift + Insert")
+    if vf: vf.show_persistent_message("Pegando (Shift+Ins)...", "paste", bg_color="#4CAF50")
+    pyautogui.keyUp('ctrl') # Asegurar que no quede pegada
+    pyautogui.hotkey('shift', 'insert')
+    time.sleep(1.5)
+
+    # Técnica 3: Escritura Directa (Fallback final si el portapapeles falla)
+    if texto_emergencia:
+        print("  → Intentando técnica 3: Escritura directa (Humanizada)")
+        if vf: vf.show_persistent_message("Escribiendo texto...", "paste", bg_color="#FF9800")
+        for char in texto_emergencia:
+            pyautogui.write(char)
+            # Pequeña variación para que parezca humano
+            time.sleep(random.uniform(0.01, 0.05))
+            
+    if vf: vf.hide_persistent_message("paste")
+    print("✅ Secuencia de pegado finalizada")
 
 
 def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset=100):
@@ -325,6 +360,10 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
     
     # Realizar acción
     realizar_accion_en_bloque(bloque_info, accion=accion, offset_y=offset)
+    
+    # NUEVO: Pegar después de hacer click para asegurar foco
+    time.sleep(1)
+    pegar_texto_todas_las_tecnicas(texto_emergencia="Texto de respaldo si el paste falla")
     
     print("\n✅ Automatización completada\n")
     return True

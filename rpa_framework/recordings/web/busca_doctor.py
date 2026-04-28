@@ -453,8 +453,8 @@ def main():
                 enviar_alerta_todos("⚠️ <b>Script: busca_doctor</b>\\nScript finalizado: Sin resultados en la lista para procesar.")
             except:
                 pass
-            # Terminar con error en consola como solicitado (sys.exit(1))
-            sys.exit(1)
+            # Terminar con código 2 para indicar "Fin de flujo por falta de registros" (no es error)
+            sys.exit(2)
 
         nombre_medico = buscador.extraer_primer_medico()
         

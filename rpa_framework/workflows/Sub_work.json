@@ -1,0 +1,68 @@
+{
+  "id": "sub_work",
+  "name": "Sub_work",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -610.0,
+        "y": -279.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "workflow",
+      "label": "ris",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -586.0,
+        "y": -116.0
+      },
+      "workflow_path": "RIS.json"
+    },
+    {
+      "id": "n3_0",
+      "type": "workflow",
+      "label": "pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -570.0,
+        "y": 48.0
+      },
+      "workflow_path": "pacs.json"
+    },
+    {
+      "id": "n4_0",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -253.0,
+        "y": 37.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    }
+  ],
+  "variables": {}
+}

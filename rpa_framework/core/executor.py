@@ -207,14 +207,29 @@ class ActionExecutor:
         duration = action.duration if action.duration > 0 else 1.0
         try:
             if action.selector:
-                element = self.selector_helper.find_element(action.selector)
+                element = self.selector_helper.find_element(
+                    action.selector,
+                    timeout=self.config.get("element_timeout", 2.0),
+                    app_context=action.app_context
+                )
                 element.set_focus()
-                element.press_mouse()
+                
+                # Highlight
+                try:
+                    rect = element.rectangle()
+                    cx, cy = rect.mid_point()
+                    if self.vf: self.vf.highlight_click(cx, cy, color="#FF0000", duration=0.8)
+                except:
+                    pass
+
+                element.press_mouse_input()
                 time.sleep(duration)
-                element.release_mouse()
+                element.release_mouse_input()
             elif action.position:
                 import pyautogui
                 x, y = action.position["x"], action.position["y"]
+                if self.vf: self.vf.highlight_click(x, y, color="#FF0000", duration=0.8)
+                
                 pyautogui.mouseDown(x, y)
                 time.sleep(duration)
                 pyautogui.mouseUp(x, y)

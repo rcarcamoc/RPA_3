@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDateEdit, QComboBox, QGridLayout, QScrollArea, QFrame
+    QDateEdit, QComboBox, QGridLayout, QScrollArea, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PyQt6.QtCore import Qt, QDate, QTimer
 from PyQt6.QtGui import QFont
@@ -127,7 +128,8 @@ class ChartWidget(QWidget):
         # Less aggressive truncation to allow reading labels
         labels = [label[:40] + '...' if len(str(label)) > 40 else str(label) for label in labels]
         
-        bars = ax.bar(labels, values, color=color, alpha=0.7, edgecolor='black', linewidth=1.2)
+        x_indices = list(range(len(labels)))
+        bars = ax.bar(x_indices, values, color=color, alpha=0.7, edgecolor='black', linewidth=1.2)
         
         # Add value labels on bars
         for bar in bars:
@@ -200,8 +202,12 @@ class ChartWidget(QWidget):
         sorted_keys = sorted(data_dict.keys())
         values = [data_dict[k] for k in sorted_keys]
         
-        ax.plot(sorted_keys, values, marker='o', linestyle='-', color=color, linewidth=2, markersize=6)
-        ax.fill_between(sorted_keys, values, color=color, alpha=0.1)
+        # FIX: Evitar el aviso "categorical units" usando índices numéricos para los datos
+        # y etiquetas de texto para el eje X de forma separada.
+        x_indices = list(range(len(sorted_keys)))
+        
+        ax.plot(x_indices, values, marker='o', linestyle='-', color=color, linewidth=2, markersize=6)
+        ax.fill_between(x_indices, values, color=color, alpha=0.1)
         
         ax.set_ylabel(ylabel, fontsize=10, fontweight='bold')
         
@@ -257,7 +263,8 @@ class DashboardPanel(QWidget):
         filters_layout.addWidget(QLabel("Desde:"))
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
-        self.date_from.setDate(QDate.currentDate().addDays(-7))  # Last 7 days
+        self.date_from.setDate(QDate.currentDate())  # Periodo actual: hoy
+        #self.date_from.setDate(QDate.currentDate().addDays(-7))  # Last 7 days
         self.date_from.setDisplayFormat("dd/MM/yyyy")
         self.date_from.dateChanged.connect(self.load_data) # Auto-update
         filters_layout.addWidget(self.date_from)
@@ -277,6 +284,23 @@ class DashboardPanel(QWidget):
         self.granularity.addItems(["Por Día", "Por Hora"])
         self.granularity.currentTextChanged.connect(self.load_data) # Auto-update
         filters_layout.addWidget(self.granularity)
+        
+        # Hoy button
+        btn_today = QPushButton("📅 Hoy")
+        btn_today.clicked.connect(self.set_today)
+        btn_today.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f5;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+        """)
+        filters_layout.addWidget(btn_today)
         
         # Refresh button (Partial redundancy but useful for manual refresh)
         refresh_btn = QPushButton("🔄 Actualizar Ahora")
@@ -314,12 +338,16 @@ class DashboardPanel(QWidget):
         
         self.card_total = StatCard("Total Ejecuciones", "0", "📁", "#1976D2")
         self.card_success = StatCard("Completadas", "0", "✅", "#4CAF50")
+        self.card_pending = StatCard("Pendientes", "0", "🟠", "#FB8C00")
+        self.card_no_records = StatCard("Sin Registros", "0", "🚫", "#757575")
         self.card_error = StatCard("Con Error", "0", "❌", "#F44336")
         self.card_process = StatCard("En Proceso", "0", "⏳", "#FFC107")
         self.card_avg_time = StatCard("Tiempo Promedio", "0s", "⏱️", "#9C27B0")
         
         cards_layout.addWidget(self.card_total)
         cards_layout.addWidget(self.card_success)
+        cards_layout.addWidget(self.card_pending)
+        cards_layout.addWidget(self.card_no_records)
         cards_layout.addWidget(self.card_error)
         cards_layout.addWidget(self.card_process)
         cards_layout.addWidget(self.card_avg_time)
@@ -327,22 +355,42 @@ class DashboardPanel(QWidget):
         scroll_layout.addLayout(cards_layout)
         
         # Charts section
-        charts_layout = QGridLayout()
+        charts_layout = QVBoxLayout()
         
         self.chart_timeline = ChartWidget("📈 Evolución Temporal (Ejecuciones)")
-        self.chart_estado = ChartWidget("📊 Distribución por Estado")
-        self.chart_doctor = ChartWidget("👨‍⚕️ Top 10 Doctores Detectados")
-        self.chart_diagnostico = ChartWidget("🩺 Top 10 Diagnósticos")
-        self.chart_patologia = ChartWidget("⚠️ Top 10 Patologías Críticas")
+        charts_layout.addWidget(self.chart_timeline)
         
-        # Full width for timeline
-        charts_layout.addWidget(self.chart_timeline, 0, 0, 1, 2)
+        # Table section
+        table_label = QLabel("📋 Detalle de Ejecuciones")
+        table_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #333; margin-top: 15px; margin-bottom: 5px;")
+        charts_layout.addWidget(table_label)
         
-        # Grid for others
-        charts_layout.addWidget(self.chart_estado, 1, 0)
-        charts_layout.addWidget(self.chart_doctor, 1, 1)
-        charts_layout.addWidget(self.chart_diagnostico, 2, 0)
-        charts_layout.addWidget(self.chart_patologia, 2, 1)
+        self.table_results = QTableWidget()
+        self.table_results.setColumnCount(11)
+        self.table_results.setHorizontalHeaderLabels([
+            "ID", "Fecha Inicio", "Estado", "Último Nodo", "Última Act.", 
+            "Documento", "Doctor", "Diagnóstico", "Examen", "PDF/URL", "Duración"
+        ])
+        self.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table_results.horizontalHeader().setStretchLastSection(False) # Let columns define width
+        self.table_results.setAlternatingRowColors(True)
+        self.table_results.setWordWrap(True)
+        self.table_results.setMinimumHeight(500)
+        self.table_results.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                gridline-color: #ddd;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+            QHeaderView::section {
+                background-color: #f5f5f5;
+                padding: 4px;
+                border: 1px solid #ddd;
+                font-weight: bold;
+            }
+        """)
+        charts_layout.addWidget(self.table_results)
         
         scroll_layout.addLayout(charts_layout)
         
@@ -363,6 +411,12 @@ class DashboardPanel(QWidget):
             print(f"Error connecting to database: {e}")
             return None
     
+    def set_today(self):
+        """Set date filters to today and reload"""
+        self.date_from.setDate(QDate.currentDate())
+        self.date_to.setDate(QDate.currentDate())
+        self.load_data()
+
     def load_data(self):
         """Load data from database and update UI"""
         conn = self.get_db_connection()
@@ -393,7 +447,8 @@ class DashboardPanel(QWidget):
                     fecha_agendada,
                     examen,
                     patologia_critica_detectada,
-                    TIMESTAMPDIFF(SECOND, inicio, `update`) as duracion_segundos
+                    TIMESTAMPDIFF(SECOND, inicio, `update`) as duracion_segundos,
+                    url as pdf
                 FROM registro_acciones
                 WHERE DATE(inicio) BETWEEN %s AND %s
             """
@@ -409,14 +464,30 @@ class DashboardPanel(QWidget):
             # Calculate statistics
             total = len(records)
             
-            # Count by state
+            # Count by state (Case insensitive handles most cases except specific ones)
             estados = {}
             for record in records:
-                estado = record['estado'] or 'Sin Estado'
-                estados[estado] = estados.get(estado, 0) + 1
+                # Clean and ensure string
+                estado_val = str(record['estado'] or '').strip()
+                estados[estado_val] = estados.get(estado_val, 0) + 1
             
-            success = estados.get('Completado', 0) + estados.get('completado', 0)
+            # 1. Success: Completado/completado, Terminado/terminado
+            success = (estados.get('Completado', 0) + estados.get('completado', 0) + 
+                       estados.get('Terminado', 0) + estados.get('terminado', 0))
+            
+            # 2. Error: "Error" y "error"
             error = estados.get('error', 0) + estados.get('Error', 0)
+            
+            # 3. Pending (específico)
+            pending = estados.get('Terminado - Pending', 0)
+
+            # 4. Sin registros para trabajar (Case insensitive check better here maybe)
+            no_records = 0
+            for est, count in estados.items():
+                if est.lower() == 'sin registros para trabajar':
+                    no_records += count
+
+            # 5. En Proceso
             process = estados.get('En Proceso', 0)
             
             # Calculate average execution time (only for completed records)
@@ -432,37 +503,11 @@ class DashboardPanel(QWidget):
             # Update cards
             self.card_total.update_value(total)
             self.card_success.update_value(success)
+            self.card_pending.update_value(pending)
+            self.card_no_records.update_value(no_records)
             self.card_error.update_value(error)
             self.card_process.update_value(process)
             self.card_avg_time.update_value(avg_time_str)
-            
-            # Count by doctor
-            doctores = {}
-            for record in records:
-                doctor = record['doctor_detectado'] or 'Sin Doctor'
-                if doctor and doctor.strip():
-                    doctores[doctor] = doctores.get(doctor, 0) + 1
-            
-            # Count by diagnostico
-            diagnosticos = {}
-            for record in records:
-                diag = record['diagnostico'] or 'Sin Diagnóstico'
-                if diag and diag.strip() and diag != 'Sin Diagnóstico':
-                    # Truncate long diagnostics
-                    diag_short = diag[:50] + '...' if len(diag) > 50 else diag
-                    diagnosticos[diag_short] = diagnosticos.get(diag_short, 0) + 1
-            
-            # Count by patologia critica
-            patologias = {}
-            for record in records:
-                pat = record['patologia_critica_detectada'] or record['patologia_critica'] or 'Sin Patología'
-                if pat and pat.strip() and pat != 'Sin Patología':
-                    patologias[pat] = patologias.get(pat, 0) + 1
-            
-            # Sort and get top 10
-            doctores_top = dict(sorted(doctores.items(), key=lambda x: x[1], reverse=True)[:10])
-            diagnosticos_top = dict(sorted(diagnosticos.items(), key=lambda x: x[1], reverse=True)[:10])
-            patologias_top = dict(sorted(patologias.items(), key=lambda x: x[1], reverse=True)[:10])
             
             # Count by Time (Granularity)
             temporal_data = {}
@@ -477,16 +522,36 @@ class DashboardPanel(QWidget):
                         key = dt.strftime("%Y-%m-%d %H:00")
                     temporal_data[key] = temporal_data.get(key, 0) + 1
             
-            # Fill missing periods if needed (optional, just sort for now)
-            
-            # Update charts
+            # Update chart
             self.chart_timeline.plot_line_chart(temporal_data, "Tiempo", "Ejecuciones", "#1976D2")
-            self.chart_estado.plot_pie_chart(estados)
-            self.chart_doctor.plot_bar_chart(doctores_top, "Doctor", "Cantidad", "#1976D2")
-            self.chart_diagnostico.plot_bar_chart(diagnosticos_top, "Diagnóstico", "Cantidad", "#4CAF50")
-            self.chart_patologia.plot_bar_chart(patologias_top, "Patología Crítica", "Cantidad", "#F44336")
             
-            print(f"✅ Dashboard actualizado: {total} registros cargados")
+            # Update Table
+            self.table_results.setRowCount(0)
+            for row, record in enumerate(records):
+                self.table_results.insertRow(row)
+                
+                # Format duration
+                dur = record.get('duracion_segundos')
+                dur_str = f"{dur}s" if dur else "N/A"
+                
+                # Fill cells
+                self.table_results.setItem(row, 0, QTableWidgetItem(str(record.get('id', ''))))
+                self.table_results.setItem(row, 1, QTableWidgetItem(str(record.get('inicio', ''))))
+                self.table_results.setItem(row, 2, QTableWidgetItem(str(record.get('estado', ''))))
+                self.table_results.setItem(row, 3, QTableWidgetItem(str(record.get('ultimo_nodo', ''))))
+                self.table_results.setItem(row, 4, QTableWidgetItem(str(record.get('update', ''))))
+                self.table_results.setItem(row, 5, QTableWidgetItem(str(record.get('numero_documento', ''))))
+                self.table_results.setItem(row, 6, QTableWidgetItem(str(record.get('doctor_detectado', ''))))
+                self.table_results.setItem(row, 7, QTableWidgetItem(str(record.get('diagnostico', '') or '')))
+                self.table_results.setItem(row, 8, QTableWidgetItem(str(record.get('examen', '') or '')))
+                self.table_results.setItem(row, 9, QTableWidgetItem(str(record.get('pdf', '') or '')))
+                self.table_results.setItem(row, 10, QTableWidgetItem(dur_str))
+            
+            # Resize to fit contents
+            self.table_results.resizeColumnsToContents()
+            self.table_results.resizeRowsToContents()
+            
+            # logger.info(f"✅ Dashboard actualizado: {total} registros cargados") # Noise reduction as requested
             
         except Exception as e:
             print(f"Error loading data: {e}")
@@ -500,6 +565,8 @@ class DashboardPanel(QWidget):
         """Update UI when no data is available"""
         self.card_total.update_value("0")
         self.card_success.update_value("0")
+        self.card_pending.update_value("0")
+        self.card_no_records.update_value("0")
         self.card_error.update_value("0")
         self.card_process.update_value("0")
         self.card_avg_time.update_value("N/A")

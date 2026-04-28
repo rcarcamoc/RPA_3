@@ -27,8 +27,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -593.0,
-        "y": -158.0
+        "x": -648.0,
+        "y": -108.0
       },
       "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\seleccion int 2.py",
       "command": "",
@@ -44,13 +44,13 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -608.0,
-        "y": -6.0
+        "x": -669.0,
+        "y": 110.0
       },
-      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\busca_doctor.py",
+      "script": "web\\busca_doctor.py",
       "command": "",
       "output_variable": "",
-      "command_type": "custom",
+      "command_type": "",
       "program_path": "",
       "process_name": ""
     },
@@ -61,10 +61,10 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -574.0,
-        "y": 106.0
+        "x": -179.0,
+        "y": 111.0
       },
-      "script": "web\\detecta_patologia_ia.py",
+      "script": "web\\detecta_patologia_ia_v2.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -78,8 +78,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -315.0,
-        "y": 137.0
+        "x": -422.0,
+        "y": 112.0
       },
       "script": "web\\procesar_pdf_doctor.py",
       "command": "",
@@ -173,14 +173,14 @@
     },
     {
       "from": "n4_0",
-      "to": "n5_0"
-    },
-    {
-      "from": "n5_0",
       "to": "n6_0"
     },
     {
       "from": "n6_0",
+      "to": "n5_0"
+    },
+    {
+      "from": "n5_0",
       "to": "n7_0"
     },
     {

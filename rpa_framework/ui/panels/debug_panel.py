@@ -309,6 +309,18 @@ class DebugPanel(QWidget):
         self._log(f"{status}")
 
     def _log(self, text: str):
+        # Filtrar ruido antes de mostrar en la UI
+        noise_keywords = [
+            "==================================================",
+            "✅ Dashboard actualizado",
+            "categorical units to plot",
+            "Using categorical units"
+        ]
+        
+        if any(kw in text for kw in noise_keywords):
+            return
+
         self.log_output.append(text)
         sb = self.log_output.verticalScrollBar()
         sb.setValue(sb.maximum())
+

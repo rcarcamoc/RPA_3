@@ -61,37 +61,107 @@ def execute_ocr_click_0():
         
         # Inicializar acciones
         actions = OCRActions(engine, matcher, delay=0.3)
+        from fuzzywuzzy import fuzz
         
-        # Buscar texto para clic robusto con reintentos
-        delays = [5, 3, 5]
+        # Buscar texto para clic robusto con reintentos evaluando ORACIONES
+        delays = [3, 3, 3, 3, 3]
+        search_terms = ['Búsqueda de Pacientes', 'Patient Search']
         matches = None
+        region = {'left': 0, 'top': 0, 'width': 182, 'height': 1010}
         
         for attempt, delay in enumerate(delays):
             if delay > 0:
                 print(f"Intento {attempt + 1}: Reintentando en {delay} segundos...")
                 time.sleep(delay)
             
-            matches = actions.capture_and_find(
-                search_term='búsqueda',
-                fuzzy=True,
-                region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
-            )
-            if matches:
+            # 1. Capturar pantalla localmente
+            actions.capture_screenshot(region=region)
+            
+            # 2. Extraer texto crudo con ubicaciones
+            ocr_results = engine.extract_text_with_location(actions.last_screenshot)
+            
+            # Ajustar coordenadas globales
+            for res in ocr_results:
+                res['center']['x'] += region['left']
+                res['center']['y'] += region['top']
+                
+            # 3. Evaluar oraciones (Agrupando bloques en la misma línea Y)
+            highest_score = 0
+            best_res = None
+            
+            # Ordenar de arriba a abajo, izquierda a derecha (tolerancia de 15px en Y para "misma línea")
+            ocr_results.sort(key=lambda x: (int(x['center']['y'] / 15), x['center']['x']))
+            
+            for term in search_terms:
+                term_lower = term.lower()
+                
+                # Probar cada bloque individual y combinaciones de hasta 3 palabras consecutivas
+                for window_size in [1, 2, 3]:
+                    if len(ocr_results) < window_size:
+                        continue
+                        
+                    for i in range(len(ocr_results) - window_size + 1):
+                        window = ocr_results[i:i+window_size]
+                        
+                        # Si combinamos varios bloques, deben estar casi en la misma altura Y
+                        if window_size > 1:
+                            y_diff = abs(window[0]['center']['y'] - window[-1]['center']['y'])
+                            if y_diff > 25: 
+                                continue # Saltar si están en líneas distintas
+                                
+                        texto_combinado = " ".join([w['text'] for w in window])
+                        
+                        # Usar fuzz.ratio estricto (compara longitud total de la oración, evita falsos positivos con palabras cortas como "de")
+                        score = fuzz.ratio(term_lower, texto_combinado.lower())
+                        
+                        if score > highest_score:
+                            highest_score = score
+                            best_res = window[0].copy()
+                            best_res['text'] = texto_combinado
+                            best_res['match_term'] = term
+                            
+            if highest_score >= 75: # Umbral del 75% sobre la oración completa
+                matches = [best_res]
+                print(f"  ✅ Encontrado: '{best_res['text']}' (Similitud Oración: {highest_score}% con '{best_res['match_term']}')")
                 break
+            else:
+                if best_res:
+                    print(f"  ⏳ Mejor intento OCR: '{best_res['text']}' (Similitud: {highest_score}% - Se requiere >= 75%)")
         
         # Si falla tras los reintentos automáticos, solicitar intervención del usuario
         if not matches:
             import pyautogui
             pyautogui.alert(
-                text='No se encontró el botón "búsqueda" después de varios intentos.\n\nPor favor, asegúrese de que el menú lateral del RIS esté visible y presione OK para reintentar.',
+                text='No se encontró el botón de búsqueda (Búsqueda / Patient Search) después de varios intentos.\n\nPor favor, asegúrese de que el menú lateral del RIS esté visible y presione OK para reintentar.',
                 title='RPA - Intervención Requerida'
             )
-            # Intento final tras la intervención
-            matches = actions.capture_and_find(
-                search_term='búsqueda',
-                fuzzy=True,
-                region={'left': 0, 'top': 0, 'width': 182, 'height': 1010}
-            )
+            # Intento final usando el mismo método exclusivo
+            actions.capture_screenshot(region=region)
+            ocr_results = engine.extract_text_with_location(actions.last_screenshot)
+            for res in ocr_results:
+                res['center']['x'] += region['left']
+                res['center']['y'] += region['top']
+            
+            ocr_results.sort(key=lambda x: (int(x['center']['y'] / 15), x['center']['x']))
+            highest_score = 0
+            best_res = None
+            
+            for term in search_terms:
+                term_lower = term.lower()
+                for window_size in [1, 2, 3]:
+                    if len(ocr_results) < window_size: continue
+                    for i in range(len(ocr_results) - window_size + 1):
+                        window = ocr_results[i:i+window_size]
+                        if window_size > 1 and abs(window[0]['center']['y'] - window[-1]['center']['y']) > 25: continue
+                        texto_combinado = " ".join([w['text'] for w in window])
+                        score = fuzz.ratio(term_lower, texto_combinado.lower())
+                        if score > highest_score:
+                            highest_score = score
+                            best_res = window[0].copy()
+                            best_res['text'] = texto_combinado
+            
+            if highest_score >= 75:
+                matches = [best_res]
 
         result = None
         if matches:
@@ -126,13 +196,13 @@ def execute_ocr_click_0():
             result = {
                 'action': 'click',
                 'status': 'error',
-                'message': 'No se encontró el texto "búsqueda" tras reintentos e intervención manual'
+                'message': f'No se encontró ninguno de los términos {search_terms} tras reintentos'
             }
 
         
         # Verificar si se encontró y cliqueó con éxito
         if not result or result.get('status') != 'success':
-            error_obs = 'No se encontró el texto "búsqueda" en el menú lateral'
+            error_obs = 'No se encontró el botón "Búsqueda" o "Patient Search" en el menú lateral'
             db_update(status='Error', obs=error_obs)
             
             # Notificación Visual y Telegram

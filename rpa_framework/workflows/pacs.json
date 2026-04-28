@@ -21,8 +21,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -422.0,
-        "y": -497.0
+        "x": -363.00864553314113,
+        "y": -493.06724303554273
       },
       "script": "",
       "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
@@ -38,8 +38,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -425.0,
-        "y": -394.0
+        "x": -578.3775216138329,
+        "y": -502.1508165225745
       },
       "script": "ui\\Abre_pacs.py",
       "command": "",
@@ -55,27 +55,10 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -425.0,
-        "y": -293.0
+        "x": -867.435158501441,
+        "y": -498.48655139289144
       },
       "script": "ui\\ingresa_user_pacs.py",
-      "command": "",
-      "output_variable": "",
-      "command_type": "",
-      "program_path": "",
-      "process_name": ""
-    },
-    {
-      "id": "n5_0",
-      "type": "action",
-      "label": "verifica incio",
-      "on_error": "stop",
-      "enabled": true,
-      "position": {
-        "x": -424.0,
-        "y": -190.0
-      },
-      "script": "ui\\verifica_inicio.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -89,8 +72,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -425.0,
-        "y": -89.0
+        "x": -571.4951969260326,
+        "y": -358.3938520653218
       },
       "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ocr\\busca_busqueda de pacientes.py",
       "command": "",
@@ -106,27 +89,10 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -423.0,
-        "y": 2.0
+        "x": -221.20220941402494,
+        "y": -381.2084534101825
       },
       "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\busqueda_paciente.py",
-      "command": "",
-      "output_variable": "",
-      "command_type": "",
-      "program_path": "",
-      "process_name": ""
-    },
-    {
-      "id": "n8_0",
-      "type": "action",
-      "label": "Click y ordenar",
-      "on_error": "stop",
-      "enabled": false,
-      "position": {
-        "x": -99.0,
-        "y": -541.0
-      },
-      "script": "ui\\clic_y_ordenar.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -140,8 +106,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -101.0,
-        "y": -432.0
+        "x": -287.8722382324688,
+        "y": -231.1604226705091
       },
       "script": "ocr\\busqueda_triple_text_only.py",
       "command": "",
@@ -157,10 +123,10 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -99.0,
-        "y": -320.0
+        "x": -637.6272814601346,
+        "y": -212.59702209414024
       },
-      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\diagnostica y pega.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\pega en word.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -200,6 +166,40 @@
       "command_type": "",
       "program_path": "",
       "process_name": ""
+    },
+    {
+      "id": "n13_0",
+      "type": "action",
+      "label": "actualiza estado",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -954.3165225744478,
+        "y": -204.5297790585975
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\actualiza_estado.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n15_0",
+      "type": "action",
+      "label": "Verifica inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -841.0,
+        "y": -364.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\verifica_inicio_v4_similitud.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
     }
   ],
   "edges": [
@@ -212,30 +212,6 @@
       "to": "n4_0"
     },
     {
-      "from": "n4_0",
-      "to": "n5_0"
-    },
-    {
-      "from": "n5_0",
-      "to": "n6_0"
-    },
-    {
-      "from": "n6_0",
-      "to": "n7_0"
-    },
-    {
-      "from": "n7_0",
-      "to": "n8_0"
-    },
-    {
-      "from": "n8_0",
-      "to": "n9_0"
-    },
-    {
-      "from": "n9_0",
-      "to": "n10_0"
-    },
-    {
       "from": "n11_0",
       "to": "n2_0"
     },
@@ -246,6 +222,30 @@
     {
       "from": "n12_0",
       "to": "n11_0"
+    },
+    {
+      "from": "n10_0",
+      "to": "n13_0"
+    },
+    {
+      "from": "n15_0",
+      "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "n7_0",
+      "to": "n9_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n15_0"
+    },
+    {
+      "from": "n9_0",
+      "to": "n10_0"
     }
   ],
   "variables": {}

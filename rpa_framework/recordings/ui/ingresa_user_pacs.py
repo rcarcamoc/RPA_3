@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-Script autogenerado: ingresa_user_pacs
-Generado: 2026-01-02 06:52:35
-Total de acciones: 6
-"""
+
 
 import sys
 import time
@@ -139,14 +135,19 @@ class IngresaUserPacsAutomation:
         # Obtener credenciales de la base de datos
         db_user, db_pass = self.get_credentials()
         if not db_user or not db_pass:
-            logger.warning("No se encontraron credenciales en 'ris.registro_acciones' con estado 'En Proceso'. Usando valores por defecto.")
-            db_user = 'nombre_medico'
-            db_pass = 'pass:medico'
-        else:
-            # Mostrar longitud de las credenciales para depuración
-            logger.info(f"Credenciales obtenidas: Usuario (len={len(db_user)}), Pass (len={len(db_pass)})")
-            # Log de depuración para ver qué se va a escribir exactamente
-            logger.info(f"DEBUG: db_user='{db_user}', db_pass='{'*' * len(db_pass)}'")
+            error_msg = "No se encontraron credenciales en 'ris.registro_acciones' con estado 'En Proceso' o ocurrió un error en la BD."
+            logger.error(error_msg)
+            results["status"] = "FAILED"
+            results["reason"] = "Missing credentials"
+            results["errors"].append({"reason": error_msg})
+            # Actualizar estado a error si es posible
+            self.db_update_status('error')
+            return results
+        
+        # Mostrar longitud de las credenciales para depuración
+        logger.info(f"Credenciales obtenidas: Usuario (len={len(db_user)}), Pass (len={len(db_pass)})")
+        # Log de depuración para ver qué se va a escribir exactamente
+        logger.info(f"DEBUG: db_user='{db_user}', db_pass='{'*' * len(db_pass)}'")
         
         try:
             # Acción 1: CLICK Username
