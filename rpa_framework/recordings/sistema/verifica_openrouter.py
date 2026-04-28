@@ -158,25 +158,18 @@ def main():
         sys.exit(0)
     else:
         print(f"❌ Error en API Key: {msg}")
-        
-        # Notificar por Telegram
+        error_msg = f"La API Key de OpenRouter ha fallado o no está configurada. Error: {msg}"
         try:
-            enviar_alerta_todos(f"⚠️ <b>ALERTA DE SISTEMA</b> ⚠️\n\nLa API Key de OpenRouter ha fallado o no está configurada.\n<b>Error:</b> {msg}\n\nSe requiere intervención manual.")
-        except:
-            pass
-        
-        # Mostrar GUI
-        win = KeyUpdateWindow(current_key, msg)
-        new_key = win.run()
-        
-        if new_key:
             try:
-                enviar_alerta_todos("✅ <b>SISTEMA RESTAURADO</b> ✅\n\nLa API Key de OpenRouter ha sido actualizada y verificada correctamente.")
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("verifica_openrouter.py", error_msg)
+        except ImportError:
+            try:
+                enviar_alerta_todos(f"⚠️ <b>ALERTA DE SISTEMA</b> ⚠️\n\nLa API Key de OpenRouter ha fallado.\n<b>Error:</b> {msg}")
             except:
                 pass
-            sys.exit(0)
-        else:
-            print("El usuario canceló la actualización.")
             sys.exit(1)
 
 if __name__ == "__main__":

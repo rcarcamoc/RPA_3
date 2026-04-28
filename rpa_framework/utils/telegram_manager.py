@@ -106,6 +106,52 @@ def enviar_alerta_todos(mensaje):
         else:
             print(f"  [Error] No se pudo enviar a {chat_id}")
 
+def enviar_foto(chat_id, ruta_imagen, caption=""):
+    """Envía una foto a un chat. Si el archivo es muy grande, la comprime antes."""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+
+    # Comprimir si el archivo pesa más de 4 MB
+    try:
+        import io
+        from PIL import Image as PILImage
+        tam = os.path.getsize(ruta_imagen)
+        if tam > 4 * 1024 * 1024:
+            img = PILImage.open(ruta_imagen)
+            img.thumbnail((1920, 1080), PILImage.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=70)
+            buffer.seek(0)
+            files = {"photo": ("screenshot.jpg", buffer, "image/jpeg")}
+        else:
+            files = {"photo": open(ruta_imagen, "rb")}
+    except Exception:
+        files = {"photo": open(ruta_imagen, "rb")}
+
+    try:
+        res = requests.post(url, data=data, files=files).json()
+        if not res.get("ok"):
+            print(f"  [Telegram API Error] sendPhoto: {res.get('description', res)}")
+        return res.get("ok")
+    except Exception as e:
+        print(f"Error enviando foto a {chat_id}: {e}")
+        return False
+
+def enviar_foto_todos(ruta_imagen, caption=""):
+    """Envía una foto con mensaje a todos los usuarios registrados."""
+    usuarios = cargar_usuarios()
+    if not usuarios:
+        print("Error: No hay usuarios registrados en usuarios.json.")
+        return
+
+    print(f"Enviando foto a {len(usuarios)} suscriptores...")
+    for chat_id in usuarios:
+        if enviar_foto(chat_id, ruta_imagen, caption):
+            print(f"  [OK] Foto enviada a {chat_id}")
+        else:
+            print(f"  [Error] No se pudo enviar foto a {chat_id}")
+
+
 if __name__ == "__main__":
     if "--listen" in sys.argv:
         registrar_usuarios()

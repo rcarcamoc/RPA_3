@@ -239,26 +239,37 @@ def main():
             abrir_globalprotect()
             # Intentamos automatizar la conexión con los clics de ksy.py
             ejecutar_clics_vpn()
-            # Si después de los clics sigue desconectada, mostramos el popup para ayuda manual
+            # Si después de los clics sigue desconectada, notificamos y salimos
             if not vpn_conectada_palo_alto():
-                mostrar_popup_vpn()
+                error_msg = "VPN desconectada: no se pudo conectar automáticamente a GlobalProtect."
+                print(f"ERROR: {error_msg}")
+                try:
+                    try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+                    handle_error_and_exit("verifica_vpn.py", error_msg)
+                except ImportError:
+                    try:
+                        enviar_alerta_todos(f"🚨 <b>VPN DESCONECTADA</b>🚨\n{error_msg}")
+                    except: pass
+                    db_update('Error', observacion=error_msg)
+                    sys.exit(1)
         
         print("VPN OK. Procediendo...")
         
     except Exception as e:
-        # Flujo de Cierre para errores:
         desc_falla = str(e)
-        
-        # A. Capturar la falla (except)
-        
-        # B. Realizar el UPDATE en la tabla ris.registro_acciones
-        db_update('Error', observacion=desc_falla)
-        
-        # C. Cerrar cualquier recurso abierto (en este script solo era la DB ya cerrada)
-        
-        # D. Notificar al motor de Workflows y salir
-        print(f"ERROR: {desc_falla}") # Esto aparecerá en el log de la UI
-        sys.exit(1) # Código 1 indica fallo y detiene el workflow
+        try:
+            try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("verifica_vpn.py", desc_falla)
+        except ImportError:
+            db_update('Error', observacion=desc_falla)
+            print(f"ERROR: {desc_falla}")
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()

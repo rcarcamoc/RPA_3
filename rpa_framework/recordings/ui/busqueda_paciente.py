@@ -75,11 +75,19 @@ class BusquedaPacienteAutomation:
             logger.warning(f"[DB Error] {e}")
 
     def fatal_error(self, message):
-        """Actualiza la BD con el error y detiene la ejecución inmediatamente."""
+        """Actualiza la BD con el error, envía Telegram y detiene la ejecución."""
         logger.error(f"❌ ERROR CRÍTICO: {message}")
-        self.db_update_status('Error', obs=message)
-        print(f"ERROR: {message}")
-        sys.exit(1)
+        try:
+            try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("busqueda_paciente.py", message)
+        except ImportError:
+            self.db_update_status('Error', obs=message)
+            print(f"ERROR: {message}")
+            sys.exit(1)
+
     
     def get_patient_id(self):
         """Obtiene el id_primario desde la BD."""

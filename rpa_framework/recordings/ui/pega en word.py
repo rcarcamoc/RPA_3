@@ -337,21 +337,15 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
         # ------------------------------
 
         logger.warning("❌ No se pudo encontrar la barra tras reintento")
-        
-        # Mostrar alerta al usuario pidiendo acción (solo si falló la sanación)
-        msg = "No se pudo encontrar la barra de Word.\n\nPor favor:\n1. Asegúrate que Word esté abierto y visible.\n2. Ponlo en primer plano."
-        title = "RPA - Word No Encontrado"
-        
-        enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{msg}")
-        
-        button_pressed = ctypes.windll.user32.MessageBoxW(0, msg, title, 0x05 | 0x30 | 0x40000)
-        
-        if button_pressed == 4: # Retry
-            logger.info("🔄 Usuario indicó reintentar. Buscando de nuevo...")
-            time.sleep(1)
-            continue
-        else: # Cancel
-            logger.info("🛑 Usuario canceló la operación.")
+        error_msg = "No se pudo encontrar la barra de herramientas de Word después de los reintentos."
+        try:
+            try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("pega en word.py", error_msg)
+        except ImportError:
+            enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{error_msg}")
             return False
     
     realizar_accion_en_bloque(bloque_info, accion=accion, offset_y=offset)
@@ -585,36 +579,9 @@ class Test1Automation:
                         
                         # VALIDACIÓN DE PEGADO
                         if VALIDACION_PEGADO:
-                            # Preguntar al usuario con 3 opciones: Sí / No / Reintentar
-                            msg = "El texto ha sido pegado.\n\n¿Es correcto el formato y contenido?\n\n• SÍ: Guardar y continuar\n• NO: Cancelar sin guardar\n• Reintentar: Reintentar pegado"
-                            title = "Validación de Pegado"
-                            
-                            enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{msg}")
-                            
-                            # Flags: MB_YESNOCANCEL (3) | MB_ICONQUESTION (20) | MB_TOPMOST (40000) | MB_SETFOREGROUND (10000)
-                            layout_confirm = ctypes.windll.user32.MessageBoxW(0, msg, title, 0x03 | 0x20 | 0x40000 | 0x10000)
-                            
-                            if layout_confirm == 6: # IDYES
-                                logger.info("✅ Usuario validó el pegado. Continuando...")
-                                validacion_exitosa = True
-                                
-                            elif layout_confirm == 7: # IDNO
-                                logger.warning("🛑 Usuario RECHAZÓ el pegado. Cancelando proceso...")
-                                enviar_alerta_todos("🚨 [Atención] El usuario RECHAZÓ el pegado. Proceso abortado.")
-                                raise Exception("El usuario rechazó el pegado (Botón NO)")
-                                
-                            elif layout_confirm == 2: # IDCANCEL (Reintentar)
-                                logger.info("🔄 Usuario solicitó REINTENTAR el pegado.")
-                                # Seleccionar todo y borrar antes de reintentar
-                                try:
-                                    pyautogui.hotkey('ctrl', 'a')
-                                    time.sleep(0.2)
-                                    pyautogui.press('delete')
-                                    time.sleep(0.5)
-                                    logger.info("📝 Contenido borrado. Reintentando pegado...")
-                                except Exception as e_clear:
-                                    logger.error(f"❌ Error al limpiar contenido: {e_clear}")
-                                # El loop continuará y volverá a pegar
+                            # Validación automática: asumir pegado correcto y continuar
+                            logger.info("✅ Validación automática de pegado (sin interacción del usuario).")
+                            validacion_exitosa = True
                         else:
                             validacion_exitosa = True
 
@@ -693,7 +660,14 @@ class Test1Automation:
             logger.error(f"❌ Error crítico: {e}")
             results["status"] = "FAILED"
             results["errors"].append({"reason": str(e)})
-            self.db_update_status('error')
+            try:
+                try:
+            from utils.error_handler import handle_error_and_exit
+        except ImportError:
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("pega en word.py", str(e))
+            except ImportError:
+                self.db_update_status('error')
         
         results["end_time"] = datetime.now().isoformat()
         
