@@ -340,9 +340,9 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
         error_msg = "No se pudo encontrar la barra de herramientas de Word después de los reintentos."
         try:
             try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                from utils.error_handler import handle_error_and_exit
+            except ImportError:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
             handle_error_and_exit("pega en word.py", error_msg)
         except ImportError:
             enviar_alerta_todos(f"🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\n{error_msg}")
@@ -662,9 +662,9 @@ class Test1Automation:
             results["errors"].append({"reason": str(e)})
             try:
                 try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                    from utils.error_handler import handle_error_and_exit
+                except ImportError:
+                    from rpa_framework.utils.error_handler import handle_error_and_exit
                 handle_error_and_exit("pega en word.py", str(e))
             except ImportError:
                 self.db_update_status('error')

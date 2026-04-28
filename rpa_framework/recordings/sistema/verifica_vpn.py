@@ -245,9 +245,9 @@ def main():
                 print(f"ERROR: {error_msg}")
                 try:
                     try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                        from utils.error_handler import handle_error_and_exit
+                    except ImportError:
+                        from rpa_framework.utils.error_handler import handle_error_and_exit
                     handle_error_and_exit("verifica_vpn.py", error_msg)
                 except ImportError:
                     try:
@@ -262,9 +262,9 @@ def main():
         desc_falla = str(e)
         try:
             try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                from utils.error_handler import handle_error_and_exit
+            except ImportError:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
             handle_error_and_exit("verifica_vpn.py", desc_falla)
         except ImportError:
             db_update('Error', observacion=desc_falla)

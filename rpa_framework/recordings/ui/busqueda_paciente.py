@@ -79,9 +79,9 @@ class BusquedaPacienteAutomation:
         logger.error(f"❌ ERROR CRÍTICO: {message}")
         try:
             try:
-            from utils.error_handler import handle_error_and_exit
-        except ImportError:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+                from utils.error_handler import handle_error_and_exit
+            except ImportError:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
             handle_error_and_exit("busqueda_paciente.py", message)
         except ImportError:
             self.db_update_status('Error', obs=message)
