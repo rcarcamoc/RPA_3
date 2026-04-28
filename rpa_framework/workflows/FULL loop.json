@@ -1,0 +1,435 @@
+{
+  "id": "full_loop",
+  "name": "FULL loop",
+  "description": "Consolidación de RIS y PACS",
+  "nodes": [
+    {
+      "id": "ris_n8_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -601.0,
+        "y": -550.0
+      }
+    },
+    {
+      "id": "ris_n10_0",
+      "type": "action",
+      "label": "Verifica open",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -397.0,
+        "y": -548.0
+      },
+      "script": "sistema\\verifica_openrouter.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n9_0",
+      "type": "action",
+      "label": "Verifica VPN",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -199.0,
+        "y": -544.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_2537e2dc",
+      "type": "action",
+      "label": "verifica conexion mysql",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 9.0,
+        "y": -544.0
+      },
+      "script": "sistema\\check_db_connection.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n2_0",
+      "type": "action",
+      "label": "Inicia RIS",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 8.0,
+        "y": -431.0
+      },
+      "script": "web\\Inicio_ris.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n3_0",
+      "type": "action",
+      "label": "selecciona",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -203.0,
+        "y": -432.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\seleccion int 2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n4_0",
+      "type": "action",
+      "label": "Busca_doctor",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -407.0,
+        "y": -430.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\busca_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n5_0",
+      "type": "action",
+      "label": "detecta patologia critica",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -615.0,
+        "y": -432.0
+      },
+      "script": "web\\detecta_patologia_ia.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "ris_n6_0",
+      "type": "action",
+      "label": "procesar_pdf_doctor",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -615.0,
+        "y": -314.0
+      },
+      "script": "web\\procesar_pdf_doctor.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n12_0",
+      "type": "action",
+      "label": "verifica open pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -399.0,
+        "y": -316.0
+      },
+      "script": "sistema\\verifica_openrouter.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n11_0",
+      "type": "action",
+      "label": "comprueba vpn pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -201.0,
+        "y": -315.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n2_0",
+      "type": "action",
+      "label": "muestra escitorio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 8.0,
+        "y": -313.0
+      },
+      "script": "",
+      "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
+      "output_variable": "",
+      "command_type": "desktop",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n3_0",
+      "type": "action",
+      "label": "abre pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 13.0,
+        "y": -191.0
+      },
+      "script": "ui\\Abre_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n4_0",
+      "type": "action",
+      "label": "ingresa user pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -205.0,
+        "y": -191.0
+      },
+      "script": "ui\\ingresa_user_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n5_0",
+      "type": "action",
+      "label": "verifica incio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -408.0,
+        "y": -193.0
+      },
+      "script": "ui\\verifica_inicio.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n6_0",
+      "type": "action",
+      "label": "busca dinamicamente \"busca paciente\"",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -637.0,
+        "y": -190.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ocr\\busca_busqueda de pacientes.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n7_0",
+      "type": "action",
+      "label": "ingresa id cliente",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -642.0,
+        "y": -47.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\busqueda_paciente.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n8_0",
+      "type": "action",
+      "label": "Click y ordenar",
+      "on_error": "stop",
+      "enabled": false,
+      "position": {
+        "x": -417.0,
+        "y": -44.0
+      },
+      "script": "ui\\clic_y_ordenar.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n9_0",
+      "type": "action",
+      "label": "busqueda triple",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -198.0,
+        "y": -47.0
+      },
+      "script": "ocr\\busqueda_triple_text_only.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "pacs_n10_0",
+      "type": "action",
+      "label": "Diagnostica y pega",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 19.0,
+        "y": -42.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\diagnostica y pega.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "fin_node",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 35.0,
+        "y": 107.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "ris_n8_0",
+      "to": "ris_n10_0"
+    },
+    {
+      "from": "ris_n10_0",
+      "to": "ris_n9_0"
+    },
+    {
+      "from": "ris_n9_0",
+      "to": "ris_2537e2dc"
+    },
+    {
+      "from": "ris_2537e2dc",
+      "to": "ris_n2_0"
+    },
+    {
+      "from": "ris_n2_0",
+      "to": "ris_n3_0"
+    },
+    {
+      "from": "ris_n3_0",
+      "to": "ris_n4_0"
+    },
+    {
+      "from": "ris_n4_0",
+      "to": "ris_n5_0"
+    },
+    {
+      "from": "ris_n5_0",
+      "to": "ris_n6_0"
+    },
+    {
+      "from": "ris_n6_0",
+      "to": "pacs_n12_0"
+    },
+    {
+      "from": "pacs_n12_0",
+      "to": "pacs_n11_0"
+    },
+    {
+      "from": "pacs_n11_0",
+      "to": "pacs_n2_0"
+    },
+    {
+      "from": "pacs_n2_0",
+      "to": "pacs_n3_0"
+    },
+    {
+      "from": "pacs_n3_0",
+      "to": "pacs_n4_0"
+    },
+    {
+      "from": "pacs_n4_0",
+      "to": "pacs_n5_0"
+    },
+    {
+      "from": "pacs_n5_0",
+      "to": "pacs_n6_0"
+    },
+    {
+      "from": "pacs_n6_0",
+      "to": "pacs_n7_0"
+    },
+    {
+      "from": "pacs_n7_0",
+      "to": "pacs_n8_0"
+    },
+    {
+      "from": "pacs_n8_0",
+      "to": "pacs_n9_0"
+    },
+    {
+      "from": "pacs_n9_0",
+      "to": "pacs_n10_0"
+    },
+    {
+      "from": "pacs_n10_0",
+      "to": "fin_node"
+    }
+  ],
+  "variables": {}
+}

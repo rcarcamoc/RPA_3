@@ -55,9 +55,9 @@ logger = logging.getLogger(__name__)
 # Configuración Global
 VALIDACION_PEGADO = True
 
-def humanized_click(x, y, clicks=1, interval=0.1):
+def humanized_click(x, y, clicks=1, interval=0.1, hold_time=0.0):
     """
-    Realiza un movimiento de mouse humanizado hacia (x, y) y hace click.
+    Realiza un movimiento de mouse humanizado hacia (x, y) y hace click u opcionalmente lo sostiene.
     """
     duration = random.uniform(0.5, 1.0)
     
@@ -73,7 +73,13 @@ def humanized_click(x, y, clicks=1, interval=0.1):
         vf.highlight_click(x, y, color="#FF0000", duration=0.5)
     
     time.sleep(random.uniform(0.1, 0.3))
-    pyautogui.click(clicks=clicks, interval=interval)
+    
+    if hold_time > 0.0:
+        pyautogui.mouseDown(x, y)
+        time.sleep(hold_time)
+        pyautogui.mouseUp(x, y)
+    else:
+        pyautogui.click(clicks=clicks, interval=interval)
 
 
 def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70, log_dir=None):
@@ -132,14 +138,15 @@ def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70, log_
     if max_val >= confidence_threshold:
         match_found = True
         if vf:
-            vf.highlight_region(x, y, original_w, original_h, color="#00FF00", duration=1.0)
+            # Mostramos en amarillo siempre para mayor visibilidad
+            vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
         
     # 2. Confianza "Aceptable"
     elif max_val >= 0.20:
         logger.warning(f"⚠️ Confianza baja ({max_val*100:.2f}%) pero ACEPTADA por heurística.")
         match_found = True
         if vf:
-            vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.0)
+            vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
 
     if match_found:
         if log_dir:
@@ -167,8 +174,8 @@ def realizar_accion_en_bloque(bloque_info, accion="click_centro", offset_y=100):
     if accion == "click_centro":
         # Ajuste solicitado: 80px más abajo del centro detectado
         target_y = center_y + 80
-        logger.info(f"   → Click en centro de barra (+80px): ({center_x:.0f}, {target_y:.0f})")
-        humanized_click(center_x, target_y)
+        logger.info(f"   → Click sostenido (1s) en centro de barra (+80px): ({center_x:.0f}, {target_y:.0f})")
+        humanized_click(center_x, target_y, hold_time=1.0)
         
     elif accion == "click_guardar":
         # Coordenadas relativas específicas: 32, 36 desde la esquina superior izquierda
@@ -223,24 +230,32 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
 
 
 
-def set_clipboard_rtf(rtf_text):
-    """Coloca contenido RTF en el portapapeles."""
-    try:
-        win32clipboard.OpenClipboard()
-        win32clipboard.EmptyClipboard()
-        # Registrar formato RTF si es necesario o usar standard
-        cf_rtf = win32clipboard.RegisterClipboardFormat("Rich Text Format")
-        # RTF debe ser bytes
-        rtf_bytes = rtf_text.encode('cp1252', errors='replace')
-        win32clipboard.SetClipboardData(cf_rtf, rtf_bytes)
-        logger.info("Contenido RTF copiado al portapapeles")
-    except Exception as e:
-        logger.error(f"Error copiando RTF: {e}")
-    finally:
+def set_clipboard_rtf(rtf_text, plain_text=""):
+    """Coloca contenido RTF y texto plano en el portapapeles."""
+    for attempt in range(3):
         try:
-            win32clipboard.CloseClipboard()
-        except:
-            pass
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            # Registrar formato RTF si es necesario o usar standard
+            cf_rtf = win32clipboard.RegisterClipboardFormat("Rich Text Format")
+            # RTF debe ser bytes
+            rtf_bytes = rtf_text.encode('cp1252', errors='replace')
+            win32clipboard.SetClipboardData(cf_rtf, rtf_bytes)
+            
+            # Siempre incluir fallback de texto plano para habilitar el botón "Pegar" en MS Word y otros
+            if plain_text:
+                win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, plain_text)
+                
+            logger.info("Contenido RTF copiado al portapapeles")
+            break
+        except Exception as e:
+            logger.error(f"Error copiando RTF (intento {attempt+1}): {e}")
+            time.sleep(0.5)
+        finally:
+            try:
+                win32clipboard.CloseClipboard()
+            except:
+                pass
 
 
 class Test1Automation:
@@ -342,13 +357,23 @@ class Test1Automation:
         rtf_final = rtf_header + rtf_start + rtf_body + r"}"
         
         # 3. Poner en portapapeles y pegar
-        set_clipboard_rtf(rtf_final)
+        set_clipboard_rtf(rtf_final, text)
         
         # Espera crítica para dar tiempo al SO y la app de reconocer el portapapeles
-        time.sleep(1.0)
+        time.sleep(2.0)
         
-        # Ejecutar CTRL+V (sin 'clipboard_content' para no sobrescribir nuestro RTF)
-        self.executor.execute(Action(type=ActionType.KEY_COMBINATION, combination="CTRL+V", timestamp=datetime.now()))
+        # Ejecutar CTRL+V (manera robusta para evitar pérdida de keypresses)
+        try:
+            import pyautogui
+            pyautogui.keyDown('ctrl')
+            time.sleep(0.1)
+            pyautogui.press('v')
+            time.sleep(0.1)
+            pyautogui.keyUp('ctrl')
+            logger.info("Combinación CTRL+V ejectuda con éxito (vía pyautogui keydown/up)")
+        except Exception as e:
+            logger.warning(f"Error con pyautogui: {e}. Fallback a executor...")
+            self.executor.execute(Action(type=ActionType.KEY_COMBINATION, combination="CTRL+V", timestamp=datetime.now()))
 
     
     def setup(self) -> bool:

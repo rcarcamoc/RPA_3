@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+import subprocess
 
 # --- SUPPRESS CONSOLE NOISE ---
 # 1. Suppress pywinauto / COM warnings
@@ -10,10 +11,28 @@ warnings.filterwarnings("ignore", category=UserWarning, message=".*coinit_flags.
 # 2. Suppress Qt DPI / Window logs
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.qpa.plugin=false"
 
-# 3. Suppress noisy library logs (urllib3 pool warnings)
+# 3. Suppress noisy library logs
 import logging
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 logging.getLogger("selenium").setLevel(logging.ERROR)
+logging.getLogger("matplotlib").setLevel(logging.ERROR)
+
+# 4. Custom Filter for console noise (Separators, Dashboard updates, etc.)
+class ConsoleNoiseFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        # Omitir separadores largos
+        if "=====" in msg:
+            return False
+        # Omitir confirmación de dashboard
+        if "Dashboard actualizado" in msg:
+            return False
+        # Omitir advertencias de matplotlib específicas (fallback)
+        if "categorical units" in msg:
+            return False
+        return True
+
+logging.getLogger().addFilter(ConsoleNoiseFilter())
 
 # Force STA mode for COM/PyQt compatibility
 sys.coinit_flags = 2
@@ -43,6 +62,7 @@ try:
     from ui.workflow_panel_v2 import WorkflowPanelV2
     from ui.panels.debug_panel import DebugPanel
 
+    from utils.log_cleanup import cleanup_old_logs, PeriodicCleanup
     
 except ImportError as e:
     print(f"❌ Error importando módulos RPA: {e}")
@@ -66,6 +86,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"⚠️ Error cargando configuración: {e}")
             self.config = {}
+            
+        # Iniciar limpieza periódica (cada hora en punto)
+        self.cleanup_manager = PeriodicCleanup()
         
         self.init_ui()
     
@@ -115,6 +138,17 @@ class MainWindow(QMainWindow):
 # ============================================================================
 
 def main():
+    # Validar bases de datos antes de iniciar el GUI
+    db_check = os.path.join("recordings", "sistema", "check_db_connection.py")
+    if os.path.exists(db_check):
+        print(f"🚀 Iniciando validación de servicio MySQL...")
+        subprocess.run([sys.executable, db_check])
+        
+    # Limpieza inicial de logs al arrancar
+    try:
+        cleanup_old_logs()
+    except: pass
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

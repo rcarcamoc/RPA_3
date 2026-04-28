@@ -278,14 +278,20 @@ class ExtractorPDFDoctor:
             doc_number = match_doc.group(1) if match_doc else "NO ENCONTRADO"
             
             # 2. Cuerpo (Diagnóstico y Examen)
-            pattern_body = r'N[úu]mero de ficha.*?\n(.*?)(?=Atentamente|\Z)'
-            match_body = re.search(pattern_body, text_content, re.DOTALL | re.IGNORECASE)
+            start_search = re.search(r'N[úu]mero de ficha.*?\n', text_content, re.IGNORECASE)
             
             diagnostico = "NO ENCONTRADO"
             examen = "NO ENCONTRADO"
             
-            if match_body:
-                raw_diagnostico = match_body.group(1)
+            if start_search:
+                start_index = start_search.end()
+                last_atentamente = list(re.finditer(r'Atentamente', text_content, re.IGNORECASE))
+                if last_atentamente:
+                    end_index = last_atentamente[-1].start()
+                else:
+                    end_index = len(text_content)
+                
+                raw_diagnostico = text_content[start_index:end_index]
                 
                 # Segmento de examen es hasta el primer salto de página
                 if PAGE_MARKER in raw_diagnostico:
@@ -296,19 +302,33 @@ class ExtractorPDFDoctor:
                 # Diagnóstico es todo el contenido
                 diagnostico = raw_diagnostico.replace(PAGE_MARKER, "\n").strip()
                 
-                # Limpieza solicitada por el usuario
+                # Limpieza solicitada por el usuario (ampliada para multipágina)
                 limpiar = [
                     r"Integramédica",
                     r"Fecha Examen:.*?\n",
                     r"Tiempo Cero:.*?\n",
                     r"Fecha informe:.*?\n",
-                    r"Powered by TCPDF \(www\.tcpdf\.org\)"
+                    r"Powered by TCPDF \(www\.tcpdf\.org\)",
+                    r"Página \d+ / \d+",
+                    r"Página \d+ de \d+",
+                    r"Consecutivo \d+ \(.*?\)",
+                    r"Continuación de informe paciente.*?\n",
+                    r"Atentamente\.?\s*MD Radiologo\s*\d+\.\d+\.\d+-\d+",
+                    r"Omar Enriquez Gutierrez",
+                    r"MD Radiologo",
+                    r"11\.842\.031-4",
+                    r"Atentamente\.?"
                 ]
                 for p in limpiar:
                     diagnostico = re.sub(p, "", diagnostico, flags=re.IGNORECASE | re.MULTILINE)
                     segmento_examen = re.sub(p, "", segmento_examen, flags=re.IGNORECASE | re.MULTILINE)
                 
                 diagnostico = diagnostico.strip()
+                
+                # Eliminar múltiples saltos de línea consecutivos (más de 2)
+                diagnostico = re.sub(r'\n{3,}', '\n\n', diagnostico)
+                # Limpiar espacios al final de cada línea
+                diagnostico = "\n".join([line.rstrip() for line in diagnostico.splitlines()])
                 
                 # Para el campo 'examen', tomamos SOLO la primera fila (línea) no vacía
                 lineas_examen = [l.strip() for l in segmento_examen.splitlines() if l.strip()]

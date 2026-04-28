@@ -188,6 +188,58 @@ from PIL import Image
 from typing import Tuple, Optional
 
 
+def normalize_colored_backgrounds(img_rgb: np.ndarray) -> np.ndarray:
+    """
+    Detecta regiones con fondos de color (rojo, naranja, rosa, azul oscuro)
+    y las normaliza para que el pipeline Otsu pueda binarizarlas correctamente:
+      - Fondo coloreado  → blanco
+      - Texto claro (blanco) sobre esos fondos → negro
+
+    Colores cubiertos:
+      • Rojo      H=  0-10  y H=160-179   (fila seleccionada principal)
+      • Naranja   H= 10-25               (celda "Examen Hecho" / Estado)
+      • Rosa/Magenta H=140-165           (filas de otro estado)
+      • Azul oscuro H= 90-140, V bajo    (cabeceras de tabla)
+
+    Sin este paso, los fondos coloreados convierten a gris ≈80-130 (por debajo
+    del threshold_floor=100 o en zona ambigua de Otsu), aplastándose junto con
+    el texto blanco y dejando la celda como bloque ilegible para Tesseract.
+    """
+    img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+    h, s, v = cv2.split(img_hsv)
+
+    # ── Máscara ROJO (Hue 0-10 y 160-179) ───────────────────────────────────
+    red_mask    = ((h < 10) | (h > 160)) & (s > 60) & (v > 60)
+
+    # ── Máscara NARANJA (Hue 10-25) — celda "Examen Hecho" ──────────────────
+    orange_mask = ((h >= 10) & (h <= 25)) & (s > 80) & (v > 60)
+
+    # ── Máscara ROSA / MAGENTA (Hue 140-165) ────────────────────────────────
+    pink_mask   = ((h >= 140) & (h <= 165) & (s > 50))
+
+    # ── Máscara AZUL OSCURO (Hue 90-140, S alta, V bajo-medio) ─────────────
+    blue_mask   = ((h >= 90) & (h <= 140) & (s > 60) & (v < 160))
+
+    colored_mask = red_mask | orange_mask | pink_mask | blue_mask
+
+    if not np.any(colored_mask):
+        return img_rgb  # Sin fondos coloreados: imagen sin cambios
+
+    result = img_rgb.copy()
+
+    # Texto claro = blanco/casi-blanco → V > 180  (blanco puro tiene V=255)
+    # El fondo naranja tiene V≈80-150, bien separado del texto blanco
+    text_mask = colored_mask & (v > 180)
+    # Fondo = zona coloreada que no es texto claro
+    bg_mask   = colored_mask & (v <= 180)
+
+    result[text_mask] = [0,   0,   0  ]  # texto blanco → negro
+    result[bg_mask]   = [255, 255, 255]  # fondo coloreado → blanco
+
+    return result
+
+
+
 def preprocess_high_fidelity(
     img: Image.Image,
     scale_factor: int = 3,
@@ -224,7 +276,11 @@ def preprocess_high_fidelity(
         interpolation=cv2.INTER_LANCZOS4
     )
     
-    # 2. Convertir a Grises
+    # 2. Normalizar fondos de color (rojo, rosa, azul) ANTES de pasar a grises.
+    #    Sin este paso, Hue rojo → gris ≈85 < threshold_floor=100 → fila entera negra.
+    upscaled = normalize_colored_backgrounds(upscaled)
+
+    # 3. Convertir a Grises
     gray = cv2.cvtColor(upscaled, cv2.COLOR_RGB2GRAY)
     
     # 3. Binarización por Umbral de Histograma (Truncated + Otsu)

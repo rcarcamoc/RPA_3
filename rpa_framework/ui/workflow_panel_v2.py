@@ -394,10 +394,17 @@ class WorkflowPanelV2(QWidget):
             self.log_window.raise_()
         
         self.append_log("🚀 Iniciando ejecución del workflow...", "INFO")
+        # MEJORA: Limpiar worker previo si existe y está corriendo para evitar conflictos de COM
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            self.append_log("🛑 Deteniendo ejecución anterior...", "WARNING")
+            self.worker.stop()
+            self.worker.wait(2000) # Esperar hasta 2 segundos
+            
         self.worker = WorkflowExecutorWorker(self.current_workflow)
         self.worker.log_update.connect(lambda msg: self.append_log(msg, "INFO"))
         self.worker.finished.connect(self.on_execution_finished)
         self.worker.error.connect(self.on_execution_finished)
+        self.worker.finished.connect(self.worker.deleteLater) # Autolimpieza de Qt
         self.worker.start()
         self.act_run.setEnabled(False)
         self.act_stop.setEnabled(True)
@@ -418,10 +425,17 @@ class WorkflowPanelV2(QWidget):
             
         self.act_run.setEnabled(True)
         self.act_stop.setEnabled(False)
+        self.worker = None
     
     def append_log(self, message: str, level: str = "INFO"):
         """Append a message to the log widget with color formatting"""
         from datetime import datetime
+
+        # Filter noise
+        noise_keywords = ["======", "✅ Dashboard actualizado", "categorical units"]
+        if any(kw in message for kw in noise_keywords):
+            return
+
         timestamp = datetime.now().strftime("%H:%M:%S")
         
         # Auto-detect level from message content if provided in brackets

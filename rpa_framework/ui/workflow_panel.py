@@ -23,6 +23,10 @@ import sys
 import math
 
 # Importar comandos
+try:
+    import pythoncom
+except ImportError:
+    pythoncom = None
 from .workflow_commands import AddNodeCommand, DeleteNodeCommand, MoveNodeCommand, ConnectionCommand, ModifyPropertyCommand
 
 
@@ -53,6 +57,15 @@ class WorkflowExecutorWorker(QThread):
         self.executor = None
     
     def run(self):
+        # Inicializar COM para este hilo (necesario para interactuar con Shell via PowerShell)
+        com_initialized = False
+        if pythoncom:
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except Exception:
+                pass
+
         try:
             self.executor = WorkflowExecutor(self.workflow, self.log_dir)
             
@@ -94,6 +107,12 @@ class WorkflowExecutorWorker(QThread):
             
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            if com_initialized and pythoncom:
+                try:
+                    pythoncom.CoUninitialize()
+                except:
+                    pass
     
     def stop(self):
         if self.executor:

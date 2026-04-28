@@ -4,6 +4,10 @@ from core.player import RecordingPlayer
 import json
 import os
 from pathlib import Path
+try:
+    import pythoncom
+except ImportError:
+    pythoncom = None
 
 class ReplayWorker(QThread):
     """Worker para reproducción sin bloquear UI."""
@@ -20,12 +24,14 @@ class ReplayWorker(QThread):
         print(f"[DEBUG] ReplayWorker: Iniciando thread... (TID: {int(QThread.currentThreadId())})")
         
         # Inicializar COM para este hilo (necesario para pywinauto en QThread)
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            print("[DEBUG] ReplayWorker: CoInitialize OK")
-        except:
-            pass
+        com_initialized = False
+        if pythoncom:
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+                print("[DEBUG] ReplayWorker: CoInitialize OK")
+            except Exception:
+                pass
 
         try:
             from core.web_player import WebReplayer
@@ -94,11 +100,11 @@ class ReplayWorker(QThread):
             self.error.emit(str(e))
             
         finally:
-            try:
-                import pythoncom
-                pythoncom.CoUninitialize()
-            except:
-                pass
+            if com_initialized and pythoncom:
+                try:
+                    pythoncom.CoUninitialize()
+                except:
+                    pass
 
 class OCRInitWorker(QThread):
     """Worker para inicializar OCR en segundo plano."""

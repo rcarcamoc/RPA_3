@@ -17,6 +17,11 @@ from core.logger import WorkflowLogger
 from utils.telegram_manager import enviar_alerta_todos
 import mysql.connector
 from mysql.connector import Error as MySQLError
+try:
+    import win32com.client
+    import pythoncom
+except ImportError:
+    pass
 
 
 class WorkflowExecutor:
@@ -112,10 +117,10 @@ class WorkflowExecutor:
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
             
-            try:
-                enviar_alerta_todos(f"❌ <b>Error Crítico en Workflow '{self.workflow.name}'</b>\nSe detuvo la ejecución inesperadamente:\n<code>{str(e)}</code>")
-            except Exception as tel_e:
-                self.logger.log(f"⚠️ Error enviando alerta de Telegram: {tel_e}")
+#            try:
+#                enviar_alerta_todos(f"⏸️ <b>Proceso Pausado</b>\nEl asistente virtual (<b>'{self.workflow.name}'</b>) se ha detenido.\n<b>Motivo:</b> {str(e)}\n\nPor favor, revisa la aplicación para continuar u omitir este caso.")
+#            except Exception as tel_e:
+#                self.logger.log(f"⚠️ Error enviando alerta de Telegram: {tel_e}")
             
             return {
                 "status": "error",
@@ -185,37 +190,56 @@ class WorkflowExecutor:
         
         # 1. Ejecución de Comando de Sistema
         if node.command:
+             # MEJORA: Detectar comando de minimizar todo y ejecutarlo nativamente para evitar conflictos de proceso
+             if 'minimizeall()' in node.command.lower():
+                 self.logger.log("💻 Ejecutando 'Minimizar Todo' nativamente...")
+                 try:
+                     # Asegurar que COM esté inicializado en este hilo (aunque el worker lo haga, doble check no duele)
+                     if 'pythoncom' in globals():
+                        pythoncom.CoInitialize()
+                     
+                     if 'win32com' in sys.modules or 'win32com' in globals():
+                        shell = win32com.client.Dispatch("Shell.Application")
+                        shell.MinimizeAll()
+                        self.logger.log("✅ Escritorio mostrado (MinimizeAll OK)")
+                        return self.workflow.get_next_node(node.id)
+                     else:
+                        raise ImportError("win32com not available")
+                 except Exception as e:
+                     self.logger.log(f"⚠️ Error en MinimizeAll nativo: {e}. Intentando vía subprocess...", "WARNING")
+                     # Si falla, continuará con la ejecución normal de subprocess
+             
              self.logger.log(f"💻 Ejecutando comando: {node.command}")
              try:
                 # Preparar entorno
                 env = os.environ.copy()
-                # Ensure vars are strings
                 for key, value in self.context.items():
                     try:
                         env[f"VAR_{key}"] = str(value)
                     except:
                         pass
                 
-                # Ejecutar comando en Shell con Popen para streaming
+                # MEJORA: Asegurar que los pipes se cierren correctamente con un bloque try-finally robusto
                 # Usamos shell=True por compatibilidad con comandos complejos de Windows
-                self.active_process = subprocess.Popen(
-                    node.command,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    env=env,
-                    bufsize=1,
-                    universal_newlines=True,
-                    errors='replace' # Reemplazar caracteres no válidos en lugar de crash
-                )
-                process = self.active_process
-                
-                # Leer salida en tiempo real
                 full_output = []
-                while True:
-                    try:
+                process = None
+                try:
+                    process = subprocess.Popen(
+                        node.command,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        env=env,
+                        bufsize=1,
+                        universal_newlines=True,
+                        errors='replace'
+                    )
+                    self.active_process = process
+                    
+                    # Leer salida en tiempo real
+                    while True:
                         line = process.stdout.readline()
                         if not line and process.poll() is not None:
                             break
@@ -224,31 +248,31 @@ class WorkflowExecutor:
                             if clean_line:
                                 self.logger.log(f"   [CMD] {clean_line}")
                                 full_output.append(clean_line)
-                    except Exception as pipe_e:
-                        self.logger.log(f"⚠️ Error leyendo salida del comando: {pipe_e}", "WARNING")
-                        break
-                
-                returncode = process.wait(timeout=5) if process.poll() is not None else process.poll()
-                # If it's still running for some reason, we might need a timeout or poll again
-                if returncode is None:
-                    returncode = process.poll()
+                    
+                    returncode = process.wait(timeout=10)
+                finally:
+                    # Garantizar cierre de pipes para evitar fugas de handles (causa de crashes en subsiguientes runs)
+                    if process:
+                        if process.stdout: process.stdout.close()
+                        if process.stderr: process.stderr.close()
                 
                 if returncode == 0:
                      self.logger.log(f"✅ Comando ejecutado exitosamente")
-                     # Guardar salida en variable si se especificó
                      if node.output_variable:
                         output_str = "\n".join(full_output).strip()
                         self.context[node.output_variable] = output_str
-                        self.logger.log(f"   Salida guardada en '{node.output_variable}': {output_str[:50]}...")
+                elif returncode == 2:
+                     self.logger.log(f"ℹ️ Comando finalizado (código 2): Sin registros. Deteniendo flujo.")
+                     self.should_stop = True
+                     return None
                 else:
                      self.logger.log(f"❌ Error en comando (código {returncode})")
-                     
                      try:
                          ultimo_error = "\n".join(full_output[-3:]) if full_output else "Sin salida devuelta."
                          enviar_alerta_todos(f"❌ <b>Error en Comando</b>\nNodo: {node.label}\nComando falló con código {returncode}\nDetalle:\n<code>{ultimo_error}</code>")
                      except Exception as tel_e:
                          self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
-                     
+
                      if getattr(node, 'on_error', 'stop') == 'stop':
                          raise RuntimeError(f"Comando falló con código {returncode}")
                      
@@ -388,29 +412,33 @@ class WorkflowExecutor:
                             break
                     except json.JSONDecodeError:
                         continue
+            elif returncode == 2:
+                self.logger.log(f"ℹ️ Script finalizado (código 2): Sin registros para trabajar. Deteniendo flujo.")
+                self.should_stop = True
+                return None
             else:
                 self.logger.log(f"❌ Error en script (código {returncode})")
                 
                 try:
                     # Capturar la última línea de la salida como posible mensaje de error, si lo hay
                     ultimo_log = "\n".join(full_stdout[-3:]) if full_stdout else "Sin salida devuelta."
-                    enviar_alerta_todos(f"❌ <b>Error en Script</b>\nNodo: {node.label}\nScript falló con código {returncode}\nUltimos logs:\n<code>{ultimo_log}</code>")
+                    # El propio script individual suele enviar su alerta detallada.
+                    # Mantenemos logs de esto en la consola, pero omitimos un mensaje extra en telegram
+                    # enviar_alerta_todos(f"❌ <b>Error en Script</b>\nNodo: {node.label}\nScript falló con código {returncode}\nUltimos logs:\n<code>{ultimo_log}</code>")
                 except Exception as tel_e:
-                    self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+                    self.logger.log(f"⚠️ Error al procesar ultimo log: {tel_e}")
                 
                 if getattr(node, 'on_error', 'stop') == 'stop':
-                    raise RuntimeError(f"Script falló con código {returncode}")
+                    raise RuntimeError(f"El asistente no pudo completar la tarea en la fase '{node.label}'.")
             
         except Exception as e:
             self.logger.log(f"❌ Error: {str(e)}")
             
-            try:
-                enviar_alerta_todos(f"❌ <b>Excepción en Script</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
-            except Exception as tel_e:
-                self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
+            # Igual omitimos alerta si el nivel superior lo va a atrapar
+            # enviar_alerta_todos(f"❌ <b>Excepción en Script</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
                 
             if getattr(node, 'on_error', 'stop') == 'stop':
-                raise e
+                raise RuntimeError(f"Falla inesperada en la fase '{node.label}': {str(e)}")
         
         return self.workflow.get_next_node(node.id)
     
@@ -846,11 +874,13 @@ class WorkflowExecutor:
                 self.logger.log(f"❌ Error en sub-workflow: {result.get('error')}")
                 if getattr(node, 'on_error', 'stop') == 'stop':
                      raise RuntimeError(f"Fallo en sub-workflow: {result.get('error')}")
+            elif result["status"] == "stopped":
+                self.logger.log("⏹️ Sub-workflow detenido (posiblemente sin registros). Deteniendo padre.")
+                self.should_stop = True
+                return None
             else:
                 self.logger.log(f"✅ Sub-workflow finalizado correctamente")
                 # Actualizar contexto padre con resultados del hijo
-                # Opcional: ¿Queremos que el hijo modifique variables del padre?
-                # Generalmente sí en este tipo de RPA simple.
                 self.context.update(result["context"])
         
         except Exception as e:
