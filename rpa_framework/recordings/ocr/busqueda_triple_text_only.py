@@ -730,11 +730,19 @@ RESPONDE SOLO EN FORMATO JSON:
             row_digits = "".join(filter(str.isdigit, row_text))
 
             # ── CHECK FECHA ──────────────────────────────────────────────
+            # Obtener representación de fecha con año de 2 dígitos (ej: "13-06-26")
+            target_fecha_short = target_fecha_str[:-4] + target_fecha_str[-2:] if len(target_fecha_str) == 10 else ""
+            target_fecha_short_digits = "".join(filter(str.isdigit, target_fecha_short))
+
             has_date = (
                 (target_fecha_str in row_text)
                 or (target_fecha_str.replace("-", "/") in row_text)
                 or (target_fecha_digits in row_digits)
-                or (fuzz.partial_ratio(target_fecha_str, row_text) > 80)
+                or (target_fecha_short in row_text)
+                or (target_fecha_short.replace("-", "/") in row_text)
+                or (target_fecha_short_digits in row_digits)
+                or (fuzz.partial_ratio(target_fecha_str, row_text) >= 70)
+                or (fuzz.partial_ratio(target_fecha_short, row_text) >= 70)
             )
 
             # ── CHECK ESTADO ────────────────────────────────────────────
