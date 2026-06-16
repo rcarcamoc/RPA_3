@@ -36,7 +36,12 @@ import sys
 # Agregar al sys.path para imports globales
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from utils.telegram_manager import enviar_alerta_todos
-from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT
+import time
+from utils.llm_config import (
+    OPENROUTER_BASE_URL, BASE_LLM_MODELS, LLM_MODELS,
+    LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT,
+    get_ranked_models, log_llm_result,
+)
 
 # Cargar variables de entorno
 load_dotenv()
@@ -65,7 +70,8 @@ if not OPENROUTER_API_KEY:
     logger.error("OPENROUTER_API_KEY no está configurada en el archivo .env")
     raise ValueError("OPENROUTER_API_KEY no está configurada")
 
-MODELS = LLM_MODELS
+# MODELS se calcula dinámicamente en get_ranked_models() al momento de cada llamada
+MODELS = LLM_MODELS  # alias estático de compatibilidad
 
 # Umbral de similitud fuzzy
 FUZZY_THRESHOLD = 70
@@ -189,7 +195,14 @@ FORMATO DE RESPUESTA:
 }}
 """
 
-    for current_model in MODELS:
+    # Obtener modelos ordenados por rendimiento histórico en tiempo de ejecución
+    models_ranked = get_ranked_models(BASE_LLM_MODELS, contexto='deteccion_patologia')
+
+    for model_idx, current_model in enumerate(models_ranked):
+        _t_start = time.time()
+        _es_match_log = False
+        _confianza_log = 0.0
+        _razon_log = ''
         try:
             logger.info(f"Intentando con modelo: {current_model}")
             response = requests.post(
@@ -204,6 +217,7 @@ FORMATO DE RESPUESTA:
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": LLM_DEFAULT_TEMPERATURE,
                     "max_tokens": LLM_DEFAULT_MAX_TOKENS,
+                    "reasoning": {"exclude": True}
                 },
                 timeout=LLM_DEFAULT_TIMEOUT
             )
@@ -232,25 +246,65 @@ FORMATO DE RESPUESTA:
                     if p_validada:
                         logger.info(f"✅ LLM detectó: '{p_validada}' (Modelo: {current_model})")
                         logger.info(f"   Razonamiento: {razonamiento}")
+                        log_llm_result(
+                            modelo=current_model, es_match=True, confianza=1.0,
+                            tiempo_ms=int((time.time() - _t_start) * 1000),
+                            razonamiento=razonamiento, target_buscado=lista_str[:255],
+                            texto_ocr=diagnostico[:1000],
+                            es_primer_intento=(model_idx == 0),
+                            contexto='deteccion_patologia',
+                        )
                         return p_validada
                     else:
-                        # [FIX 4] No sale: intenta con el siguiente modelo
                         logger.warning(
                             f"⚠️ LLM retornó '{patologia}' pero no coincide con ninguna "
                             f"patología de la lista (normalizado). Intentando siguiente modelo..."
                         )
-                        continue  # <-- antes era return None, ahora prueba el siguiente modelo
+                        log_llm_result(
+                            modelo=current_model, es_match=False, confianza=0.0,
+                            tiempo_ms=int((time.time() - _t_start) * 1000),
+                            razonamiento=f"Retornó '{patologia}' fuera de lista",
+                            target_buscado=lista_str[:255],
+                            texto_ocr=diagnostico[:1000],
+                            es_primer_intento=(model_idx == 0),
+                            contexto='deteccion_patologia',
+                        )
+                        continue
 
                 # LLM respondió null → no hay patología, es definitivo para este modelo
                 logger.info(f"ℹ️ LLM no detectó patología crítica (Modelo: {current_model}). Razonamiento: {razonamiento}")
+                log_llm_result(
+                    modelo=current_model, es_match=False, confianza=0.0,
+                    tiempo_ms=int((time.time() - _t_start) * 1000),
+                    razonamiento=razonamiento or 'null', target_buscado=lista_str[:255],
+                    texto_ocr=diagnostico[:1000],
+                    es_primer_intento=(model_idx == 0),
+                    contexto='deteccion_patologia',
+                )
                 return None
 
         except json.JSONDecodeError as e:
             logger.warning(f"⚠️ Error parseando JSON del modelo {current_model}: {e}. Intentando siguiente...")
+            log_llm_result(
+                modelo=current_model, es_match=False, confianza=0.0,
+                tiempo_ms=int((time.time() - _t_start) * 1000),
+                razonamiento=f'JSONDecodeError: {e}', target_buscado=lista_str[:255],
+                texto_ocr=diagnostico[:1000],
+                es_primer_intento=(model_idx == 0),
+                contexto='deteccion_patologia',
+            )
             continue
         except Exception as e:
             logger.error(f"Error con modelo {current_model}: {e}")
-            if current_model == MODELS[-1]:
+            log_llm_result(
+                modelo=current_model, es_match=False, confianza=0.0,
+                tiempo_ms=int((time.time() - _t_start) * 1000),
+                razonamiento=f'Exception: {str(e)[:200]}', target_buscado=lista_str[:255],
+                texto_ocr=diagnostico[:1000],
+                es_primer_intento=(model_idx == 0),
+                contexto='deteccion_patologia',
+            )
+            if current_model == models_ranked[-1]:
                 logger.error("Todos los modelos han fallado.")
             else:
                 logger.info("Probando con el siguiente modelo de respaldo...")
