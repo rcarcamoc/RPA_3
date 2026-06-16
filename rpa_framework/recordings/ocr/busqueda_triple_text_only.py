@@ -48,13 +48,17 @@ try:
 except ImportError:
     HAS_MYSQL = False
 
-# Configuración de Paths
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from utils.logging_setup import setup_logging
 from ocr.engine import OCREngine
 from PIL import Image
 from utils.telegram_manager import enviar_alerta_todos
+from utils.llm_config import (
+    OPENROUTER_BASE_URL, BASE_LLM_MODELS, LLM_MODELS,
+    LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT,
+    get_ranked_models, log_llm_result,
+)
 
 # Importar utilidades de preprocesamiento
 try:
@@ -66,25 +70,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # ===========================================================================
-# CONFIGURACIÓN LLM (auto-contenida en este archivo)
-# Para cambiar modelos o parámetros, edita SOLO este bloque.
+# CONFIGURACIÓN LLM (Centralizada en utils.llm_config)
 # ===========================================================================
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
-# Lista de modelos en orden de prioridad / fallback.
-# Si uno devuelve 429 o falla, se intenta el siguiente.
-LLM_MODELS = [
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "arcee-ai/trinity-large-preview:free",
-    "qwen/qwen3-235b-a22b-thinking-2507",
-    "z-ai/glm-4.5-air:free",
-    "stepfun/step-3.5-flash:free",
-    "google/gemma-3-27b-it:free",
-]
-LLM_DEFAULT_TEMPERATURE = 0.0
-LLM_DEFAULT_MAX_TOKENS  = 800
-LLM_DEFAULT_TIMEOUT     = 30   # segundos
-
 # Umbral mínimo de similitud fuzzy para siquiera consultar al LLM.
 # Si el texto OCR y el target difieren MÁS que esto, son tan distintos
 # que cualquier "match" del LLM sería una alucinación.
@@ -119,7 +106,7 @@ class BusquedaTextOnly:
         )
         # Región ajustada: Comienza en (180, 180) y llega hasta (1900, 1000)
         # Formato: (left, top, width, height)
-        self.region = (148, 100, 1720, 900)
+        self.region = (188, 93, 1720, 900)
         self.ROW_TOLERANCE = 8  # Tolerancia estricta (15px) para no mezclar filas adyacentes y dar un click preciso
         self.CROP_HEIGHT = 22  # Altura de recorte para cubrir fila (px en imagen original)
         self.OFFSET_X = 50
@@ -249,11 +236,27 @@ class BusquedaTextOnly:
         except Exception as e:
             logger.error(f"Error guardando sinónimo en BD: {e}")
 
+    def log_llm_ranking(self, id_registro, modelo, target_buscado, texto_ocr, es_match, razonamiento, confianza, tiempo_ms, es_primer_intento=True):
+        """Delega en la función centralizada log_llm_result de llm_config."""
+        log_llm_result(
+            modelo=modelo,
+            es_match=es_match,
+            confianza=confianza,
+            tiempo_ms=tiempo_ms,
+            razonamiento=razonamiento,
+            target_buscado=target_buscado,
+            texto_ocr=texto_ocr,
+            id_registro=id_registro,
+            es_primer_intento=es_primer_intento,
+            contexto='busqueda_ocr',
+        )
+        logger.info(f"📊 Ranking log: {modelo} | Match={es_match} | {tiempo_ms}ms | primer={es_primer_intento}")
+
     def get_db_targets(self):
-        """Obtiene diagnóstico y fecha desde la base de datos."""
+        """Obtiene ID, diagnóstico y fecha desde la base de datos."""
         if not HAS_MYSQL:
             logger.error("No hay driver de MySQL instalado.")
-            return None, None
+            return None, None, None
 
         try:
             conn = mysql.connector.connect(
@@ -265,7 +268,7 @@ class BusquedaTextOnly:
             cursor = conn.cursor()
             
             query = """
-            SELECT SUBSTRING_INDEX(diagnostico, '\n', 1) AS examen, date(fecha_agendada) as fecha
+            SELECT id, SUBSTRING_INDEX(diagnostico, '\n', 1) AS examen, date(fecha_agendada) as fecha
             FROM ris.registro_acciones
             WHERE estado = 'En Proceso'
             LIMIT 1;
@@ -275,16 +278,17 @@ class BusquedaTextOnly:
             conn.close()
 
             if result:
-                examen = result[0]
-                fecha = result[1]
-                logger.info(f"Target DB - Diagnóstico: '{examen}', Fecha: '{fecha}'")
-                return examen, fecha
+                id_registro = result[0]
+                examen = result[1]
+                fecha = result[2]
+                logger.info(f"Target DB [ID:{id_registro}] - Diagnóstico: '{examen}', Fecha: '{fecha}'")
+                return id_registro, examen, fecha
             else:
                 logger.warning("No se encontraron registros 'En Proceso' en la BBDD.")
-                return None, None
+                return None, None, None
         except Exception as e:
             logger.error(f"Error consultando BBDD: {e}")
-            return None, None
+            return None, None, None
 
     def normalize_text(self, text):
         text = text.lower()
@@ -375,7 +379,7 @@ class BusquedaTextOnly:
             logger.error(f"Error en OCR Basic (Manual Preprocess): {e}")
             return ""
 
-    def execute_ocr_data(self, img_bgr, use_preprocessing=True):
+    def execute_ocr_data(self, img_bgr, use_preprocessing=True, mode='high_fidelity'):
         """
         Devuelve datos estructurados de OCR.
         Permite activar/desactivar pre-procesamiento manual (use_preprocessing=False para fallback).
@@ -395,8 +399,15 @@ class BusquedaTextOnly:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(img_rgb)
             
-            # Aplicar Alta Fidelidad (3x)
-            processed_pil, scale = preprocess_high_fidelity(pil_img, scale_factor=3)
+            # Aplicar preprocesamiento según modo solicitado
+            from recordings.ocr.utilidades.preproceso_ocr import preprocess_adaptive
+            if mode == 'high_fidelity':
+                processed_pil, scale = preprocess_adaptive(pil_img, mode='high_fidelity', scale_factor=3)
+            elif mode == 'remove_blue':
+                processed_pil, scale = preprocess_adaptive(pil_img, mode='remove_blue')
+                scale = 1.0 # Remove blue no aplica upscaling por defecto
+            else:
+                processed_pil, scale = pil_img, 1.0
             
             # 2. Guardar imagen procesada para depuración (Fundamental para ver qué ve el OCR)
             try:
@@ -466,19 +477,19 @@ class BusquedaTextOnly:
 
         return True
 
-    def call_llm_text_verification(self, ocr_text, target_diag):
+    def call_llm_text_verification(self, ocr_text, target_diag, id_registro=0):
         """
         Consulta al LLM si el texto encontrado coincide semánticamente con el objetivo.
         Implementa fallback entre varios modelos si falla uno.
-
-        IMPORTANTE: Antes de llamar al LLM se aplica _pre_filter_llm() para descartar
-        candidatos cuya distancia textual hace imposible cualquier match real.
+        
+        Cada intento se registra en 'log_llm_ranking' para evaluar desempeño.
         """
         # Pre-filtro: evitar alucinaciones por textos completamente disímiles
         if not self._pre_filter_llm(ocr_text, target_diag):
             return False
 
-        models = LLM_MODELS
+        # Obtener modelos ordenados por rendimiento histórico en tiempo de ejecución
+        models = get_ranked_models(BASE_LLM_MODELS, contexto='busqueda_ocr')
 
         prompt = f"""
 Eres un experto clínico en interpretación de terminología radiológica y exámenes de imagen.
@@ -533,12 +544,17 @@ RESPONDE SOLO EN FORMATO JSON:
             self.vf.show_persistent_message("PROCESANDO OpenRouter...", "llm", bg_color="#FFEB3B", fg_color="#000000")
 
         try:
-            for current_model in models:
+            for model_idx, current_model in enumerate(models):
+                start_time = time.time()
                 logger.info("="*50)
                 logger.info(f"🤖 Intentando consulta con modelo: {current_model}")
                 logger.info(f"🎯 TARGET BUSCADO: '{target_diag}'")
                 logger.info(f"📝 TEXTO OCR ENVIADO: '{ocr_text}'")
                 logger.info("="*50)
+
+                is_match = False
+                confianza = 0.0
+                razonamiento = ""
 
                 try:
                     response = requests.post(
@@ -553,6 +569,7 @@ RESPONDE SOLO EN FORMATO JSON:
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": LLM_DEFAULT_TEMPERATURE,
                             "max_tokens":  LLM_DEFAULT_MAX_TOKENS,
+                            "reasoning": {"exclude": True}
                         },
                         timeout=LLM_DEFAULT_TIMEOUT
                     )
@@ -563,7 +580,13 @@ RESPONDE SOLO EN FORMATO JSON:
 
                     response.raise_for_status()
                     result  = response.json()
-                    content = result['choices'][0]['message'].get('content', '')
+                    
+                    if not result or not isinstance(result, dict) or 'choices' not in result or not result['choices']:
+                        error_msg = result.get('error', {}).get('message', 'Estructura inválida') if isinstance(result, dict) else 'Respuesta vacía o inválida'
+                        raise ValueError(f"Respuesta inválida o error del proveedor: {error_msg}")
+                        
+                    message = result['choices'][0].get('message') or {}
+                    content = message.get('content') or ""
 
                     logger.info(f"Respuesta Raw LLM ({current_model}): {content[:300]}...")
 
@@ -580,35 +603,41 @@ RESPONDE SOLO EN FORMATO JSON:
                                 f"LLM → es_match={is_match} | confianza={confianza:.2f} "
                                 f"| razon='{razonamiento[:120]}'"
                             )
-
-                            if is_match and confianza >= LLM_MIN_CONFIDENCE:
-                                logger.info(
-                                    f"✅ Modelo {current_model} confirma match "
-                                    f"(confianza={confianza:.2f} ≥ {LLM_MIN_CONFIDENCE})"
-                                )
-                                return True
-                            elif is_match and confianza < LLM_MIN_CONFIDENCE:
-                                logger.warning(
-                                    f"⚠️ Modelo {current_model} dice match pero confianza baja "
-                                    f"({confianza:.2f} < {LLM_MIN_CONFIDENCE}). Rechazando."
-                                )
-                                continue
-                            else:
-                                logger.info(f"❌ Modelo {current_model} rechazó (confianza={confianza:.2f}).")
-                                continue
-
                         except (json.JSONDecodeError, ValueError) as je:
                             logger.warning(f"⚠️ No se pudo parsear JSON de {current_model}: {je}")
-                            continue
+                            razonamiento = f"Error parseo: {str(je)}"
 
-                    # Sin JSON estructurado → respuesta no confiable, ignorar
-                    logger.warning(f"⚠️ Respuesta de {current_model} sin JSON. Descartando.")
-                    continue
+                    else:
+                        logger.warning(f"⚠️ Respuesta de {current_model} sin JSON. Descartando.")
+                        razonamiento = "Sin JSON en respuesta"
 
                 except Exception as e:
                     logger.error(f"❌ Error con modelo {current_model}: {e}")
-                    logger.info("Probando con el siguiente modelo de respaldo...")
-                    continue
+                    razonamiento = f"Error API: {str(e)}"
+                
+                # --- LOGGING RANKING ---
+                end_time = time.time()
+                tiempo_ms = int((end_time - start_time) * 1000)
+                self.log_llm_ranking(
+                    id_registro=id_registro,
+                    modelo=current_model,
+                    target_buscado=target_diag,
+                    texto_ocr=ocr_text,
+                    es_match=is_match,
+                    razonamiento=razonamiento,
+                    confianza=confianza,
+                    tiempo_ms=tiempo_ms,
+                    es_primer_intento=(model_idx == 0),  # Solo el primero es intento primario
+                )
+
+                if is_match and confianza >= LLM_MIN_CONFIDENCE:
+                    logger.info(f"✅ Modelo {current_model} confirma match (confianza={confianza:.2f} ≥ {LLM_MIN_CONFIDENCE})")
+                    return True
+                elif is_match:
+                    logger.warning(f"⚠️ Modelo {current_model} dice match pero confianza baja ({confianza:.2f} < {LLM_MIN_CONFIDENCE}).")
+                
+                # Si falló o rechazó, continúa con el siguiente modelo
+                logger.info(f"Intentando siguiente modelo de respaldo si existe...")
 
             logger.warning("Todos los modelos LLM han fallado o rechazado el candidato.")
             return False
@@ -639,6 +668,14 @@ RESPONDE SOLO EN FORMATO JSON:
         for row in rows_sorted:
             row_text   = row['full_text']
             row_norm   = self.normalize_text(row_text)
+
+            # ── CHECK CANCELADO ───────────────────────────────────────────
+            # Si la fila contiene la palabra "cancelado" o "cancelada", se descarta inmediatamente.
+            # Esto evita confusiones cuando un examen fue re-agendado o anulado.
+            if "cancelado" in row_norm or "cancelada" in row_norm:
+                logger.info(f"🚫 Fila descartada por estado 'CANCELADO' (Y={int(row['y_center'])}): {row_text[:80]}")
+                continue
+
             row_digits = "".join(filter(str.isdigit, row_text))
 
             # ── CHECK FECHA ──────────────────────────────────────────────
@@ -691,7 +728,7 @@ RESPONDE SOLO EN FORMATO JSON:
         logger.info(">>>> INICIANDO BÚSQUEDA TEXT-ONLY (DeepSeek) <<<<")
         
         # 1. Obtener Targets
-        target_diag_original, target_fecha_obj = self.get_db_targets()
+        id_registro, target_diag_original, target_fecha_obj = self.get_db_targets()
         if not target_diag_original:
             return False, ""
 
@@ -757,8 +794,29 @@ RESPONDE SOLO EN FORMATO JSON:
                      rows_data = rows_data_raw
                 else:
                      logger.warning("❌ Paso 2 también sin candidatos.")
-                     # Mantenemos rows_data del paso 1 o combinamos para debug, pero paso 2 es más relevante si es fallback
                      rows_data = rows_data_raw 
+            finally:
+                if self.vf:
+                     self.vf.hide_persistent_message("ocr")
+
+        # --- PASO 3: PREPROCESO ALTERNATIVO (REMOVE BLUE BACKGROUND) ---
+        if not candidates:
+            logger.warning("⚠️ Paso 2 sin candidatos. Ejecutando Paso 3: Remover Fondo Azul (Fallback 2)...")
+            
+            if self.vf:
+                self.vf.show_persistent_message("PROCESANDO OCR (NO-BLUE)...", "ocr", bg_color="#2196F3", fg_color="#FFFFFF")
+                
+            try:
+                ocr_results_blue = self.execute_ocr_data(img_bgr, use_preprocessing=True, mode='remove_blue')
+                candidates_blue, rows_data_blue = self._analyze_candidates(ocr_results_blue, target_fecha_str)
+                
+                if candidates_blue:
+                     logger.info(f"✅ Fallback 2 de OCR exitoso. Encontrados {len(candidates_blue)} candidatos.")
+                     candidates = candidates_blue
+                     rows_data = rows_data_blue
+                else:
+                     logger.warning("❌ Paso 3 también sin candidatos.")
+                     rows_data = rows_data_blue
             finally:
                 if self.vf:
                      self.vf.hide_persistent_message("ocr")
@@ -843,7 +901,7 @@ RESPONDE SOLO EN FORMATO JSON:
 
             # ── NIVEL 2: Verificación LLM (todos los modelos) ───────────────────
             logger.info("⚠️ No hubo match local. Consultando LLM (se probarán todos los modelos)...")
-            is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag)
+            is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
             
             if is_match_llm:
                 logger.info(f"✅ MATCH LLM CONFIRMADO → clic en Y={int(y_click)}")
@@ -1059,7 +1117,7 @@ def main():
 
         # --- PASO PREVIO: Buscar en sinónimos antes de ejecutar ---
         # Obtenemos el diagnóstico actual de BD para consultar sinónimos
-        target_diag_raw, _ = search.get_db_targets()
+        id_registro, target_diag_raw, _ = search.get_db_targets()
         override_diag = None
         last_ocr_text = ""
 
