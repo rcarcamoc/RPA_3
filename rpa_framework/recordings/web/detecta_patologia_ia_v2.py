@@ -173,6 +173,7 @@ def _consultar_modelo_llm(id_registro: int, current_model: str, prompt: str, lis
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": LLM_DEFAULT_TEMPERATURE,
                     "max_tokens": LLM_DEFAULT_MAX_TOKENS,
+                    "reasoning": {"exclude": True}
                 },
                 timeout=LLM_DEFAULT_TIMEOUT
             )
@@ -327,6 +328,9 @@ Donde:
 
     modelos_a_usar = MODELS[:MODELS_TO_USE]
     
+    deadline = None
+    resultado_final = None
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Iniciamos las tareas concurrentes con un leve desfase
         futures = {}
@@ -336,19 +340,57 @@ Donde:
             future = executor.submit(_consultar_modelo_llm, id_registro, model, prompt, lista_patologias)
             futures[future] = model
         
-        for future in concurrent.futures.as_completed(futures):
-            model = futures[future]
-            try:
-                resultado = future.result()
-                if resultado:
-                    logger.info(f"🚀 CORTE TEMPRANO: El modelo [{model}] detectó '{resultado}'.")
-                    logger.info("=" * 40)
-                    # Intentamos cancelar los demás
-                    for f in futures:
-                        f.cancel()
-                    return resultado
-            except Exception as exc:
-                logger.error(f"[{model}] generó una excepción al obtener el resultado: {exc}")
+        try:
+            while futures:
+                # Calcular timeout dinámico si ya hay un deadline establecido
+                iter_timeout = None
+                if deadline is not None:
+                    iter_timeout = max(0.0, deadline - time.time())
+                    if iter_timeout <= 0:
+                        logger.warning("⏱️ [Race] Expiró el tiempo de espera de 15 segundos tras la primera respuesta. Cancelando hilos lentos.")
+                        break
+
+                # Esperar hasta que se complete al menos una tarea
+                done, not_done = concurrent.futures.wait(
+                    futures.keys(),
+                    timeout=iter_timeout,
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                if not done:
+                    logger.warning("⏱️ [Race] Expiró el tiempo de espera (timeout) para las respuestas restantes.")
+                    break
+
+                for future in done:
+                    model = futures.pop(future)
+                    try:
+                        resultado = future.result()
+                        # Si es un hallazgo positivo, retornamos inmediatamente
+                        if resultado:
+                            logger.info(f"🚀 CORTE TEMPRANO: El modelo [{model}] detectó '{resultado}'.")
+                            logger.info("=" * 40)
+                            resultado_final = resultado
+                            # Provoca salida del while y cancelación de restantes
+                            futures.clear()
+                            break
+
+                        # Si respondió None (no hay patología), es una respuesta efectiva.
+                        # Si es la primera respuesta efectiva que recibimos, iniciamos el countdown de 15s.
+                        if deadline is None:
+                            logger.info(f"⏱️ [Race] Primera respuesta efectiva recibida de [{model}] (No detectó patología). Iniciando countdown de 15s para modelos restantes...")
+                            deadline = time.time() + 15.0
+
+                    except Exception as exc:
+                        logger.error(f"[{model}] generó una excepción: {exc}")
+                        # Las excepciones no cuentan como "respuesta efectiva". No inician el countdown.
+
+        finally:
+            # Cancelar todas las tareas que hayan quedado pendientes o en ejecución
+            for f in list(futures.keys()):
+                f.cancel()
+
+    if resultado_final:
+        return resultado_final
 
     logger.info("ℹ️ Ningún modelo detectó una patología crítica válida.")
     logger.info("=" * 40)
@@ -473,16 +515,12 @@ def main():
         logger.info("=" * 70)
 
     except Exception as e:
-        logger.error(f"\n[ERROR] CRITICO: {e}")
         try:
-            enviar_alerta_todos(
-                f"❌ <b>Error Crítico en el script: detecta_patologia_ia</b>\n"
-                f"Fallo durante la ejecución:\n<code>{str(e)}</code>"
-            )
-        except Exception as tel_e:
-            logger.warning(f"[WARNING] Falló envío Telegram: {tel_e}")
-
-        sys.exit(1)
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("detecta_patologia_ia_v2.py", str(e))
+        except ImportError:
+            logger.error(f"\n[ERROR] CRITICO: {e}")
+            sys.exit(1)
     finally:
         if engine:
             engine.dispose()
