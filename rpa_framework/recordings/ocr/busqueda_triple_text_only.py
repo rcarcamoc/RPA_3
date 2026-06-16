@@ -543,108 +543,159 @@ RESPONDE SOLO EN FORMATO JSON:
         if self.vf:
             self.vf.show_persistent_message("PROCESANDO OpenRouter...", "llm", bg_color="#FFEB3B", fg_color="#000000")
 
-        try:
-            for model_idx, current_model in enumerate(models):
-                start_time = time.time()
-                logger.info("="*50)
-                logger.info(f"🤖 Intentando consulta con modelo: {current_model}")
-                logger.info(f"🎯 TARGET BUSCADO: '{target_diag}'")
-                logger.info(f"📝 TEXTO OCR ENVIADO: '{ocr_text}'")
-                logger.info("="*50)
+        # ── Estrategia Paralela "Race" ────────────────────────────────────────
+        # Enviamos la consulta a todos los modelos SIMULTÁNEAMENTE con un pool
+        # limitado a MAX_PARALLEL_LLM workers para no saturar los rate-limits de
+        # OpenRouter. El primero en responder con is_match=True y confianza
+        # suficiente se declara ganador; el resto se descarta (pero igual se
+        # loguea para el ranking).
+        # ─────────────────────────────────────────────────────────────────────
+        MAX_PARALLEL_LLM = 3   # Máximo de peticiones simultáneas a OpenRouter
 
-                is_match = False
-                confianza = 0.0
-                razonamiento = ""
+        import concurrent.futures
+        import threading
 
-                try:
-                    response = requests.post(
-                        f"{OPENROUTER_BASE_URL}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                            "Content-Type": "application/json",
-                            "HTTP-Referer": "https://rpa-framework.local"
-                        },
-                        json={
-                            "model": current_model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": LLM_DEFAULT_TEMPERATURE,
-                            "max_tokens":  LLM_DEFAULT_MAX_TOKENS,
-                            "reasoning": {"exclude": True}
-                        },
-                        timeout=LLM_DEFAULT_TIMEOUT
-                    )
+        winner_event = threading.Event()   # Se activa cuando algún hilo gana
+        results_lock = threading.Lock()
+        all_results  = []                  # Lista compartida para logging final
 
-                    if response.status_code == 429:
-                        logger.warning(f"⚠️ Modelo {current_model} devolvió 429. Probando siguiente...")
-                        continue
+        def _query_model(model_id, model_idx):
+            """Ejecuta una consulta al LLM y retorna el resultado estructurado."""
+            start_time = time.time()
+            is_match   = False
+            confianza  = 0.0
+            razonamiento = ""
 
-                    response.raise_for_status()
-                    result  = response.json()
-                    
-                    if not result or not isinstance(result, dict) or 'choices' not in result or not result['choices']:
-                        error_msg = result.get('error', {}).get('message', 'Estructura inválida') if isinstance(result, dict) else 'Respuesta vacía o inválida'
-                        raise ValueError(f"Respuesta inválida o error del proveedor: {error_msg}")
-                        
-                    message = result['choices'][0].get('message') or {}
-                    content = message.get('content') or ""
+            # Salida temprana si ya hay un ganador
+            if winner_event.is_set():
+                return None
 
-                    logger.info(f"Respuesta Raw LLM ({current_model}): {content[:300]}...")
-
-                    # ── Parse JSON ──────────────────────────────────────────────
-                    json_match = re.search(r'\{.*?\}', content, re.DOTALL)
-                    if json_match:
-                        try:
-                            data       = json.loads(json_match.group(0))
-                            is_match   = data.get('es_match', False)
-                            confianza  = float(data.get('confianza', 0))
-                            razonamiento = data.get('razonamiento', '')
-
-                            logger.info(
-                                f"LLM → es_match={is_match} | confianza={confianza:.2f} "
-                                f"| razon='{razonamiento[:120]}'"
-                            )
-                        except (json.JSONDecodeError, ValueError) as je:
-                            logger.warning(f"⚠️ No se pudo parsear JSON de {current_model}: {je}")
-                            razonamiento = f"Error parseo: {str(je)}"
-
-                    else:
-                        logger.warning(f"⚠️ Respuesta de {current_model} sin JSON. Descartando.")
-                        razonamiento = "Sin JSON en respuesta"
-
-                except Exception as e:
-                    logger.error(f"❌ Error con modelo {current_model}: {e}")
-                    razonamiento = f"Error API: {str(e)}"
-                
-                # --- LOGGING RANKING ---
-                end_time = time.time()
-                tiempo_ms = int((end_time - start_time) * 1000)
-                self.log_llm_ranking(
-                    id_registro=id_registro,
-                    modelo=current_model,
-                    target_buscado=target_diag,
-                    texto_ocr=ocr_text,
-                    es_match=is_match,
-                    razonamiento=razonamiento,
-                    confianza=confianza,
-                    tiempo_ms=tiempo_ms,
-                    es_primer_intento=(model_idx == 0),  # Solo el primero es intento primario
+            try:
+                response = requests.post(
+                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type":  "application/json",
+                        "HTTP-Referer":  "https://rpa-framework.local",
+                    },
+                    json={
+                        "model":       model_id,
+                        "messages":    [{"role": "user", "content": prompt}],
+                        "temperature": LLM_DEFAULT_TEMPERATURE,
+                        "max_tokens":  LLM_DEFAULT_MAX_TOKENS,
+                        "reasoning":   {"exclude": True},
+                    },
+                    timeout=LLM_DEFAULT_TIMEOUT,
                 )
 
-                if is_match and confianza >= LLM_MIN_CONFIDENCE:
-                    logger.info(f"✅ Modelo {current_model} confirma match (confianza={confianza:.2f} ≥ {LLM_MIN_CONFIDENCE})")
-                    return True
-                elif is_match:
-                    logger.warning(f"⚠️ Modelo {current_model} dice match pero confianza baja ({confianza:.2f} < {LLM_MIN_CONFIDENCE}).")
-                
-                # Si falló o rechazó, continúa con el siguiente modelo
-                logger.info(f"Intentando siguiente modelo de respaldo si existe...")
+                if response.status_code == 429:
+                    logger.warning(f"⚠️ [Paralelo] {model_id} → 429 Rate Limit")
+                    razonamiento = "Rate limit 429"
+                elif response.status_code != 200:
+                    logger.warning(f"⚠️ [Paralelo] {model_id} → HTTP {response.status_code}")
+                    razonamiento = f"HTTP {response.status_code}"
+                else:
+                    response.raise_for_status()
+                    result = response.json()
 
-            logger.warning("Todos los modelos LLM han fallado o rechazado el candidato.")
+                    if not result or "choices" not in result or not result["choices"]:
+                        razonamiento = "Respuesta vacía o sin choices"
+                    else:
+                        content = (result["choices"][0].get("message") or {}).get("content") or ""
+                        logger.info(f"[Paralelo] {model_id}: {content[:200]}...")
+
+                        json_match = re.search(r"\{.*?\}", content, re.DOTALL)
+                        if json_match:
+                            try:
+                                data         = json.loads(json_match.group(0))
+                                is_match     = data.get("es_match", False)
+                                confianza    = float(data.get("confianza", 0))
+                                razonamiento = data.get("razonamiento", "")
+                                logger.info(
+                                    f"[Paralelo] {model_id} → match={is_match} "
+                                    f"conf={confianza:.2f} | {razonamiento[:80]}"
+                                )
+                            except (json.JSONDecodeError, ValueError) as je:
+                                razonamiento = f"JSONDecodeError: {je}"
+                        else:
+                            razonamiento = "Sin JSON en respuesta"
+
+            except Exception as e:
+                logger.error(f"❌ [Paralelo] {model_id}: {e}")
+                razonamiento = f"Error API: {str(e)}"
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            return {
+                "model_id":    model_id,
+                "model_idx":   model_idx,
+                "is_match":    is_match,
+                "confianza":   confianza,
+                "razonamiento": razonamiento,
+                "tiempo_ms":   elapsed_ms,
+            }
+
+        try:
+            winner_result = None
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=MAX_PARALLEL_LLM,
+                thread_name_prefix="LLM_race",
+            ) as executor:
+                futures = {
+                    executor.submit(_query_model, m, idx): m
+                    for idx, m in enumerate(models)
+                }
+
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    if res is None:
+                        continue   # Hilo abortado antes de comenzar
+
+                    with results_lock:
+                        all_results.append(res)
+
+                    # ¿Ganador?
+                    if (
+                        res["is_match"]
+                        and res["confianza"] >= LLM_MIN_CONFIDENCE
+                        and not winner_event.is_set()
+                    ):
+                        winner_event.set()
+                        winner_result = res
+                        logger.info(
+                            f"🏆 [Race] Ganador: {res['model_id']} "
+                            f"(conf={res['confianza']:.2f}, {res['tiempo_ms']}ms)"
+                        )
+                        # No cancelamos el executor aquí: los hilos ya lanzados
+                        # terminarán solos; los pendientes ven winner_event y salen temprano.
+
+            # ── Logging de TODOS los resultados al ranking ────────────────
+            winner_id = winner_result["model_id"] if winner_result else None
+            for res in all_results:
+                self.log_llm_ranking(
+                    id_registro=id_registro,
+                    modelo=res["model_id"],
+                    target_buscado=target_diag,
+                    texto_ocr=ocr_text,
+                    es_match=res["is_match"],
+                    razonamiento=res["razonamiento"],
+                    confianza=res["confianza"],
+                    tiempo_ms=res["tiempo_ms"],
+                    # Solo el ganador se cuenta como "primer intento exitoso"
+                    es_primer_intento=(res["model_id"] == winner_id),
+                )
+
+            if winner_result:
+                return True
+
+            logger.warning("⚠️ [Race] Ningún modelo superó el umbral de confianza.")
             return False
 
         finally:
             if self.vf:
                 self.vf.hide_persistent_message("llm")
+
 
     def _analyze_candidates(self, ocr_results, target_fecha_str):
         """Analiza resultados OCR y devuelve candidatos.
