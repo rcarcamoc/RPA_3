@@ -81,7 +81,7 @@ class WebAutomation:
             return None
 
     def db_initialize(self):
-        """Initializes database state for the current run"""
+        """Updates database state to indicate this node is starting"""
         conn = self._get_db_connection()
         if not conn:
             return
@@ -89,25 +89,23 @@ class WebAutomation:
         try:
             cursor = conn.cursor()
             
-            # 1. Update existing 'En Proceso' records to 'error'
-            print("[DB] Cleaning up previous 'En Proceso' records...")
-            update_query = "UPDATE registro_acciones SET estado = 'error', `update` = NOW() WHERE estado = 'En Proceso'"
+            # En lugar de INSERT, actualizamos el registro que ya debe existir (creado por el nodo inicial)
+            print("[DB] Actualizando registro 'En Proceso' para Inicio RIS...")
+            update_query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'Inicia RIS' WHERE estado = 'En Proceso'"
             cursor.execute(update_query)
             
-            # 2. Insert new record for current run
-            print("[DB] Inserting new run record...")
-            insert_query = """
-            INSERT INTO registro_acciones (inicio, `update`, ultimo_nodo, estado) 
-            VALUES (NOW(), NOW(), 'inicio', 'En Proceso')
-            """
-            cursor.execute(insert_query)
-            self.current_action_id = cursor.lastrowid
+            # Recuperamos el ID para seguimiento interno del script
+            cursor.execute("SELECT id FROM registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                self.current_action_id = row[0]
             
             conn.commit()
-            print(f"[DB] New run record created with ID: {self.current_action_id}")
+            if self.current_action_id:
+                print(f"[DB] Seguimiento activo para ID: {self.current_action_id}")
             
         except Exception as e:
-            print(f"[ERROR] Database initialization failed: {e}")
+            print(f"[ERROR] Error al actualizar estado en BD: {e}")
         finally:
             if conn and conn.is_connected():
                 conn.close()
@@ -126,13 +124,13 @@ class WebAutomation:
             
             if success:
                 # Success case: Update timestamp and node (keep status as En Proceso for next node)
-                print("[DB] Updating record for success...")
-                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'inicio' WHERE id = %s"
+                print("[DB] Actualización exitosa para Inicio RIS...")
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'Inicia RIS' WHERE id = %s"
                 cursor.execute(query, (self.current_action_id,))
             else:
                 # Error case: Update timestamp, node, and set status to error
-                print("[DB] Updating record for error...")
-                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'inicio', estado = 'error' WHERE id = %s"
+                print("[DB] Marcando error para Inicio RIS...")
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = 'Inicia RIS', estado = 'error' WHERE id = %s"
                 cursor.execute(query, (self.current_action_id,))
             
             conn.commit()
@@ -397,14 +395,12 @@ class WebAutomation:
             self.db_finish(success=True)
             
         except Exception as e:
-            print(f"[ERROR] Error during execution: {e}")
-            # Update database for error
-            self.db_finish(success=False)
             try:
-                enviar_alerta_todos(f"❌ <b>Error Crítico en el script: Inicio_ris</b>\\nExcepción: {str(e)}")
-            except:
-                pass
-            sys.exit(1)
+                from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("Inicio_ris.py", str(e))
+            except ImportError:
+                print(f"[ERROR] {e}")
+                sys.exit(1)
             # traceback.print_exc()
         finally:
             self._cleanup()

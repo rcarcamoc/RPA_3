@@ -215,7 +215,9 @@ class BuscadorDoctorSelenium:
                     if re.search(r'\d{6,}\s*/\s*[^/]+', txt):
                         try:
                             link = cells[1].find_element(By.TAG_NAME, "a")
-                            logger.info(f"✓ Haciendo click en el vínculo: {txt}")
+                            link_url = link.get_attribute("href")
+                            print(f"[INFO] URL del PDF: {link_url}")
+                            logger.info(f"✓ Haciendo click en el vínculo: {txt} | URL: {link_url}")
                             
                             # Asegurar visibilidad con Scroll
                             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
@@ -429,6 +431,62 @@ class BuscadorBaseDatos:
                 conn.close()
 
 
+def espera_con_countdown(segundos: int, mensaje: str):
+    """Muestra una ventana flotante con una cuenta regresiva."""
+    try:
+        import tkinter as tk
+        
+        root = tk.Tk()
+        root.title("RPA Wait")
+        root.attributes("-topmost", True)
+        
+        # Centrar ligeramente arriba a la izquierda pero no en la esquina total
+        root.geometry("350x130+100+100") 
+        root.overrideredirect(True) # Ventana sin bordes
+        
+        # Colores y bordes
+        root.configure(bg='#1e272e', highlightbackground="#3498db", highlightthickness=2)
+        
+        lbl_msg = tk.Label(root, text=mensaje, fg='white', bg='#1e272e', font=('Segoe UI', 11, 'bold'), wraplength=320)
+        lbl_msg.pack(pady=(15, 5))
+        
+        lbl_timer = tk.Label(root, text="", fg='#f1c40f', bg='#1e272e', font=('Consolas', 28, 'bold'))
+        lbl_timer.pack(pady=5)
+        
+        # Permitir mover la ventana arrastrando
+        def start_move(event):
+            root.x = event.x
+            root.y = event.y
+        def stop_move(event):
+            root.x = None
+            root.y = None
+        def on_move(event):
+            deltax = event.x - root.x
+            deltay = event.y - root.y
+            x = root.winfo_x() + deltax
+            y = root.winfo_y() + deltay
+            root.geometry(f"+{x}+{y}")
+            
+        root.bind("<Button-1>", start_move)
+        root.bind("<B1-Motion>", on_move)
+        
+        def update_timer(remaining):
+            if remaining <= 0:
+                root.destroy()
+                return
+            
+            mins, secs = divmod(remaining, 60)
+            lbl_timer.config(text=f"{mins:02d}:{secs:02d}")
+            root.after(1000, update_timer, remaining - 1)
+            
+        update_timer(segundos)
+        root.mainloop()
+    except Exception as e:
+        print(f"No se pudo mostrar el reloj en pantalla: {e}")
+        import time
+        time.sleep(segundos)
+
+
 def main():
     """Función principal"""
     # Silenciar logs del módulo principal también si se desea salida pura
@@ -448,11 +506,11 @@ def main():
         # Verificación solicitada antes de extraer
         if buscador.verificar_sin_resultados():
             bd.registrar_sin_resultados()
-            print("Terminando script: Tabla sin resultados.")
-            try:
-                enviar_alerta_todos("⚠️ <b>Script: busca_doctor</b>\\nScript finalizado: Sin resultados en la lista para procesar.")
-            except:
-                pass
+            print("Tabla sin resultados. Esperando 5 minutos antes de reintentar...")
+            
+            # Reemplazamos el sleep simple por el countdown visual
+            espera_con_countdown(300, "Sin registros para trabajar.\nReintentando en:")
+            
             # Terminar con código 2 para indicar "Fin de flujo por falta de registros" (no es error)
             sys.exit(2)
 
@@ -493,15 +551,13 @@ def main():
             bd.db_update_tracking(status='En Proceso')
 
     except Exception as e:
-        # Tracking de error
-        bd.db_update_tracking(status='error')
-        import traceback
-        traceback.print_exc()
         try:
-            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: busca_doctor</b>\\nExcepción:\\n<code>{str(e)}</code>")
-        except:
-            pass
-        sys.exit(1)
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("busca_doctor.py", str(e))
+        except ImportError:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     
     finally:
         try:

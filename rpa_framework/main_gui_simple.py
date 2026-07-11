@@ -61,6 +61,7 @@ try:
     from ui.panels.web_record_panel import WebRecordPanel
     from ui.workflow_panel_v2 import WorkflowPanelV2
     from ui.panels.debug_panel import DebugPanel
+    from ui.panels.llm_panel import LLMPanel
 
     from utils.log_cleanup import cleanup_old_logs, PeriodicCleanup
     
@@ -116,6 +117,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(OCRPanel(self), "OCR")
         tabs.addTab(WebRecordPanel(self.config), "Web Recorder")
         tabs.addTab(DebugPanel(self.config), "🐛 Debug")
+        self.llm_panel = LLMPanel()
+        tabs.addTab(self.llm_panel, "🤖 Modelos LLM")
 
      
         
@@ -149,9 +152,55 @@ def main():
         cleanup_old_logs()
     except: pass
     
+    # 🔄 Sincronizar tabla ris.medicos con SharePoint en segundo plano
+    try:
+        _sync_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "quick_scripts", "sync_medicos_sharepoint.py"
+        )
+        if os.path.exists(_sync_script):
+            import threading
+            def _run_sync():
+                try:
+                    proc = subprocess.Popen(
+                        [sys.executable, _sync_script],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    proc.wait()
+                except Exception as _e:
+                    print(f"[sync_medicos] Error: {_e}")
+            threading.Thread(target=_run_sync, daemon=True, name="SyncMedicos").start()
+            print("Sincronizacion de medicos SharePoint iniciada en segundo plano.")
+    except Exception as e:
+        print(f"[sync_medicos] No se pudo iniciar: {e}")
+    
+    # 🤖 Iniciar Listener de Telegram en segundo plano para procesar botones y comandos
+    try:
+        import threading
+        from utils.telegram_manager import registrar_usuarios
+        from utils.notificador_resumen import main as start_notificador
+        
+        telegram_thread = threading.Thread(target=registrar_usuarios, daemon=True)
+        telegram_thread.start()
+        
+        notifier_thread = threading.Thread(target=start_notificador, daemon=True)
+        notifier_thread.start()
+        
+        print("🤖 Listener de Telegram y Notificador de Resúmenes iniciados.")
+    except Exception as e:
+        print(f"⚠️ No se pudo iniciar el listener de Telegram: {e}")
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+
+    # Validar modelos LLM en segundo plano justo después de mostrar la ventana
+    try:
+        window.llm_panel.run_startup_validation()
+    except Exception as _e:
+        print(f"⚠️ No se pudo lanzar validación LLM al inicio: {_e}")
+
     sys.exit(app.exec())
 
 if __name__ == "__main__":

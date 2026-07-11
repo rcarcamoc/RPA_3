@@ -10,8 +10,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -591.0,
-        "y": -301.0
+        "x": -678.0,
+        "y": -373.0
       },
       "script": "web\\Inicio_ris.py",
       "command": "",
@@ -27,8 +27,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -648.0,
-        "y": -108.0
+        "x": -708.0,
+        "y": -206.0
       },
       "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\web\\seleccion int 2.py",
       "command": "",
@@ -42,7 +42,7 @@
       "type": "action",
       "label": "Busca_doctor",
       "on_error": "stop",
-      "enabled": true,
+      "enabled": false,
       "position": {
         "x": -669.0,
         "y": 110.0
@@ -106,10 +106,10 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -241.0,
-        "y": -306.0
+        "x": -476.0,
+        "y": -556.0
       },
-      "script": "sistema\\check_db_connection.py",
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\sistema\\check_db_connection.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -123,8 +123,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -601.0,
-        "y": -550.0
+        "x": -711.0,
+        "y": -559.0
       }
     },
     {
@@ -134,8 +134,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -218.0,
-        "y": -443.0
+        "x": -233.0,
+        "y": -239.0
       },
       "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\sistema\\verifica_vpn.py",
       "command": "",
@@ -151,10 +151,44 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -211.0,
-        "y": -557.0
+        "x": -200.0,
+        "y": -363.0
       },
       "script": "sistema\\verifica_openrouter.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n11_0",
+      "type": "action",
+      "label": "Crea registro",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -155.0,
+        "y": -512.0
+      },
+      "script": "sistema\\crear_registro_db.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "cac9b334",
+      "type": "action",
+      "label": "busca doctor ultima",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -663.0,
+        "y": -55.0
+      },
+      "script": "web\\busca_doctor_ultima.py",
       "command": "",
       "output_variable": "",
       "command_type": "",
@@ -166,10 +200,6 @@
     {
       "from": "n2_0",
       "to": "n3_0"
-    },
-    {
-      "from": "n3_0",
-      "to": "n4_0"
     },
     {
       "from": "n4_0",
@@ -184,20 +214,32 @@
       "to": "n7_0"
     },
     {
-      "from": "2537e2dc",
-      "to": "n2_0"
+      "from": "n10_0",
+      "to": "n9_0"
     },
     {
       "from": "n9_0",
-      "to": "2537e2dc"
+      "to": "n2_0"
     },
     {
       "from": "n8_0",
+      "to": "2537e2dc"
+    },
+    {
+      "from": "2537e2dc",
+      "to": "n11_0"
+    },
+    {
+      "from": "n11_0",
       "to": "n10_0"
     },
     {
-      "from": "n10_0",
-      "to": "n9_0"
+      "from": "n3_0",
+      "to": "cac9b334"
+    },
+    {
+      "from": "cac9b334",
+      "to": "n4_0"
     }
   ],
   "variables": {}

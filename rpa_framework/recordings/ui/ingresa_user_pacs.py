@@ -141,7 +141,7 @@ class IngresaUserPacsAutomation:
             results["reason"] = "Missing credentials"
             results["errors"].append({"reason": error_msg})
             # Actualizar estado a error si es posible
-            self.db_update_status('error')
+            # self.db_update_status('error')
             return results
         
         # Mostrar longitud de las credenciales para depuración
@@ -232,7 +232,7 @@ class IngresaUserPacsAutomation:
             logger.error(f"Error critico: {e}")
             results["status"] = "FAILED"
             results["errors"].append({"reason": str(e)})
-            self.db_update_status('error')
+            # self.db_update_status('error')
         
         results["end_time"] = datetime.now().isoformat()
         
@@ -270,6 +270,10 @@ def main():
         except Exception as e:
             logger.error(f"Error invocado manejador de errores: {e}")
             return 1
+
+    # Delay de 10 segundos antes de terminar
+    logger.info("Esperando 10 segundos antes de terminar...")
+    time.sleep(10)
     return 0
 
 

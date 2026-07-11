@@ -227,14 +227,15 @@ def normalize_colored_backgrounds(img_rgb: np.ndarray) -> np.ndarray:
 
     result = img_rgb.copy()
 
-    # Texto claro = blanco/casi-blanco → V > 180  (blanco puro tiene V=255)
-    # El fondo naranja tiene V≈80-150, bien separado del texto blanco
-    text_mask = colored_mask & (v > 180)
-    # Fondo = zona coloreada que no es texto claro
-    bg_mask   = colored_mask & (v <= 180)
-
-    result[text_mask] = [0,   0,   0  ]  # texto blanco → negro
-    result[bg_mask]   = [255, 255, 255]  # fondo coloreado → blanco
+    # Usamos el canal V pero lo oscurecemos suavemente restándole 60.
+    # El fondo azul oscuro tiene V ≈ 80-150. Al restar 60, queda en 20-90.
+    # El texto blanco tiene V ≈ 200-255. Al restar 60, queda en 140-195.
+    # Luego, en preprocess_high_fidelity, THRESH_TOZERO con floor=100 eliminará el fondo (<100 -> 0),
+    # dejando solo el texto sobre fondo negro, manteniendo los bordes suaves del anti-aliasing.
+    # Finalmente, el bitwise_not invertirá esto a texto negro sobre fondo blanco.
+    v_shifted = cv2.subtract(v, 60)
+    v_3channel = cv2.merge([v_shifted, v_shifted, v_shifted])
+    result[colored_mask] = v_3channel[colored_mask]
 
     return result
 
@@ -267,18 +268,17 @@ def preprocess_high_fidelity(
     # Convertir PIL (RGB) a Numpy (RGB)
     img_np = np.array(img)
     
-    # 1. Escalar (Lanczos4) - Mejora significativa en textos pequeños
+    # 1. Normalizar fondos de color (rojo, rosa, azul) ANTES de escalar y pasar a grises.
+    normalized = normalize_colored_backgrounds(img_np)
+
+    # 2. Escalar (Lanczos4) - Mejora significativa en textos pequeños
     upscaled = cv2.resize(
-        img_np, 
+        normalized, 
         None, 
         fx=scale_factor, 
         fy=scale_factor, 
         interpolation=cv2.INTER_LANCZOS4
     )
-    
-    # 2. Normalizar fondos de color (rojo, rosa, azul) ANTES de pasar a grises.
-    #    Sin este paso, Hue rojo → gris ≈85 < threshold_floor=100 → fila entera negra.
-    upscaled = normalize_colored_backgrounds(upscaled)
 
     # 3. Convertir a Grises
     gray = cv2.cvtColor(upscaled, cv2.COLOR_RGB2GRAY)

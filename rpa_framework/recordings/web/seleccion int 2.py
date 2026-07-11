@@ -328,18 +328,12 @@ class WebAutomation:
             self.db_update_node(status='En Proceso')
             
         except Exception as e:
-            print(f"[ERROR] Error during execution: {e}")
-            # Inform error
-            self.db_update_node(status='error')
-            
-            # Enviar alerta a Telegram
             try:
-                enviar_alerta_todos(f"❌ <b>Error Crítico en el script: seleccion int 2</b>\\nFallo durante la ejecución:\\n<code>{str(e)}</code>")
-            except Exception as tel_e:
-                print(f"[WARNING] Falló envío Telegram: {tel_e}")
-                
-            # Salir abruptamente para que el engine capture el error globalmente
-            sys.exit(1)
+                from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("seleccion int 2.py", str(e))
+            except ImportError:
+                print(f"[ERROR] {e}")
+                sys.exit(1)
         finally:
             self._cleanup()
     

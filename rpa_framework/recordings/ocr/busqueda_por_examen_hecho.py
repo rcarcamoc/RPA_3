@@ -283,6 +283,7 @@ RESPONDE SOLO EN FORMATO JSON:
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": LLM_DEFAULT_TEMPERATURE,
                             "max_tokens": LLM_DEFAULT_MAX_TOKENS,
+                            "reasoning": {"exclude": True}
                         },
                         timeout=LLM_DEFAULT_TIMEOUT
                     )

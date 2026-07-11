@@ -72,7 +72,7 @@ def _consultar_registro():
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         query = """
-        SELECT inicio, doctor_detectado, numero_documento, fecha_agendada,
+        SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
                patologia_critica, patologia_critica_detectada, examen, URL
         FROM ris.registro_acciones
         WHERE estado = 'En Proceso'
@@ -96,7 +96,7 @@ def _marcar_error(script_name, error_description):
         obs = f"[{script_name}] {error_description}"[:500]  # limitar largo
         query = """
         UPDATE ris.registro_acciones
-        SET estado = 'Error', diagnostico = CONCAT(IFNULL(diagnostico,''), ' | ERROR: ', %s), `update` = NOW()
+        SET estado = 'Error', observacion = %s, `update` = NOW()
         WHERE estado = 'En Proceso'
         """
         cursor.execute(query, (obs,))
@@ -163,6 +163,7 @@ def handle_error_and_exit(script_name: str, error_description: str):
 
     # 2. Datos del registro
     record_data = _consultar_registro()
+    record_id = record_data.get("id") if record_data else None
 
     # 3. Mensaje de texto
     mensaje = _formatear_mensaje(script_name, error_description, record_data)
@@ -172,7 +173,13 @@ def handle_error_and_exit(script_name: str, error_description: str):
 
     try:
         # Siempre enviar el texto primero (sin límite de chars)
-        enviar_alerta_todos(mensaje)
+        # Verificamos si enviar_alerta_todos acepta record_id (para evitar error si se llama desde versiones anteriores)
+        import inspect
+        sig = inspect.signature(enviar_alerta_todos)
+        if "record_id" in sig.parameters:
+            enviar_alerta_todos(mensaje, record_id=record_id)
+        else:
+            enviar_alerta_todos(mensaje)
         logger.info("Mensaje de texto enviado a Telegram.")
     except Exception as e:
         logger.error(f"Error enviando texto a Telegram: {e}")

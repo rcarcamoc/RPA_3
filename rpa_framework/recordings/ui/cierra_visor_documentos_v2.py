@@ -62,8 +62,12 @@ HOLD_TIME = 0.5
 MAX_INTENTOS = 3
 
 TITULOS_CARESTREAM = [
-    "Carestream Radiology Client",
-    "Carestream Vue PACS",
+    "Carestream Radiology Client", 
+    "Carestream Vue PACS", 
+    "Carestream RIS", 
+    "Workflow Information Management", 
+    "Vue RIS", 
+    "Carestream RIS V11"
 ]
 
 id_registro = os.environ.get('VAR_id_registro')
@@ -71,7 +75,7 @@ id_registro = os.environ.get('VAR_id_registro')
 # ── Carpeta de logs especifica para esta tarea ───────────────────
 LOG_DIR = os.path.join(
     str(Path(__file__).parent.parent.parent),
-    "log", "verifica_inicio"
+    "log", "visor_de_documentos"
 )
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -102,7 +106,7 @@ def db_update(status='En Proceso', obs=None, node='cierra_visor_documentos'):
         logger.warning(f"[DB Error] {e}")
 
 
-def buscar_imagen_visor(template_path, confidence_threshold=0.70):
+def buscar_imagen_visor(template_path, confidence_threshold=0.85):
     """
     Busca la imagen en la pantalla usando MULTI-SCALE MATCHING y DOBLE CONFIRMACIÓN.
     (Basado en buscar_bloque_toolbar de 'pega en word.py')
@@ -154,7 +158,7 @@ def buscar_imagen_visor(template_path, confidence_threshold=0.70):
             vf.highlight_region(x, y, template_w, template_h, color="#FFEB3B", duration=1.5)
         
     # 2. Confianza "Aceptable" -> DOBLE CONFIRMACIÓN
-    elif max_val >= 0.20:
+    elif max_val >= 0.60:
         logger.warning(f"   ⚠️ Confianza preliminar baja ({max_val*100:.2f}%) en ({x}, {y}). DOBLE CONFIRMACIÓN...")
         
         try:
@@ -172,8 +176,8 @@ def buscar_imagen_visor(template_path, confidence_threshold=0.70):
 
             logger.info(f"   🔍 Doble Confirmación (similitud directa): {similitud*100:.2f}%")
 
-            # Umbral de similitud directa (0.65 = 65% de similitud pixel a pixel)
-            UMBRAL_CONFIRM2 = 0.65
+            # Umbral de similitud directa (0.85 = 85% de similitud pixel a pixel)
+            UMBRAL_CONFIRM2 = 0.85
 
             # Guardar imagen del recorte con etiqueta de resultado
             try:
@@ -243,34 +247,39 @@ def humanized_click(x, y, hold_time=HOLD_TIME):
 
 
 def activar_ventana_carestream():
-    """Busca y activa la ventana de Carestream."""
-    logger.info("Buscando ventana Carestream...")
+    """Busca y activa la ventana de Carestream usando búsqueda de elementos."""
+    logger.info("Buscando ventana de Carestream para asegurar foco...")
+    
+    try:
+        from pywinauto import Application, findwindows
+        all_wins = findwindows.find_elements()
+        
+        for pattern in TITULOS_CARESTREAM:
+            for win in all_wins:
+                if pattern.lower() in win.name.lower():
+                    logger.info(f"🎯 Ventana detectada: '{win.name}'. Enfocando...")
+                    try:
+                        app_cs = Application(backend='uia').connect(handle=win.handle)
+                        window = app_cs.window(handle=win.handle)
+                        
+                        # Restaurar si está minimizada
+                        if window.is_minimized():
+                            window.restore()
+                            
+                        window.set_focus()
+                        
+                        if vf:
+                            vf.show_message("Carestream activado", duration=2.0)
+                            
+                        logger.info(f"✅ Foco exitoso en '{win.name}'")
+                        return True
+                    except Exception as e_conn:
+                        logger.debug(f"Error al conectar/enfocar {win.name}: {e_conn}")
+        
+    except Exception as e:
+        logger.warning(f"Error durante la selección de ventana: {e}")
 
-    for titulo in TITULOS_CARESTREAM:
-        try:
-            ventanas = fw.find_windows(
-                title_re=re.compile(f".*{re.escape(titulo)}.*", re.I)
-            )
-            if ventanas:
-                hwnd = ventanas[0]
-                win = Desktop(backend="win32").window(handle=hwnd)
-                titulo_real = win.window_text()
-                logger.info(f"   Ventana encontrada: '{titulo_real}' (hwnd={hwnd})")
-
-                win.set_focus()
-                time.sleep(0.5)
-
-                if vf:
-                    vf.show_message("Carestream activado", duration=2.0)
-
-                logger.info(f"   -> Ventana '{titulo_real}' activada.")
-                return True
-
-        except Exception as e:
-            logger.warning(f"   Error buscando '{titulo}': {e}")
-            continue
-
-    logger.warning("No se encontro ninguna ventana de Carestream abierta.")
+    logger.warning("No se encontró ninguna ventana de Carestream abierta que coincida.")
     return False
 
 
@@ -301,10 +310,12 @@ def execute():
                 time.sleep(1.0)
 
         if not resultado:
-            logger.info(f"Imagen del visor no encontrada en {MAX_INTENTOS} intentos. Nada que hacer.")
+            logger.info(f"Imagen del visor no encontrada en {MAX_INTENTOS} intentos. Se asume que ya está cerrado. Terminando sin error.")
+            db_update(status='En Proceso')  # Asegurar que el flujo continúe en la BD
             return {
-                'status': 'skipped',
-                'reason': 'Imagen no encontrada en pantalla'
+                'status': 'success',
+                'reason': 'Imagen no encontrada en pantalla (omitido sin error)',
+                'skipped': True
             }
 
         # ── Paso 2: Feedback visual + Clic sostenido ─────────────

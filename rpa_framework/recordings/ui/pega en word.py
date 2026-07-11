@@ -18,6 +18,12 @@ import os
 import ctypes
 import win32clipboard
 
+try:
+    from pywinauto import Application, findwindows
+    HAS_PYWINAUTO = True
+except ImportError:
+    HAS_PYWINAUTO = False
+
 # Agregar raíz del proyecto al path para importar utils
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -47,7 +53,7 @@ def ejecutar_cierra_visor():
     time.sleep(4.0)
     try:
         import importlib.util
-        cvd_path = Path(__file__).parent / "cierra_visor_documentos2.py"
+        cvd_path = Path(__file__).parent / "cierra_visor_documentos_v2.py"
         if not cvd_path.exists():
             logger.warning(f"No se encuentra {cvd_path}")
             return False
@@ -351,32 +357,53 @@ def automatizar_buscar_toolbar(toolbar_image_path, accion="click_centro", offset
     realizar_accion_en_bloque(bloque_info, accion=accion, offset_y=offset)
     return bloque_info
 
-def set_clipboard_rtf(rtf_text, plain_text=""):
-    """Coloca contenido RTF y texto plano en el portapapeles."""
-    for attempt in range(3):
+def set_clipboard_text(text):
+    """Coloca texto plano en el portapapeles de forma robusta."""
+    if text is None:
+        return False
+        
+    # Normalizar saltos de línea a formato Windows (CRLF) para mejor compatibilidad
+    text = text.replace('\r\n', '\n').replace('\n', '\r\n')
+    
+    for attempt in range(5): # Aumentado a 5 intentos
         try:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
-            # Registrar formato RTF si es necesario o usar standard
+            win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+            win32clipboard.CloseClipboard()
+            return True
+        except Exception as e:
+            logger.warning(f"Error portapapeles (intento {attempt+1}): {e}")
+            try: win32clipboard.CloseClipboard()
+            except: pass
+            time.sleep(0.3)
+    return False
+
+def set_clipboard_rtf(rtf_text, plain_text=""):
+    """Coloca contenido RTF y texto plano en el portapapeles."""
+    for attempt in range(5):
+        try:
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
             cf_rtf = win32clipboard.RegisterClipboardFormat("Rich Text Format")
-            # RTF debe ser bytes
-            rtf_bytes = rtf_text.encode('cp1252', errors='replace')
+            # RTF maneja los caracteres especiales escapándolos, por lo que ascii es seguro
+            rtf_bytes = rtf_text.encode('ascii', errors='replace')
             win32clipboard.SetClipboardData(cf_rtf, rtf_bytes)
             
             # Siempre incluir fallback de texto plano para habilitar el botón "Pegar" en MS Word y otros
             if plain_text:
+                plain_text = plain_text.replace('\r\n', '\n').replace('\n', '\r\n')
                 win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, plain_text)
                 
             logger.info("Contenido RTF copiado al portapapeles")
-            break
+            win32clipboard.CloseClipboard()
+            return True
         except Exception as e:
-            logger.error(f"Error copiando RTF (intento {attempt+1}): {e}")
-            time.sleep(0.5)
-        finally:
-            try:
-                win32clipboard.CloseClipboard()
-            except:
-                pass
+            logger.warning(f"Error copiando RTF (intento {attempt+1}): {e}")
+            try: win32clipboard.CloseClipboard()
+            except: pass
+            time.sleep(0.4)
+    return False
 
 class Test1Automation:
     """Automatización generada: test1"""
@@ -424,88 +451,82 @@ class Test1Automation:
             conn.close()
             return result[0] if result else None
         except Exception as e:
-            logger.error(f"Error consultando DB: {e}")
+            logger.error(f"Error consultando diagnóstico: {e}")
             return None
 
     def type_formatted(self, text):
-        """Procesa y escribe el texto usando RTF para asegurar formato sin depender del estado del editor."""
+        """Procesa el texto usando pegado directo en formato RTF para un formato absoluto (sin toggles)."""
         if not text:
             logger.warning("No hay texto para procesar")
             return
             
-        # 1. Omitir la primera línea
+        logger.info(f"Procesando diagnóstico de {len(text)} caracteres")
+            
+        # 1. Omitir la primera línea (encabezado habitual)
         lines = text.splitlines()
         if len(lines) > 1:
             text = "\n".join(lines[1:])
             logger.info("1ra línea omitida")
         else:
-            logger.warning("Texto demasiado corto")
-            return
+            logger.info("Texto corto, se mantiene íntegro")
 
-        # 2. Construir RTF
-        # Header básico RTF - Calibri
-        rtf_header = r"{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang1034{\fonttbl{\f0\fnil\fcharset0 Calibri;}}"
-        # Calibri 10pt (\fs20), Interlineado Sencillo (\sl0 = auto/single, \sa0 = sin espacio posterior)
-        rtf_start = r"\viewkind4\uc1 \pard\sa0\sl0\slmult1\f0\fs20 " 
-        rtf_body = ""
-        
-        # Dividir por palabras clave manteniendo separadores
-        parts = re.split(r'(Hallazgos: |Impresión: )', text)
-        
-        for part in parts:
-            if not part:
-                continue
-            
-            # Escapar caracteres especiales RTF en el contenido
-            safe_part = part.replace('\\', '\\\\').replace('{', r'\{').replace('}', r'\}')
-            
-            if "Hallazgos: " in part:
-                 # Negrita
-                 rtf_body += r"\b " + safe_part + r"\b0 "
-            elif "Impresión: " in part:
-                 # Enter antes + Negrita + Enter después (simulando lógica original)
-                 # Lógica original: Enter antes, Escribe H/I, Enter despues.
-                 # RTF: \par inicia nuevo parrafo.
-                 rtf_body += r"\par \b " + safe_part + r"\b0 \par "
-            else:
-                 # Texto normal con saltos de línea convertidos a \par
-                 content = safe_part.replace('\n', r'\par ')
-                 rtf_body += content
-
-        rtf_final = rtf_header + rtf_start + rtf_body + r"}"
-        
-        # 3. Borrar contenido existente antes de pegar
+        # 2. Borrar contenido existente antes de empezar
         try:
-            pyautogui.keyDown('ctrl')
-            time.sleep(0.05)
-            pyautogui.press('a')
-            time.sleep(0.05)
-            pyautogui.keyUp('ctrl')
-            time.sleep(0.2)
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.3)
             pyautogui.press('delete')
             time.sleep(0.3)
-            logger.info("Contenido previo borrado (Ctrl+A + Delete)")
+            # Presionamos un par de Enter en blanco para reiniciar posibles bloques defectuosos y borramos
+            pyautogui.press('enter')
+            pyautogui.press('backspace')
+            logger.info("Editor limpiado")
         except Exception as e:
-            logger.warning(f"No se pudo borrar contenido previo: {e}")
+            logger.warning(f"No se pudo limpiar editor: {e}")
 
-        # 4. Poner en portapapeles y pegar
-        set_clipboard_rtf(rtf_final, text)
-
-        # Espera crítica para dar tiempo al SO y la app de reconocer el portapapeles
-        time.sleep(2.0)
-
-        # --------------------------------------------------------------
-
-        # Ejecutar CTRL+V (manera robusta para evitar pérdida de keypresses)
+        # 3. Generar RTF y pegar de una sola vez
         try:
-            pyautogui.keyDown('ctrl')
-            time.sleep(0.1)
-            pyautogui.press('v')
-            time.sleep(0.1)
-            pyautogui.keyUp('ctrl')
-            logger.info("Combinación CTRL+V ejecutada con éxito (vía pyautogui keydown/up)")
+            # Función auxiliar para convertir a RTF
+            def to_rtf(txt):
+                # Escapar caracteres especiales RTF
+                txt = txt.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+                # Saltos de línea (RTF usa \par, el espacio después es el delimitador)
+                txt = txt.replace('\r\n', '\n').replace('\n', '\\par ')
+                
+                # Reemplazar con negritas usando grupos RTF {...} para evitar problemas de delimitadores
+                txt = re.sub(r'(?i)(Hallazgos:)', r'{\\b \1}', txt)
+                # Omitir el \par extra si ya hay uno (se agregó en el replace anterior)
+                txt = re.sub(r'(?i)(Impresi[óo]n:)', r'\\par {\\b \1}', txt)
+                
+                # Convertir los saltos de página explícitos (\f) a la etiqueta RTF correspondiente
+                txt = txt.replace('\f', r'\page ')
+                
+                # Caracteres especiales a unicode RTF
+                def encode_char(match):
+                    return f"\\u{ord(match.group(0))}?"
+                txt = re.sub(r'[^\x00-\x7F]', encode_char, txt)
+                
+                # Envoltura RTF básica (Arial, 11pt -> fs22)
+                return r'{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Arial;}}\f0\fs22 ' + txt + r'}'
+
+            rtf_content = to_rtf(text)
+            
+            logger.info("Pegando texto con formato RTF absoluto...")
+            if set_clipboard_rtf(rtf_content, text):
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.5)
+                logger.info("✅ Pegado RTF completado")
+            else:
+                logger.warning("Fallo al colocar RTF en portapapeles, usando fallback plano")
+                if set_clipboard_text(text):
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.5)
+                else:
+                    pyautogui.write(text)
+
         except Exception as e:
-            logger.warning(f"Error con pyautogui: {e}.")
+            logger.error(f"Error procesando RTF: {e}")
+
+        logger.info("Procesamiento de texto completado")
 
     def setup(self) -> bool:
         """Configuración inicial."""
@@ -535,11 +556,39 @@ class Test1Automation:
         self.db_update_status('En Proceso')
 
         # Espera crítica para dar tiempo al SO
-        time.sleep(4.0)
+        time.sleep(5.0)
 
 
         
         try:
+            # Acción 0: Seleccionar ventana de Carestream
+            try:
+                logger.info("Buscando ventana de Carestream para asegurar foco...")
+                # Patrones solicitados por el usuario
+                patterns = ["Carestream Radiology Client", "Carestream Vue PACS"]
+                connected = False
+                
+                if HAS_PYWINAUTO:
+                    all_wins = findwindows.find_elements()
+                    for pattern in patterns:
+                        for win in all_wins:
+                            if pattern in win.name and "Google Chrome" not in win.name:
+                                logger.info(f"Ventana detectada: '{win.name}'. Enfocando...")
+                                try:
+                                    app_cs = Application(backend='uia').connect(handle=win.handle)
+                                    app_cs.window(handle=win.handle).set_focus()
+                                    connected = True
+                                    time.sleep(1.0)
+                                    break
+                                except Exception as e_conn:
+                                    logger.debug(f"No se pudo conectar a ventana {win.name}: {e_conn}")
+                        if connected: break
+                
+                if not connected:
+                    logger.warning("No se pudo encontrar o enfocar una ventana de Carestream por título.")
+            except Exception as e_win:
+                logger.warning(f"Error durante la selección de ventana: {e_win}")
+
             # Acción 1: Búsqueda Visual y Click
             try:
                 # Usar automatizar_buscar_toolbar que tiene el loop de reintentos y mensaje al usuario
@@ -606,9 +655,9 @@ class Test1Automation:
                     
                     x, y, _, _, _, _ = self.bloque_info
                     
-                    # Coordenadas relativas actualizadas
-                    target_x = x - 236
-                    target_y = y - 97
+                    # Coordenadas relativas (Sincronizadas con log: offset izquierdo 246)
+                    target_x = x - 200
+                    target_y = y - 95
                     
                     # --- LÓGICA CONDICIONAL SOLICITADA ---
                     if HAS_MYSQL:
@@ -634,7 +683,7 @@ class Test1Automation:
                             logger.error(f"⚠️ Error en ejecución condicional: {e_cond}")
                     # -------------------------------------
 
-                    logger.info(f"   → Click en botón Guardar (offset izquierdo 276, arriba 97): ({target_x:.0f}, {target_y:.0f})")
+                    logger.info(f"   → Click en botón Guardar (offset izquierdo 246, arriba 97): ({target_x:.0f}, {target_y:.0f})")
                     
                     # Log del punto de clic real final
                     try:

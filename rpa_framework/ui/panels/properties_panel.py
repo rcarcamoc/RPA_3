@@ -140,7 +140,13 @@ class PropertiesPanel(QWidget):
         loop_layout.setContentsMargins(0,0,0,0)
         
         self.prop_loop_type = QComboBox()
-        self.prop_loop_type.addItems(["Count (N Veces)", "List (ForEach)", "While (Condición)"])
+        self.prop_loop_type.addItems([
+            "Count (N Veces)",
+            "List (ForEach)",
+            "While (Condición)",
+            "Timed (N Horas)",
+            "Infinite (Sin fin)"
+        ])
         self.prop_loop_type.currentIndexChanged.connect(self.update_loop_fields)
         loop_layout.addRow("Tipo Loop:", self.prop_loop_type)
 
@@ -155,6 +161,10 @@ class PropertiesPanel(QWidget):
         self.prop_loop_condition = QLineEdit()
         self.prop_loop_condition.setPlaceholderText("Ej: x < 10")
         loop_layout.addRow("Condición While:", self.prop_loop_condition)
+        
+        self.prop_duration_hours = QLineEdit()
+        self.prop_duration_hours.setPlaceholderText("Ej: 1  o  2.5  o  8")
+        loop_layout.addRow("Duración (horas):", self.prop_duration_hours)
         
         self.prop_loop_var = QLineEdit()
         self.prop_loop_var.setPlaceholderText("Ej: item")
@@ -239,21 +249,24 @@ class PropertiesPanel(QWidget):
     def update_loop_fields(self):
         """Muestra u oculta campos de loop según el tipo"""
         t = self.prop_loop_type.currentText()
-        # Ocultar todos primero (iter, iterable, cond)
-        # Notas: iterotions en index 1, iterable en 2, condition en 3
-        # Layouts son tricky para ocultar filas, mejor ocultar widgets
-        
-        # Iteraciones
+        loop_layout = self.loop_container.layout()
+
         self.prop_iterations.setVisible("Count" in t)
-        self.loop_container.layout().labelForField(self.prop_iterations).setVisible("Count" in t)
+        loop_layout.labelForField(self.prop_iterations).setVisible("Count" in t)
         
-        # Lista
         self.prop_iterable.setVisible("List" in t)
-        self.loop_container.layout().labelForField(self.prop_iterable).setVisible("List" in t)
+        loop_layout.labelForField(self.prop_iterable).setVisible("List" in t)
         
-        # Condicion
         self.prop_loop_condition.setVisible("While" in t)
-        self.loop_container.layout().labelForField(self.prop_loop_condition).setVisible("While" in t)
+        loop_layout.labelForField(self.prop_loop_condition).setVisible("While" in t)
+        
+        self.prop_duration_hours.setVisible("Timed" in t)
+        loop_layout.labelForField(self.prop_duration_hours).setVisible("Timed" in t)
+        
+        # Variable Item solo es relevante para Count/List/While, no para Timed/Infinite
+        show_var = not ("Timed" in t or "Infinite" in t)
+        self.prop_loop_var.setVisible(show_var)
+        loop_layout.labelForField(self.prop_loop_var).setVisible(show_var)
     
     def update_command_fields(self):
         """Muestra u oculta campos de comando según el tipo"""
@@ -289,6 +302,7 @@ class PropertiesPanel(QWidget):
             self.prop_label, self.prop_command, self.prop_program_path_edit, 
             self.prop_process_name, self.prop_output_var, self.prop_iterations,
             self.prop_iterable, self.prop_loop_condition, self.prop_loop_var,
+            self.prop_duration_hours,
             self.prop_delay, self.prop_error_delay, self.prop_condition, self.prop_db_host,
             self.prop_db_port, self.prop_db_user, self.prop_db_password,
             self.prop_db_database
@@ -413,19 +427,19 @@ class PropertiesPanel(QWidget):
         if t == NodeType.LOOP:
              self._show_field(self.loop_container)
              
-             # Mapeo de valores
              ltype = getattr(node, 'loop_type', 'count')
-             idx = 0
-             if ltype == 'list': idx = 1
-             elif ltype == 'while': idx = 2
-             self.prop_loop_type.setCurrentIndex(idx)
+             ltype_map = {
+                 'count': 0, 'list': 1, 'while': 2, 'timed': 3, 'infinite': 4
+             }
+             self.prop_loop_type.setCurrentIndex(ltype_map.get(ltype, 0))
              
              self.prop_iterations.setText(str(getattr(node, 'iterations', '1')))
              self.prop_iterable.setText(getattr(node, 'iterable', ''))
              self.prop_loop_condition.setText(getattr(node, 'condition', ''))
              self.prop_loop_var.setText(getattr(node, 'loop_var', 'item'))
+             self.prop_duration_hours.setText(str(getattr(node, 'duration_hours', 1.0)))
              
-             # Show workflow picker if it's a loop
+             # Show workflow picker
              self._show_field(self.wf_container)
              if self.prop_workflow_path.count() == 0:
                  self.load_workflows()
@@ -553,18 +567,23 @@ class PropertiesPanel(QWidget):
 
         if t == NodeType.LOOP:
              node.script = self.prop_script.currentText()
-             # Map combo text to internal type
              ltype_txt = self.prop_loop_type.currentText()
-             if "Count" in ltype_txt: node.loop_type = "count"
-             elif "List" in ltype_txt: node.loop_type = "list"
-             elif "While" in ltype_txt: node.loop_type = "while"
+             if "Count" in ltype_txt:    node.loop_type = "count"
+             elif "List" in ltype_txt:   node.loop_type = "list"
+             elif "While" in ltype_txt:  node.loop_type = "while"
+             elif "Timed" in ltype_txt:  node.loop_type = "timed"
+             elif "Infinite" in ltype_txt: node.loop_type = "infinite"
              
              node.iterations = self.prop_iterations.text()
              node.iterable = self.prop_iterable.text()
              node.condition = self.prop_loop_condition.text()
              node.loop_var = self.prop_loop_var.text()
-             node.loop_var = self.prop_loop_var.text()
              node.workflow_path = self.prop_workflow_path.currentText().strip()
+             
+             try:
+                 node.duration_hours = float(self.prop_duration_hours.text())
+             except:
+                 node.duration_hours = 1.0
              
              try:
                  node.error_delay = int(self.prop_error_delay.text())

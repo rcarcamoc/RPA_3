@@ -52,6 +52,7 @@ class WorkflowExecutor:
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
         self.active_process = None
+        self.nested_executor = None
         
         self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
         self.logger.log(f"   Variables iniciales: {self.context}")
@@ -133,15 +134,32 @@ class WorkflowExecutor:
         """Detiene la ejecución del workflow"""
         self.should_stop = True
         self.logger.log("⏹️ Deteniendo workflow...")
+        
+        # 1. Detener executor anidado si existe
+        if self.nested_executor:
+            self.logger.log("   Propagando stop a workflow anidado...")
+            self.nested_executor.stop()
+            
+        # 2. Detener proceso activo si existe
         if self.active_process:
             try:
-                self.logger.log(f"   Matando proceso activo (PID: {self.active_process.pid})...")
+                pid = self.active_process.pid
+                self.logger.log(f"   Intentando terminar proceso activo (PID: {pid})...")
+                
+                # Intentar terminación amable
                 self.active_process.terminate()
-                self.active_process.wait(timeout=3)
-                if self.active_process.poll() is None:
+                try:
+                    self.active_process.wait(timeout=3)
+                    self.logger.log(f"   ✅ Proceso {pid} terminado correctamente.")
+                except subprocess.TimeoutExpired:
+                    self.logger.log(f"   ⚠️ Timeout en terminate(), forzando kill (PID: {pid})...")
                     self.active_process.kill()
+                    self.active_process.wait(timeout=2)
+                    self.logger.log(f"   💀 Proceso {pid} forzado a cerrar.")
             except Exception as e:
                 self.logger.log(f"⚠️ Error al detener proceso: {e}")
+            finally:
+                self.active_process = None
     
     def _execute_node(self, node: Node) -> Optional[str]:
         """
@@ -460,22 +478,37 @@ class WorkflowExecutor:
             return node.false_path or self.workflow.get_next_node(node.id)
     
     def _execute_loop(self, node: LoopNode) -> Optional[str]:
-        """Ejecuta un nodo de loop (Count, List o While)"""
-        
+        """Ejecuta un nodo de loop con AISLAMIENTO TOTAL.
+
+        Modos disponibles:
+          - count    : N iteraciones fijas
+          - list     : Iterar sobre una lista/variable del contexto
+          - while    : Mientras condición sea verdadera
+          - timed    : Ejecutar durante N horas y luego detenerse
+          - infinite : Ejecutar indefinidamente hasta Stop manual
+
+        El loop NUNCA se detiene por errores internos, excepciones ni
+        señales should_stop generadas dentro de una iteración.
+        Solo se respeta el Stop externo del usuario.
+        """
+        import time
+
         loop_type = getattr(node, 'loop_type', 'count')
-        self.logger.log(f"🔁 Iniciando loop ({loop_type})")
-        
-        # 1. Definir el iterador según el tipo
-        iterator = []
-        is_while = False
-        
+        self.logger.log(f"🔁 Iniciando loop ({loop_type}) — Aislamiento total activado")
+
+        # ── 1. Configurar modo ──────────────────────────────────────────
+        iterator   = []
+        is_while   = False
+        is_timed   = False
+        is_infinite = False
+        deadline   = None
+
         if loop_type == 'count':
             iterations = self._get_loop_count(node.iterations)
             iterator = range(iterations)
-            self.logger.log(f"   Modo: {iterations} iteraciones")
-            
+            self.logger.log(f"   Modo: {iterations} iteraciones fijas")
+
         elif loop_type == 'list':
-            # Obtener lista desde variable
             var_name = node.iterable
             val = self.context.get(var_name, [])
             if isinstance(val, (list, tuple)):
@@ -487,92 +520,100 @@ class WorkflowExecutor:
             else:
                 self.logger.log(f"⚠️ Variable '{var_name}' no es iterable: {type(val)}")
                 iterator = []
-                
+
         elif loop_type == 'while':
             is_while = True
-            self.logger.log(f"   Modo: While condición '{node.condition}'")
-        
-        # 2. Ejecutar Loop
+            self.logger.log(f"   Modo: While — condición '{node.condition}'")
+
+        elif loop_type == 'timed':
+            is_timed = True
+            hours = float(getattr(node, 'duration_hours', 1.0))
+            deadline = time.time() + (hours * 3600)
+            h_str = f"{hours:g} hora{'s' if hours != 1 else ''}"
+            self.logger.log(f"   Modo: Programado — durará {h_str}")
+
+        elif loop_type == 'infinite':
+            is_infinite = True
+            self.logger.log("   Modo: Infinito — solo se detiene con Stop manual")
+
+        # ── 2. Ejecutar Loop ────────────────────────────────────────────
         idx = 0
-        MAX_ITER = 1000 # Safety break for while
-        
+        MAX_ITER = 100_000  # Safety break para while (~83 días a 1 iter/min)
+
         while True:
-            if self.should_stop: break
-            
-            # Control de flujo del iterador
+            # Solo se respeta el stop EXTERNO (botón Stop del usuario).
+            # Se verifica ANTES de la iteración, nunca durante.
+            if self.should_stop:
+                self.logger.log("⏹️ Loop detenido por señal externa del usuario.")
+                break
+
+            # ── Control de flujo según modo ──
             current_item = None
-            
-            if is_while:
+
+            if is_timed:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    hours = float(getattr(node, 'duration_hours', 1.0))
+                    self.logger.log(f"⏰ Tiempo completado ({hours:g}h). Loop finalizado.")
+                    break
+                mins_left = int(remaining / 60)
+                secs_left = int(remaining % 60)
+                self.logger.log(f"   ⏱️ Tiempo restante: {mins_left}m {secs_left}s")
+                current_item = idx
+
+            elif is_infinite:
+                current_item = idx
+
+            elif is_while:
                 if idx >= MAX_ITER:
-                    self.logger.log("⚠️ Límite de seguridad alcanzado en While (1000)")
+                    self.logger.log(f"⚠️ Límite de seguridad alcanzado ({MAX_ITER:,} iteraciones)")
                     break
-                if not self._eval_condition(node.condition):
+                try:
+                    condition_result = self._eval_condition(node.condition)
+                except Exception as cond_err:
+                    self.logger.log(f"⚠️ Error evaluando condición: {cond_err} — asumiendo True")
+                    condition_result = True
+                if not condition_result:
                     break
-                current_item = idx # En while, el item suele ser irrelevante o un contador
+                current_item = idx
+
             else:
-                # For loops (count/list)
+                # count / list
                 if idx >= len(iterator):
                     break
                 current_item = iterator[idx]
 
-            
             self.logger.log(f"   🔄 Iteración {idx + 1}")
-            
-            # Actualizar variables de loop en contexto
-            # loop_var es el nombre de la variable para el item
-            # _loop_index es inmutable estándar
+
+            # Actualizar variables de contexto del loop
             self.context["_loop_index"] = idx
             self.context[node.loop_var] = current_item
-            
-            # Ejecutar contenido del loop
-            # 1. Workflow
-            if hasattr(node, 'workflow_path') and node.workflow_path:
-                try:
-                     # Usamos una instancia temporal de WorkflowNode para reutilizar logica
-                     # o llamamos directamente a la logica de ejecucion.
-                     # Dado que _execute_workflow toma un nodo, creamos uno al vuelo o adaptamos.
-                     
-                     # Opción mejor: Extraer logica de execute workflow a un metodo auxiliar que tome el path
-                     # Pero por simplicidad y reutilización de 'context', llamamos a lógica interna.
-                     
-                     # Hack: Crear un dummy node para pasarle a _execute_workflow
-                     # Pero _execute_workflow devuelve "next node id", lo cual no queremos aqui.
-                     # Solo queremos que ejecute y ya.
-                     
-                     self._run_workflow_internal(node.workflow_path)
-                     
-                except Exception as e:
-                     self.logger.log(f"   ❌ Error en workflow del loop: {e}")
-                     
-                     # Delay por error si está configurado
-                     delay = getattr(node, 'error_delay', 0)
-                     if delay > 0:
-                         self.logger.log(f"   ⏳ Esperando {delay}s por error...")
-                         import time
-                         time.sleep(delay)
-                         
-                     pass 
-            
-            # 2. Script (si existe y no es workflow, o ambos)
-            elif node.script:
-                try:
+
+            # ── AISLAMIENTO: snapshot antes de ejecutar ──
+            snapshot_should_stop = self.should_stop
+
+            try:
+                if hasattr(node, 'workflow_path') and node.workflow_path:
+                    self._run_workflow_internal(node.workflow_path)
+                elif node.script:
                     self._run_script_internal(node)
-                except Exception as e:
-                     self.logger.log(f"   ❌ Error en script de loop: {e}")
-                     
-                     if getattr(node, 'on_error', 'stop') == 'stop':
-                         raise e
-                     
-                     # Si on_error es 'continue', aplicar delay tambien
-                     delay = getattr(node, 'error_delay', 0)
-                     if delay > 0:
-                         self.logger.log(f"   ⏳ Esperando {delay}s por error...")
-                         import time
-                         time.sleep(delay)
-            
+
+            except Exception as e:
+                self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
+                delay = getattr(node, 'error_delay', 0)
+                if delay > 0:
+                    self.logger.log(f"   ⏳ Esperando {delay}s antes de reintentar...")
+                    time.sleep(delay)
+
+            finally:
+                # Si algo interno puso should_stop=True, lo revertimos
+                if self.should_stop and not snapshot_should_stop:
+                    self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
+                    self.should_stop = False
+
             idx += 1
-        
-        self.logger.log(f"✅ Loop completado ({idx} iteraciones)")
+
+        self.logger.log(f"✅ Loop finalizado ({idx} iteraciones ejecutadas)")
         return self.workflow.get_next_node(node.id)
 
     def _run_workflow_internal(self, wf_path: str):
@@ -597,20 +638,24 @@ class WorkflowExecutor:
         nested_wf.variables.update(self.context)
         
         # Executor
-        nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
+        self.nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
         
         # Patch logs
-        original_log = nested_executor.logger.log
+        original_log = self.nested_executor.logger.log
         def bridged_log(msg, level="INFO"):
             prefix = f"   [LOOP-WF:{nested_wf.name}]"
             self.logger.log(f"{prefix} {msg}", level)
-        nested_executor.logger.log = bridged_log
+        self.nested_executor.logger.log = bridged_log
         
         self.logger.log(f"   ▶️ Loop Running Workflow: {nested_wf.name}")
-        result = nested_executor.execute()
+        result = self.nested_executor.execute()
+        self.nested_executor = None
         
         if result["status"] == "error":
-             raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
+             if self.should_stop:
+                 self.logger.log("   Workflow anidado detenido por usuario.")
+             else:
+                 raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
         else:
              self.context.update(result["context"])
 
@@ -625,24 +670,53 @@ class WorkflowExecutor:
         # Para listas/dicts complejos, el script debería leer un JSON temporal o similar si fuera robusto.
         # Por ahora mantenemos compatibilidad simple.
         
-        result = subprocess.run(
+        current_cwd = Path.cwd()
+        if current_cwd.name == "rpa_framework":
+            exec_cwd = current_cwd.parent
+        else:
+            exec_cwd = current_cwd
+
+        process = subprocess.Popen(
             [sys.executable, node.script],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding='utf-8',
-            timeout=120,
-            env=env
+            env=env,
+            cwd=str(exec_cwd),
+            bufsize=1,
+            universal_newlines=True
         )
+        self.active_process = process
         
-        if result.returncode != 0:
-            raise RuntimeError(f"Script falló: {result.stderr}")
+        full_stdout = []
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                if process.poll() is not None:
+                    break
+                continue
+            clean_line = line.strip()
+            if clean_line:
+                self.logger.log(f"   [LOOP-PY] {clean_line}")
+                full_stdout.append(clean_line)
+                
+        returncode = process.poll()
+        
+        if returncode != 0:
+            if self.should_stop:
+                self.logger.log("   Script detenido por usuario.")
+                return
+            raise RuntimeError(f"Script falló con código {returncode}. Últimos logs: {full_stdout[-3:] if full_stdout else 'N/A'}")
         else:
              # Si el script imprime JSON, actualizamos contexto
-             try:
-                output_data = json.loads(result.stdout)
-                if isinstance(output_data, dict):
-                    self.context.update(output_data)
-             except: pass
+             for line in reversed(full_stdout):
+                 try:
+                    output_data = json.loads(line)
+                    if isinstance(output_data, dict):
+                        self.context.update(output_data)
+                        break
+                 except: pass
     
     def _eval_condition(self, condition: str) -> bool:
         """
