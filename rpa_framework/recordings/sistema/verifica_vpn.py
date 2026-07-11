@@ -9,8 +9,14 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 try:
     from utils.telegram_manager import enviar_alerta_todos
+    from utils.error_handler import handle_error_and_exit
 except ImportError:
-    def enviar_alerta_todos(msg): pass
+    try:
+        from rpa_framework.utils.telegram_manager import enviar_alerta_todos
+        from rpa_framework.utils.error_handler import handle_error_and_exit
+    except ImportError:
+        def enviar_alerta_todos(msg): pass
+        def handle_error_and_exit(s, e): sys.exit(1)
 
 # Nombre de este nodo para el registro
 NODO_ACTUAL = "Verifica VPN"
@@ -62,7 +68,7 @@ def ejecutar_clics_vpn():
         # Acción 3: TYPE_TEXT Contraseña
         action = Action(
             type=ActionType.TYPE_TEXT,
-            text='Mim21556167#',
+            text='Mim65449167#',
             wait_before=1.0,
             timestamp=datetime.now()
         )
@@ -216,9 +222,8 @@ def mostrar_popup_vpn():
         msg = "El usuario canceló la espera de VPN."
         print(msg)
         # Gestionar error de negocio deteniendo el workflow
-        db_update('Error', observacion=msg)
         root.destroy()
-        sys.exit(1)
+        handle_error_and_exit("verifica_vpn.py", msg)
 
     btn_cancel = tk.Button(frame, text="❌ CANCELAR PROCESO", command=cancelar,
                           font=btn_font, bg="#c0392b", fg="white", activebackground="#a93226",
@@ -239,37 +244,16 @@ def main():
             abrir_globalprotect()
             # Intentamos automatizar la conexión con los clics de ksy.py
             ejecutar_clics_vpn()
-            # Si después de los clics sigue desconectada, notificamos y salimos
+            # Si después de los clics sigue desconectada, mostramos el popup para ayuda manual
             if not vpn_conectada_palo_alto():
-                error_msg = "VPN desconectada: no se pudo conectar automáticamente a GlobalProtect."
-                print(f"ERROR: {error_msg}")
-                try:
-                    try:
-                        from utils.error_handler import handle_error_and_exit
-                    except ImportError:
-                        from rpa_framework.utils.error_handler import handle_error_and_exit
-                    handle_error_and_exit("verifica_vpn.py", error_msg)
-                except ImportError:
-                    try:
-                        enviar_alerta_todos(f"🚨 <b>VPN DESCONECTADA</b>🚨\n{error_msg}")
-                    except: pass
-                    db_update('Error', observacion=error_msg)
-                    sys.exit(1)
+                mostrar_popup_vpn()
         
         print("VPN OK. Procediendo...")
         
     except Exception as e:
+        # Flujo de Cierre para errores:
         desc_falla = str(e)
-        try:
-            try:
-                from utils.error_handler import handle_error_and_exit
-            except ImportError:
-                from rpa_framework.utils.error_handler import handle_error_and_exit
-            handle_error_and_exit("verifica_vpn.py", desc_falla)
-        except ImportError:
-            db_update('Error', observacion=desc_falla)
-            print(f"ERROR: {desc_falla}")
-            sys.exit(1)
+        handle_error_and_exit("verifica_vpn.py", desc_falla)
 
 if __name__ == "__main__":
     main()

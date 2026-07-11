@@ -15,6 +15,28 @@ def execute_ocr_click_0():
     # Delay inicial de 2 segundos solicitado
     time.sleep(2)
     
+    # Enfocar la aplicación RIS al inicio
+    try:
+        from pywinauto import Desktop
+        import pywinauto.findwindows as fw
+        import re
+        
+        focused = False
+        titles = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream RIS V11"]
+        for title in titles:
+            windows = fw.find_windows(title_re=re.compile(f".*{re.escape(title)}.*", re.I))
+            if windows:
+                hwnd = windows[0]
+                win = Desktop(backend="win32").window(handle=hwnd)
+                win.set_focus()
+                focused = True
+                print(f"RIS enfocado al inicio (ventana: '{title}')")
+                break
+        if not focused:
+            print("No se encontró ventana de RIS para enfocar")
+    except Exception as e:
+        print(f"Error al intentar enfocar RIS: {e}")
+    
     # Add framework root to path to allow importing 'ocr'
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
@@ -64,7 +86,7 @@ def execute_ocr_click_0():
         from fuzzywuzzy import fuzz
         
         # Buscar texto para clic robusto con reintentos evaluando ORACIONES
-        delays = [3, 3, 3, 3, 3]
+        delays = [3, 3, 3, 3, 3, 3, 3, 3, 3]
         search_terms = ['Búsqueda de Pacientes', 'Patient Search']
         matches = None
         region = {'left': 0, 'top': 0, 'width': 182, 'height': 1010}
@@ -120,13 +142,13 @@ def execute_ocr_click_0():
                             best_res['text'] = texto_combinado
                             best_res['match_term'] = term
                             
-            if highest_score >= 75: # Umbral del 75% sobre la oración completa
+            if highest_score >= 65: # Umbral del 75% sobre la oración completa
                 matches = [best_res]
-                print(f"  ✅ Encontrado: '{best_res['text']}' (Similitud Oración: {highest_score}% con '{best_res['match_term']}')")
+                print(f"  [OK] Encontrado: '{best_res['text']}' (Similitud Oracion: {highest_score}% con '{best_res['match_term']}')")
                 break
             else:
                 if best_res:
-                    print(f"  ⏳ Mejor intento OCR: '{best_res['text']}' (Similitud: {highest_score}% - Se requiere >= 75%)")
+                    print(f"  [INFO] Mejor intento OCR: '{best_res['text']}' (Similitud: {highest_score}% - Se requiere >= 75%)")
         
         # Si falla tras los reintentos automáticos, hacemos un intento final sin intervención
         if not matches:
@@ -230,6 +252,6 @@ ocr_click_0 = execute_ocr_click_0
 
 
 if __name__ == '__main__':
-    print('🚀 Executing execute_ocr_click_0...')
+    print('Executing execute_ocr_click_0...')
     res = execute_ocr_click_0()
     print(f'Result: {res}')

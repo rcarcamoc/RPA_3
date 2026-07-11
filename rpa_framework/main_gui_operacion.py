@@ -42,9 +42,9 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget, QPushButton, QMessageBox
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget, QPushButton, QMessageBox, QSpinBox, QComboBox, QDoubleSpinBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 # Imports RPA Framework
@@ -79,7 +79,14 @@ class OperacionesPanel(QWidget):
         super().__init__(parent)
         self.config = config or {}
         self.worker = None
+        self.is_bg_running = False
+        
         self.init_ui()
+        
+        # Timer para sincronizar estado con el servicio de Telegram en background
+        self.state_timer = QTimer(self)
+        self.state_timer.timeout.connect(self.check_background_state)
+        self.state_timer.start(2000) # Chequeo cada 2 segundos
         
     def init_ui(self):
         layout = QVBoxLayout()
@@ -95,22 +102,24 @@ class OperacionesPanel(QWidget):
         layout.addSpacing(10)
         
         # Boton 1: Inicio completo
-        btn_inicio = QPushButton("▶ Inicio completo")
-        btn_inicio.setMinimumHeight(60)
-        btn_inicio.setStyleSheet("font-size: 15px; font-weight: bold; background-color: #4CAF50; color: white; border-radius: 8px;")
-        btn_inicio.clicked.connect(self.ejecutar_inicio_completo)
-        btn_inicio.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(btn_inicio)
+        self.btn_inicio = QPushButton("▶ Inicio completo")
+        self.btn_inicio.setMinimumHeight(60)
+        self.btn_inicio.setStyleSheet("font-size: 15px; font-weight: bold; background-color: #4CAF50; color: white; border-radius: 8px;")
+        self.btn_inicio.clicked.connect(self.ejecutar_inicio_completo)
+        self.btn_inicio.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.btn_inicio)
         
         layout.addSpacing(15)
         
         # Boton 2: Solo Pega en Integra
-        btn_pega = QPushButton("▶ Solo Pega en Integra")
-        btn_pega.setMinimumHeight(60)
-        btn_pega.setStyleSheet("font-size: 15px; font-weight: bold; background-color: #2196F3; color: white; border-radius: 8px;")
-        btn_pega.clicked.connect(self.ejecutar_pega_integra)
-        btn_pega.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(btn_pega)
+        self.btn_pega = QPushButton("▶ Solo Pega en Integra")
+        self.btn_pega.setMinimumHeight(60)
+        self.btn_pega.setStyleSheet("font-size: 15px; font-weight: bold; background-color: #2196F3; color: white; border-radius: 8px;")
+        self.btn_pega.clicked.connect(self.ejecutar_pega_integra)
+        self.btn_pega.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.btn_pega)
+        
+        layout.addSpacing(15)
         
         layout.addSpacing(15)
         
@@ -144,8 +153,78 @@ class OperacionesPanel(QWidget):
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self.btn_stop)
         
+        layout.addSpacing(30)
+        
+        # --- SECCIÓN DE CONFIGURACIÓN DE LOOP (AL FINAL) ---
+        lbl_loop_title = QLabel("⚙️ Configuración de Loop Continuo")
+        lbl_loop_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        lbl_loop_title.setStyleSheet("color: #6A1B9A; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 10px;")
+        layout.addWidget(lbl_loop_title)
+        
+        # Tipo de Loop
+        layout_type = QHBoxLayout()
+        layout_type.addWidget(QLabel("Modo:"))
+        self.combo_loop_type = QComboBox()
+        self.combo_loop_type.addItems(["Por Cantidad", "Por Tiempo (Horas)", "Infinito"])
+        self.combo_loop_type.currentIndexChanged.connect(self.actualizar_visibilidad_loop)
+        self.combo_loop_type.setMinimumHeight(35)
+        layout_type.addWidget(self.combo_loop_type)
+        layout.addLayout(layout_type)
+        
+        # Contenedores para opciones variables
+        # Cantidad (Count)
+        self.container_count = QWidget()
+        layout_count = QHBoxLayout(self.container_count)
+        layout_count.setContentsMargins(0,5,0,5)
+        layout_count.addWidget(QLabel("Reiteraciones:"))
+        self.spin_iterations = QSpinBox()
+        self.spin_iterations.setRange(1, 9999)
+        self.spin_iterations.setValue(5)
+        self.spin_iterations.setMinimumHeight(35)
+        layout_count.addWidget(self.spin_iterations)
+        layout.addWidget(self.container_count)
+        
+        # Tiempo (Timed)
+        self.container_timed = QWidget()
+        layout_timed = QHBoxLayout(self.container_timed)
+        layout_timed.setContentsMargins(0,5,0,5)
+        layout_timed.addWidget(QLabel("Duración:"))
+        self.spin_duration = QDoubleSpinBox()
+        self.spin_duration.setRange(0.1, 72.0)
+        self.spin_duration.setValue(1.0)
+        self.spin_duration.setSuffix(" hrs")
+        self.spin_duration.setMinimumHeight(35)
+        layout_timed.addWidget(self.spin_duration)
+        layout.addWidget(self.container_timed)
+        self.container_timed.hide()
+        
+        # Error Delay
+        layout_delay = QHBoxLayout()
+        layout_delay.addWidget(QLabel("Espera en error:"))
+        self.spin_error_delay = QSpinBox()
+        self.spin_error_delay.setRange(0, 3600)
+        self.spin_error_delay.setValue(0)
+        self.spin_error_delay.setSuffix(" seg")
+        self.spin_error_delay.setMinimumHeight(35)
+        layout_delay.addWidget(self.spin_error_delay)
+        layout.addLayout(layout_delay)
+        
+        # Botón de Inicio de Loop
+        self.btn_loop = QPushButton("🚀 Iniciar Flujo Continuo (Loop)")
+        self.btn_loop.setMinimumHeight(65)
+        self.btn_loop.setStyleSheet("font-size: 15px; font-weight: bold; background-color: #9C27B0; color: white; border-radius: 8px; margin-top: 10px;")
+        self.btn_loop.clicked.connect(self.ejecutar_loop_reiteraciones)
+        self.btn_loop.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.btn_loop)
+
         layout.addStretch()
         self.setLayout(layout)
+
+    def actualizar_visibilidad_loop(self):
+        """Muestra u oculta campos según el modo de loop seleccionado."""
+        modo = self.combo_loop_type.currentText()
+        self.container_count.setVisible(modo == "Por Cantidad")
+        self.container_timed.setVisible(modo == "Por Tiempo (Horas)")
         
     def ejecutar_inicio_completo(self):
         wf_path = os.path.join("workflows", "Sub_work.json")
@@ -154,6 +233,112 @@ class OperacionesPanel(QWidget):
     def ejecutar_pega_integra(self):
         wf_path = os.path.join("workflows", "pacs.json")
         self.run_workflow(wf_path)
+
+    def check_background_state(self):
+        """Chequea si el servicio de Telegram está ejecutando un flujo mediante el archivo state.json."""
+        import json
+        state_file = os.path.join("config", "execution_state.json")
+        bg_running = False
+        wf_name = ""
+        
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+                    bg_running = state.get("is_running", False)
+                    wf_name = state.get("workflow", "")
+            except:
+                pass
+                
+        # Solo actualizamos la UI si el estado cambió
+        if bg_running != self.is_bg_running:
+            self.is_bg_running = bg_running
+            self._update_buttons_state()
+            
+            if bg_running:
+                self.btn_stop.setText(f"🛑 Detener (Servicio: {wf_name})")
+            else:
+                self.btn_stop.setText("🛑 Detener Ejecución")
+
+    def _update_buttons_state(self):
+        # Deshabilitar botones de inicio si hay algo corriendo (UI o BG)
+        is_busy = self.is_bg_running or (self.worker and self.worker.isRunning())
+        self.btn_inicio.setEnabled(not is_busy)
+        self.btn_pega.setEnabled(not is_busy)
+        self.btn_loop.setEnabled(not is_busy)
+        
+        # Habilitar stop si hay algo corriendo
+        self.btn_stop.setEnabled(is_busy)
+
+    def ejecutar_loop_reiteraciones(self, tg_params=None):
+        """Ejecuta el workflow loop.json con las opciones avanzadas configuradas en el panel."""
+        wf_path = os.path.join("workflows", "loop.json")
+        
+        if tg_params:
+            tipo_loop = tg_params["tipo"]
+            if tipo_loop == "count":
+                reiteraciones = tg_params["valor"]
+                duracion = 1.0
+            elif tipo_loop == "timed":
+                reiteraciones = "5"
+                duracion = float(tg_params["valor"])
+            else:
+                reiteraciones = "5"
+                duracion = 1.0
+            delay_error = 0
+            print(f"🔄 Modo loop desde Telegram: {tipo_loop}")
+        else:
+            # Mapeo de valores de la UI a tipos de loop internos
+            modo_ui = self.combo_loop_type.currentText()
+            map_tipo = {
+                "Por Cantidad": "count",
+                "Por Tiempo (Horas)": "timed",
+                "Infinito": "infinite"
+            }
+            
+            tipo_loop = map_tipo.get(modo_ui, "count")
+            reiteraciones = str(self.spin_iterations.value())
+            duracion = self.spin_duration.value()
+            delay_error = self.spin_error_delay.value()
+        
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Atención", "Ya hay un workflow en ejecución. Por favor espere a que termine.")
+            return
+            
+        if not os.path.exists(wf_path):
+            QMessageBox.critical(self, "Error", f"No se encontró el workflow:\n{wf_path}")
+            return
+            
+        try:
+            from core.models import LoopNode
+            workflow = Workflow.from_json(wf_path)
+            
+            # Buscar el nodo de loop y actualizar todas sus propiedades
+            found = False
+            for node in workflow.nodes:
+                if isinstance(node, LoopNode):
+                    node.loop_type = tipo_loop
+                    node.iterations = reiteraciones
+                    node.duration_hours = duracion
+                    node.error_delay = delay_error
+                    print(f"🔄 UI: Configurando Loop '{node.label}' -> Tipo: {tipo_loop}, Iteraciones: {reiteraciones}, Duración: {duracion}h, Delay Error: {delay_error}s")
+                    found = True
+            
+            if not found:
+                print("⚠️ No se encontró ningún nodo de tipo Loop en loop.json")
+
+            self.worker = WorkflowExecutorWorker(workflow)
+            self.worker.log_update.connect(lambda msg: print(f"[WORKFLOW]: {msg}"))
+            self.worker.finished.connect(self.on_workflow_finished)
+            self.worker.error.connect(self.on_workflow_finished)
+            self.worker.start()
+            
+            self.btn_stop.setEnabled(True)
+            QMessageBox.information(self, "Ejecutando", f"Se inició el flujo continuo en modo '{modo_ui}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error iniciando loop: {e}")
+            import traceback
+            traceback.print_exc()
 
     def run_workflow(self, wf_path):
         if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
@@ -191,11 +376,22 @@ class OperacionesPanel(QWidget):
         self.btn_stop.setEnabled(False) # Desactivar boton detener
 
     def detiene_todo(self):
-        """Detiene la ejecución actual del worker"""
-        if self.worker:
+        """Detiene la ejecución actual del worker local o del servicio en background."""
+        if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.append_log("🛑 Solicitando detención...", "WARNING")
+            self.append_log("🛑 Solicitando detención de UI local...", "WARNING")
             self.btn_stop.setEnabled(False)
+            
+        if self.is_bg_running:
+            # Crear archivo de señal para el background service
+            try:
+                os.makedirs("config", exist_ok=True)
+                with open(os.path.join("config", "stop_signal.txt"), "w") as f:
+                    f.write("stop")
+                self.append_log("🛑 Señal de parada enviada al servicio en background.", "WARNING")
+                self.btn_stop.setEnabled(False)
+            except Exception as e:
+                print(f"Error escribiendo stop_signal.txt: {e}")
 
     def append_log(self, message, level="INFO"):
         print(f"[{level}] {message}")
@@ -279,7 +475,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(DashboardPanel(), "📊 Dashboard")
         
         # 2. Operaciones (NUEVA PESTAÑA EN SEGUNDA POSICIÓN)
-        tabs.addTab(OperacionesPanel(self.config, self), "⚡ Operaciones")
+        self.panel_operaciones = OperacionesPanel(self.config, self)
+        tabs.addTab(self.panel_operaciones, "⚡ Operaciones")
         
         # 3. Workflows
         tabs.addTab(WorkflowPanelV2(self.config), "✨ Workflows")
@@ -309,13 +506,51 @@ def main():
         print(f"🚀 Iniciando validación de servicio MySQL...")
         subprocess.run([sys.executable, db_check])
     
-    # Limpieza inicial de logs al arrancar
     try:
         cleanup_old_logs()
     except: pass
     
+    # 🔄 Sincronizar tabla ris.medicos con SharePoint en segundo plano
+    try:
+        _sync_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "quick_scripts", "sync_medicos_sharepoint.py"
+        )
+        if os.path.exists(_sync_script):
+            import threading
+            def _run_sync_op():
+                try:
+                    proc = subprocess.Popen(
+                        [sys.executable, _sync_script],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    proc.wait()
+                except Exception as _e:
+                    print(f"[sync_medicos] Error: {_e}")
+            threading.Thread(target=_run_sync_op, daemon=True, name="SyncMedicos").start()
+            print("Sincronizacion de medicos SharePoint iniciada en segundo plano.")
+    except Exception as e:
+        print(f"[sync_medicos] No se pudo iniciar: {e}")
+    
+    # 🤖 Iniciar Notificador de Resúmenes en segundo plano
+    try:
+        import threading
+        from utils.telegram_manager import registrar_usuarios
+        from utils.notificador_resumen import main as start_notificador
+        
+        notifier_thread = threading.Thread(target=start_notificador, daemon=True)
+        notifier_thread.start()
+        
+    except Exception as e:
+        print(f"⚠️ No se pudo iniciar el servicio de Notificador: {e}")
+    
+    # El Listener de Telegram se ejecutará ahora de forma independiente.
+    # Si quieres correrlo, inicia "python servicio_bot_telegram.py"
+    
     app = QApplication(sys.argv)
     window = MainWindow()
+    
     window.show()
     sys.exit(app.exec())
 

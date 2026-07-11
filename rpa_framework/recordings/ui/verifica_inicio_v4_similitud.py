@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
 SIMILARITY_THRESHOLD = 0.90  # 90% de similitud (Ajustar según necesidad)
+WAIT_TIMEOUT = 180            # Tiempo máximo de espera en segundos
 # ============================================================================
 
 class VerificaInicioSimilitud:
@@ -50,7 +51,7 @@ class VerificaInicioSimilitud:
     def __init__(self):
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.reference_image_path = str(ROOT_DIR / "utils" / "inicio pacs.png")
-        self.wait_timeout = 90
+        self.wait_timeout = WAIT_TIMEOUT
         # Región típica del menú lateral (ajustar si es necesario)
         self.region = (0, 24, 194, 1006) 
         self.similarity_threshold = SIMILARITY_THRESHOLD

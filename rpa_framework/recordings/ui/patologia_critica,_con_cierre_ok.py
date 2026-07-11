@@ -23,14 +23,7 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 
-# --- CONFIGURACIÓN INTEGRADA PARA OCR Y LLM ---
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-LLM_MODELS = [
-    "google/gemma-3-27b-it:free",
-
-]
-LLM_DEFAULT_TEMPERATURE = 0.2
-LLM_DEFAULT_MAX_TOKENS = 150
+# Configuración de LLM será importada de utils.llm_config
 
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -42,6 +35,8 @@ except ImportError:
 
 # Agregar raíz del proyecto al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS
 
 from pywinauto import Application, findwindows
 from core.executor import ActionExecutor
@@ -213,7 +208,7 @@ RESPONDE SOLO EN FORMATO JSON:
 {{
   "es_match": true o false,
   "razonamiento": "Explicación breve",
-  "confianza": 0.95
+  "confianza": 0.93
 }}
 """
         for current_model in models:
@@ -222,7 +217,7 @@ RESPONDE SOLO EN FORMATO JSON:
                 response = requests.post(
                     f"{OPENROUTER_BASE_URL}/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": current_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 150},
+                    json={"model": current_model, "messages": [{"role": "user", "content": prompt}], "temperature": LLM_DEFAULT_TEMPERATURE, "max_tokens": LLM_DEFAULT_MAX_TOKENS},
                     timeout=15 # Aumentamos timeout por latencia de modelos gratuitos
                 )
                 if response.status_code == 429: continue
@@ -364,7 +359,7 @@ RESPONDE SOLO EN FORMATO JSON:
         try:
             element = self.executor.selector_helper.find_element(
                 {'automation_id': 'tabControl1'},
-                timeout=2.0
+                timeout=1.5
             )                 
             # Asegurar foco antes de cualquier técnica
             try:
@@ -470,7 +465,7 @@ RESPONDE SOLO EN FORMATO JSON:
                         logger.warning(f"Intento {attempt}: La ventana no parece estar lista")
                 except Exception as connect_e:
                     logger.warning(f"Intento {attempt} fallido: {connect_e}")
-                    time.sleep(1)
+                    time.sleep(0.5)
             
             if not connected:
                 # Fallback final a Desktop
@@ -866,10 +861,21 @@ RESPONDE SOLO EN FORMATO JSON:
 
                     base_score = max(score_partial, score_token)
                     res['score'] = base_score
-                    
-                    # === ESTRÉS LOCAL ELEVADO (>95%) ===
-                    # Para diagnósticos críticos exigimos que sea casi idéntico
-                    if base_score > 95:
+
+                    # === PREFIJO TRUNCADO: OCR leyó el objetivo sin el primer carácter ===
+                    # (Ej: "HEOPLASIA" cuando se buscaba "NEOPLASIA" — la N fue cortada por el borde)
+                    if len(found_norm) >= 4 and target_norm.endswith(found_norm[1:]) and target_norm.startswith(target_norm[0]):
+                        if len(found_norm) >= len(target_norm) - 2:  # máximo 2 chars de diferencia
+                            logger.info(f"✅ MATCH POR PREFIJO TRUNCADO: '{ocr_text}' ≈ '{patologia_detectada}'")
+                            best_match = res
+                            best_base_score = 97
+                            best_ratio_score = score_ratio
+                            break
+
+                    # === UMBRAL LOCAL (>88%) ===
+                    # Bajado de 95 a 88 para tolerar errores OCR de 1-2 caracteres
+                    # (HEOPLASIA=94.1% quedaría dentro del umbral anterior de 95 y se perdía)
+                    if base_score > 88:
                         candidatos_validos.append(res)
                         if base_score > best_base_score or (base_score == best_base_score and score_ratio > best_ratio_score):
                             best_base_score = base_score

@@ -223,17 +223,22 @@ class ActualizaEstadoAutomation:
         
         try:
             # Lista de posibles patrones en orden de preferencia
-            patterns = [".*Carestream RIS.*", ".*RIS.*Client.*", ".*RIS.*"]
+            patterns = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream RIS V11"]
             connected = False
             
+            all_wins = findwindows.find_elements()
             for pattern in patterns:
-                try:
-                    logger.info(f"Intentando conectar con patrón: {pattern}")
-                    self.app = Application(backend='uia').connect(title_re=pattern, timeout=2)
-                    connected = True
+                for win in all_wins:
+                    if pattern in win.name and "Google Chrome" not in win.name:
+                        try:
+                            logger.info(f"Intentando conectar con patrón '{pattern}' en ventana: {win.name}")
+                            self.app = Application(backend='uia').connect(handle=win.handle)
+                            connected = True
+                            break
+                        except:
+                            continue
+                if connected:
                     break
-                except:
-                    continue
             
             if not connected:
                 logger.warning("No se encontró ventana por título, conectando a Desktop")
@@ -270,18 +275,17 @@ class ActualizaEstadoAutomation:
         try:
             # Acciones 1-3: Asegurar que el RIS está en primer plano
             try:
+                patterns = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream RIS V11"]
                 all_windows = findwindows.find_elements()
                 target_element = None
-                for win in all_windows:
-                    if "Carestream" in win.name and "RIS" in win.name:
-                        target_element = win
-                        break
                 
-                if not target_element:
+                for pattern in patterns:
                     for win in all_windows:
-                        if "RIS" in win.name:
+                        if pattern in win.name and "Google Chrome" not in win.name:
                             target_element = win
                             break
+                    if target_element:
+                        break
                 
                 if target_element:
                     logger.info(f"Enfocando ventana encontrada: {target_element.name}")
@@ -374,7 +378,14 @@ class ActualizaEstadoAutomation:
             logger.error(f"❌ Error crítico: {e}")
             results["status"] = "FAILED"
             results["errors"].append({"reason": str(e)})
-            self.db_update_status('error')
+            try:
+                try:
+                    from utils.error_handler import handle_error_and_exit
+                except ImportError:
+                    from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("actualiza_estado.py", str(e))
+            except ImportError:
+                self.db_update_status('error')
         
         results["end_time"] = datetime.now().isoformat()
         logger.info(f"📊 RESUMEN: {results['completed']} OK, Status: {results['status']}")

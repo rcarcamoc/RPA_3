@@ -163,15 +163,24 @@ class DecisionNode(Node):
 
 @dataclass
 class LoopNode(Node):
-    """Nodo de bucle (LOOP)"""
+    """Nodo de bucle (LOOP)
+    
+    Tipos soportados:
+      - count    : N iteraciones fijas
+      - list     : Iterar sobre una lista/variable
+      - while    : Mientras condición sea verdadera
+      - timed    : Ejecutar durante N horas
+      - infinite : Ejecutar indefinidamente (hasta Stop manual)
+    """
     script: str = ""
-    loop_type: str = "count" # count, list, while
-    iterations: str = "1"  # Para count
-    iterable: str = ""     # Nombre variable para list
-    condition: str = ""    # Condición para while
-    loop_var: str = "item"  # Variable para el item actual o índice
-    workflow_path: str = "" # Opcional: Workflow a ejecutar en cada iteración
-    error_delay: int = 0    # Segundos a esperar si ocurre un error antes de continuar
+    loop_type: str = "count"  # count, list, while, timed, infinite
+    iterations: str = "1"    # Para count
+    iterable: str = ""        # Nombre variable para list
+    condition: str = ""       # Condición para while
+    loop_var: str = "item"    # Variable para el item actual o índice
+    workflow_path: str = ""   # Opcional: Workflow a ejecutar en cada iteración
+    error_delay: int = 0      # Segundos a esperar si ocurre un error antes de continuar
+    duration_hours: float = 1.0  # Horas de ejecución para modo 'timed'
     type: NodeType = field(default=NodeType.LOOP, init=False)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -184,7 +193,8 @@ class LoopNode(Node):
             "condition": self.condition,
             "loopVar": self.loop_var,
             "workflow_path": self.workflow_path,
-            "error_delay": self.error_delay
+            "error_delay": self.error_delay,
+            "duration_hours": self.duration_hours
         })
         return data
     
@@ -201,6 +211,7 @@ class LoopNode(Node):
         node.loop_var = data.get("loopVar", "item")
         node.workflow_path = data.get("workflow_path", "")
         node.error_delay = data.get("error_delay", 0)
+        node.duration_hours = data.get("duration_hours", 1.0)
         node.on_error = data.get("on_error", "stop")
         node.enabled = data.get("enabled", True)
         node.position = data.get("position", {"x": 0, "y": 0})

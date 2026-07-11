@@ -130,7 +130,7 @@ class ExtractorPDFDoctor:
                     title = self.driver.title
                     url = self.driver.current_url
                     
-                    logger.info(f"Ventana [{h[-4:]}]: Titulo='{title}' | URL='{url[:50]}...'")
+                    logger.info(f"Ventana [{h[-4:]}]: Titulo='{title}' | URL='{url}'")
 
                     # Identificar ventana Principal (RIS)
                     # Usamos .upper() para evitar problemas de case, aunque el usuario dijo "RIS"
@@ -142,7 +142,7 @@ class ExtractorPDFDoctor:
                     # Identificar candidato PDF (si no es la RIS)
                     if url and ("blob:" in url or ".pdf" in url.lower() or "print" in url.lower()):
                          pdf_handle = h
-                         logger.info("-> MARCADA COMO PDF (POR URL)")
+                         logger.info(f"-> MARCADA COMO PDF (POR URL): {url}")
 
                 except Exception as e:
                     logger.warning(f"Error inspeccionando ventana {h}: {e}")
@@ -173,6 +173,7 @@ class ExtractorPDFDoctor:
             # 2. Procesar (Cambiamos al target si no estamos ahí)
             self.driver.switch_to.window(target_handle)
             current_url = self.driver.current_url
+            logger.info(f"Procesando PDF desde URL: {current_url}")
             
             if not current_url or current_url == "about:blank":
                 logger.warning("URL vacía o about:blank en ventana objetivo.")
@@ -261,84 +262,48 @@ class ExtractorPDFDoctor:
 
     def extraer_datos(self):
         try:
-            pages_text = []
             with open(self.temp_pdf_path, 'rb') as f:
                 reader = pypdf.PdfReader(f)
-                for page in reader.pages:
-                    txt = page.extract_text()
-                    if txt:
-                        pages_text.append(txt)
-            
-            # Usamos un delimitador para identificar saltos de página
-            PAGE_MARKER = " [PAGE_BREAK_HERE] "
-            text_content = PAGE_MARKER.join(pages_text)
-            
-            # 1. Número de Documento
-            match_doc = re.search(r'Número de documento\s*[:\.]?\s*([\d\-]+)', text_content, re.IGNORECASE)
-            doc_number = match_doc.group(1) if match_doc else "NO ENCONTRADO"
-            
-            # 2. Cuerpo (Diagnóstico y Examen)
-            start_search = re.search(r'N[úu]mero de ficha.*?\n', text_content, re.IGNORECASE)
-            
-            diagnostico = "NO ENCONTRADO"
-            examen = "NO ENCONTRADO"
-            
-            if start_search:
-                start_index = start_search.end()
-                last_atentamente = list(re.finditer(r'Atentamente', text_content, re.IGNORECASE))
-                if last_atentamente:
-                    end_index = last_atentamente[-1].start()
-                else:
-                    end_index = len(text_content)
-                
-                raw_diagnostico = text_content[start_index:end_index]
-                
-                # Segmento de examen es hasta el primer salto de página
-                if PAGE_MARKER in raw_diagnostico:
-                    segmento_examen = raw_diagnostico.split(PAGE_MARKER)[0].strip()
-                else:
-                    segmento_examen = raw_diagnostico.strip()
-                
-                # Diagnóstico es todo el contenido
-                diagnostico = raw_diagnostico.replace(PAGE_MARKER, "\n").strip()
-                
-                # Limpieza solicitada por el usuario (ampliada para multipágina)
-                limpiar = [
-                    r"Integramédica",
-                    r"Fecha Examen:.*?\n",
-                    r"Tiempo Cero:.*?\n",
-                    r"Fecha informe:.*?\n",
-                    r"Powered by TCPDF \(www\.tcpdf\.org\)",
-                    r"Página \d+ / \d+",
-                    r"Página \d+ de \d+",
-                    r"Consecutivo \d+ \(.*?\)",
-                    r"Continuación de informe paciente.*?\n",
-                    r"Atentamente\.?\s*MD Radiologo\s*\d+\.\d+\.\d+-\d+",
-                    r"Omar Enriquez Gutierrez",
-                    r"MD Radiologo",
-                    r"11\.842\.031-4",
-                    r"Atentamente\.?"
-                ]
-                for p in limpiar:
-                    diagnostico = re.sub(p, "", diagnostico, flags=re.IGNORECASE | re.MULTILINE)
-                    segmento_examen = re.sub(p, "", segmento_examen, flags=re.IGNORECASE | re.MULTILINE)
-                
-                diagnostico = diagnostico.strip()
-                
-                # Eliminar múltiples saltos de línea consecutivos (más de 2)
-                diagnostico = re.sub(r'\n{3,}', '\n\n', diagnostico)
-                # Limpiar espacios al final de cada línea
-                diagnostico = "\n".join([line.rstrip() for line in diagnostico.splitlines()])
-                
-                # Para el campo 'examen', tomamos SOLO la primera fila (línea) no vacía
-                lineas_examen = [l.strip() for l in segmento_examen.splitlines() if l.strip()]
-                examen = lineas_examen[0] if lineas_examen else "NO ENCONTRADO"
+                pages_text = [page.extract_text() or "" for page in reader.pages]
 
-            # 3. Fecha Examen
-            match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', text_content, re.IGNORECASE)
+            if not pages_text:
+                logger.warning("El PDF no contiene texto extraíble.")
+                return None
+
+            # ── Utilidad: cortar el texto de una página antes de la firma ──────
+            def cortar_antes_firma(texto):
+                """Devuelve solo el texto anterior a 'Atentamente' (la firma).
+                Funciona con cualquier nombre de radiólogo — no necesita hardcodear."""
+                corte = re.search(r'Atentamente', texto, re.IGNORECASE)
+                return texto[:corte.start()].strip() if corte else texto.strip()
+
+            # ── Patrones de metadatos de encabezado (aplican a todas las páginas) ─
+            PATRONES_META = [
+                r"Integram[eé]dica\n?",
+                r"Fecha Examen:\s*[\d\-]+\s+[\d:]+\n?",
+                r"Tiempo Cero:\s*[\d\-]+\s+[\d:]+\n?",
+                r"Fecha informe:\s*[\d\-]+\s+[\d:]+\n?",
+                r"Powered by TCPDF \(www\.tcpdf\.org\)\n?",
+                r"P[aá]gina \d+ [/de]+ \d+\n?",
+                r"Consecutivo \d+\s*\(.*?\)\n?",
+            ]
+
+            def limpiar_meta(texto):
+                for p in PATRONES_META:
+                    texto = re.sub(p, "", texto, flags=re.IGNORECASE)
+                return texto.strip()
+
+            # ── Página 1: extraer metadatos del paciente + primera parte del cuerpo ─
+            pagina1 = pages_text[0]
+
+            # 1. Número de documento
+            match_doc = re.search(r'N[uú]mero de documento\s*[:\.]?\s*([\d\-]+)', pagina1, re.IGNORECASE)
+            doc_number = match_doc.group(1) if match_doc else "NO ENCONTRADO"
+
+            # 2. Fecha Examen (solo está en página 1)
+            match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', pagina1, re.IGNORECASE)
             fecha_examen_raw = match_fecha.group(1) if match_fecha else None
             fecha_agendada_sql = None
-            
             if fecha_examen_raw:
                 try:
                     dt = datetime.strptime(fecha_examen_raw, "%d-%m-%Y %H:%M:%S")
@@ -346,6 +311,45 @@ class ExtractorPDFDoctor:
                     logger.info(f"Fecha Examen capturada: {fecha_agendada_sql}")
                 except Exception as e:
                     logger.warning(f"Error al formatear fecha: {e}")
+
+            # 3. Cuerpo de página 1: desde "Número de ficha" en adelante
+            match_inicio = re.search(r'N[uú]mero de ficha[^\n]*\n', pagina1, re.IGNORECASE)
+            if not match_inicio:
+                logger.warning("No se encontró 'Número de ficha' en página 1.")
+                return None
+
+            # Limpiar el encabezado (Integramédica, fechas) que aparece justo después
+            # de "Número de ficha" y antes del contenido clínico real
+            cuerpo_raw_p1 = limpiar_meta(pagina1[match_inicio.end():])
+            cuerpo_p1 = cortar_antes_firma(cuerpo_raw_p1)
+
+            # Campo examen = primera línea no vacía del cuerpo de página 1
+            lineas_examen = [l.strip() for l in cuerpo_p1.splitlines() if l.strip()]
+            examen = lineas_examen[0] if lineas_examen else "NO ENCONTRADO"
+
+            # ── Páginas 2+: solo continuación del cuerpo, sin encabezado ni firma ─
+            continuaciones = []
+            for texto_pag in pages_text[1:]:
+                # Eliminar encabezado "Continuación de informe paciente NOMBRE"
+                texto_limpio = re.sub(
+                    r"Continuaci[oó]n de informe paciente[^\n]*\n?",
+                    "", texto_pag, flags=re.IGNORECASE
+                )
+                # Limpiar metadatos (Powered by TCPDF, Página X de Y, etc.)
+                texto_limpio = limpiar_meta(texto_limpio)
+                # Cortar antes de la firma de esta página
+                continuaciones.append(cortar_antes_firma(texto_limpio))
+
+            # ── Fusionar todas las partes del cuerpo ──────────────────────────────
+            partes = [cuerpo_p1] + continuaciones
+            diagnostico = "\n\n".join(p for p in partes if p)
+
+            # Normalizar saltos de línea y espacios
+            diagnostico = re.sub(r'\n{3,}', '\n\n', diagnostico)
+            diagnostico = "\n".join(line.rstrip() for line in diagnostico.splitlines())
+
+            # Insertar salto de página (\f) antes de "Hallazgos:" para el procesador Word
+            diagnostico = re.sub(r'(?i)(Hallazgos:)', r'\f\n\1', diagnostico)
 
             return {
                 "numero_documento": doc_number,
@@ -384,22 +388,21 @@ def main():
             bd.db_update_tracking(status='Completado')
             print("✓ Proceso PDF finalizado con éxito.")
         else:
-            print("✗ No se pudieron obtener datos del PDF.")
-            bd.db_update_tracking(status='error')
+            msg = "No se pudieron obtener datos del PDF."
             try:
-                enviar_alerta_todos("⚠️ <b>Script: procesar_pdf_doctor</b>\\nNo se pudieron obtener datos del PDF objetivo.")
-            except:
-                pass
-            sys.exit(1)
+                from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("procesar_pdf_doctor.py", msg)
+            except ImportError:
+                print(f"✗ {msg}")
+                sys.exit(1)
 
     except Exception as e:
-        logger.error(f"Error fatal: {e}")
-        bd.db_update_tracking(status='error')
         try:
-            enviar_alerta_todos(f"❌ <b>Error Crítico en el script: procesar_pdf_doctor</b>\\nExcepción:\\n<code>{str(e)}</code>")
-        except:
-            pass
-        sys.exit(1)
+            from rpa_framework.utils.error_handler import handle_error_and_exit
+            handle_error_and_exit("procesar_pdf_doctor.py", str(e))
+        except ImportError:
+            logger.error(f"Error fatal: {e}")
+            sys.exit(1)
     finally:
         # Aquí se podría liberar el driver si no se usa más, pero usualmente 
         # en estos scripts RIS se deja abierto el navegador.
