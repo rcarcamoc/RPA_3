@@ -51,6 +51,7 @@ class ReplayWorker(QThread):
                     stderr=subprocess.STDOUT,
                     text=True,
                     encoding='utf-8',
+                    errors='replace',
                     env=env,
                     bufsize=1,
                     universal_newlines=True

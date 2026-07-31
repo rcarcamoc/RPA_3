@@ -140,49 +140,90 @@ def generar_tabla_imagen(df_hora, df_dia, periodo_str, filename):
     if df_dia.empty:
         return False
         
-    # Preparar datos
-    estados_unicos = sorted(list(set(df_dia['estado'].unique()) | set(df_hora['estado'].unique())), key=lambda x: str(x))
-    conteo_hora = df_hora['estado'].value_counts()
-    conteo_dia = df_dia['estado'].value_counts()
+    is_daily = df_hora is None or df_hora.empty
     
+    estados_unicos = sorted(list(set(df_dia['estado'].unique()) | (set() if is_daily else set(df_hora['estado'].unique()))), key=lambda x: str(x))
+    conteo_dia = df_dia['estado'].value_counts()
+    total_dia = len(df_dia)
+    
+    if not is_daily:
+        conteo_hora = df_hora['estado'].value_counts()
+        total_hora = len(df_hora)
+        
     table_data = []
     for est in estados_unicos:
         if not est: continue
-        h = conteo_hora.get(est, 0)
         d = conteo_dia.get(est, 0)
-        table_data.append([str(est), h, d])
-    
+        if is_daily:
+            pct = f"{(d / total_dia * 100):.1f}%" if total_dia > 0 else "0.0%"
+            table_data.append([str(est), d, pct])
+        else:
+            h = conteo_hora.get(est, 0)
+            table_data.append([str(est), h, d])
+            
     # Agregar totales
-    table_data.append(["TOTALES", len(df_hora), len(df_dia)])
-    
+    if is_daily:
+        table_data.append(["TOTALES", total_dia, "100.0%"])
+    else:
+        table_data.append(["TOTALES", total_hora, total_dia])
+        
     # Crear figura
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(7.5, 3.8))
     ax.axis('off')
     
+    # Color de fondo de la figura para máxima legibilidad y estética limpia
+    fig.patch.set_facecolor('#f8fafc')
+    ax.set_facecolor('#f8fafc')
+    
     # Estilo de la tabla
-    col_labels = ["Estado", "Última Hora", "Acumulado Día"]
+    col_labels = ["Estado", "Total del Día", "Porcentaje"] if is_daily else ["Estado", "Última Hora", "Acumulado Día"]
     table = ax.table(cellText=table_data, colLabels=col_labels, loc='center', cellLoc='center')
     
-    # Personalizar apariencia
     table.auto_set_font_size(False)
     table.set_fontsize(11)
-    table.scale(1.2, 1.8)
+    table.scale(1.2, 2.0)
     
-    # Colores
     for (row, col), cell in table.get_celld().items():
-        if row == 0: # Header
-            cell.set_text_props(weight='bold', color='white')
-            cell.set_facecolor('#2c3e50')
-        elif row == len(table_data): # Totales
-            cell.set_text_props(weight='bold')
-            cell.set_facecolor('#ecf0f1')
+        cell.set_edgecolor('#e2e8f0')
+        cell.set_linewidth(1)
         
-        # Bordes suaves
-        cell.set_edgecolor('#bdc3c7')
+        if row == 0:  # Header
+            cell.set_text_props(weight='bold', color='white', size=11.5)
+            cell.set_facecolor('#1e293b')
+        else:
+            row_data = table_data[row - 1]
+            estado_val = str(row_data[0])
+            
+            if estado_val == "TOTALES":
+                cell.set_text_props(weight='bold', color='#0f172a', size=11)
+                cell.set_facecolor('#f1f5f9')
+            else:
+                if col == 0:
+                    cell.set_text_props(ha='left', color='#334155')
+                    # Agregar sangrado izquierdo para la columna Estado
+                    cell.get_text().set_text(f"  {estado_val}")
+                else:
+                    cell.set_text_props(color='#475569')
+                
+                estado_lower = estado_val.lower()
+                if any(ok_word in estado_lower for ok_word in ["terminado", "finalizado", "éxito", "exito"]):
+                    cell.set_facecolor('#f0fdf4')
+                    if col == 0:
+                        cell.set_text_props(color='#15803d', weight='bold')
+                elif any(err_word in estado_lower for err_word in ["error", "fallo", "falla", "falló"]):
+                    cell.set_facecolor('#fef2f2')
+                    if col == 0:
+                        cell.set_text_props(color='#b91c1c', weight='bold')
+                else:
+                    if row % 2 == 0:
+                        cell.set_facecolor('#f8fafc')
+                    else:
+                        cell.set_facecolor('#ffffff')
 
-    plt.title(f"Resumen RPA - {periodo_str}", fontsize=14, pad=20, weight='bold', color='#2c3e50')
+    title_text = f"Cierre Diario RPA - {periodo_str}" if is_daily else f"Resumen Horario RPA - {periodo_str}"
+    plt.title(title_text, fontsize=14, pad=15, weight='bold', color='#1e293b')
     plt.tight_layout()
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none')
     plt.close()
     return True
 

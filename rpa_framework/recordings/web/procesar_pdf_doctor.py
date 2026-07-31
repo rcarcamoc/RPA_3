@@ -390,17 +390,31 @@ def main():
         else:
             msg = "No se pudieron obtener datos del PDF."
             try:
-                from rpa_framework.utils.error_handler import handle_error_and_exit
-                handle_error_and_exit("procesar_pdf_doctor.py", msg)
+                from utils.error_handler import handle_error_and_exit
             except ImportError:
-                print(f"✗ {msg}")
+                try:
+                    from rpa_framework.utils.error_handler import handle_error_and_exit
+                except ImportError:
+                    handle_error_and_exit = None
+            
+            if handle_error_and_exit:
+                handle_error_and_exit("procesar_pdf_doctor.py", msg)
+            else:
+                print(f"[ERROR] {msg}")
                 sys.exit(1)
 
     except Exception as e:
         try:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
-            handle_error_and_exit("procesar_pdf_doctor.py", str(e))
+            from utils.error_handler import handle_error_and_exit
         except ImportError:
+            try:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
+            except ImportError:
+                handle_error_and_exit = None
+        
+        if handle_error_and_exit:
+            handle_error_and_exit("procesar_pdf_doctor.py", str(e))
+        else:
             logger.error(f"Error fatal: {e}")
             sys.exit(1)
     finally:

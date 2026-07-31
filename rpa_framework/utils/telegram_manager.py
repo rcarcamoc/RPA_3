@@ -46,9 +46,9 @@ def configurar_menu_comandos():
     try:
         res = requests.post(url, json={"commands": commands}).json()
         if res.get("ok"):
-            print("✅ Menú de comandos de Telegram configurado exitosamente.")
+            print("[OK] Menu de comandos de Telegram configurado exitosamente.")
         else:
-            print(f"⚠️ Error configurando comandos: {res}")
+            print(f"[WARN] Error configurando comandos: {res}")
     except Exception as e:
         print(f"Error en configurar_menu_comandos: {e}")
 
@@ -290,8 +290,10 @@ def enviar_foto(chat_id, ruta_imagen, caption=""):
     url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
 
-    # Comprimir si el archivo pesa más de 4 MB
+    opened_file = None
+    files = {}
     try:
+        # Comprimir si el archivo pesa más de 4 MB
         import io
         from PIL import Image as PILImage
         tam = os.path.getsize(ruta_imagen)
@@ -303,9 +305,15 @@ def enviar_foto(chat_id, ruta_imagen, caption=""):
             buffer.seek(0)
             files = {"photo": ("screenshot.jpg", buffer, "image/jpeg")}
         else:
-            files = {"photo": open(ruta_imagen, "rb")}
+            opened_file = open(ruta_imagen, "rb")
+            files = {"photo": opened_file}
     except Exception:
-        files = {"photo": open(ruta_imagen, "rb")}
+        try:
+            opened_file = open(ruta_imagen, "rb")
+            files = {"photo": opened_file}
+        except Exception as e:
+            print(f"Error abriendo imagen para enviar: {e}")
+            return False
 
     try:
         res = requests.post(url, data=data, files=files).json()
@@ -315,6 +323,9 @@ def enviar_foto(chat_id, ruta_imagen, caption=""):
     except Exception as e:
         print(f"Error enviando foto a {chat_id}: {e}")
         return False
+    finally:
+        if opened_file:
+            opened_file.close()
 
 def enviar_foto_todos(ruta_imagen, caption=""):
     """Envía una foto con mensaje a todos los usuarios registrados."""
@@ -329,6 +340,58 @@ def enviar_foto_todos(ruta_imagen, caption=""):
             print(f"  [OK] Foto enviada a {chat_id}")
         else:
             print(f"  [Error] No se pudo enviar foto a {chat_id}")
+
+
+def enviar_video(chat_id, ruta_video, caption=""):
+    """Envía un video (mp4/avi) a un chat de Telegram. Intenta sendVideo primero, y si falla usa sendDocument."""
+    if not os.path.exists(ruta_video):
+        print(f"Error: El archivo de video no existe: {ruta_video}")
+        return False
+        
+    url = f"https://api.telegram.org/bot{TOKEN}/sendVideo"
+    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+
+    opened_file = None
+    try:
+        opened_file = open(ruta_video, "rb")
+        files = {"video": (os.path.basename(ruta_video), opened_file, "video/mp4")}
+        res = requests.post(url, data=data, files=files, timeout=60).json()
+        if res.get("ok"):
+            return True
+            
+        # Si falla sendVideo, intentar sendDocument
+        print(f"  [Telegram API Info] sendVideo falló ({res.get('description')}), intentando sendDocument...")
+        opened_file.seek(0)
+        url_doc = f"https://api.telegram.org/bot{TOKEN}/sendDocument"
+        files_doc = {"document": (os.path.basename(ruta_video), opened_file)}
+        res_doc = requests.post(url_doc, data=data, files=files_doc, timeout=60).json()
+        if not res_doc.get("ok"):
+            print(f"  [Telegram API Error] sendDocument: {res_doc.get('description', res_doc)}")
+        return res_doc.get("ok")
+    except Exception as e:
+        print(f"Error enviando video a {chat_id}: {e}")
+        return False
+    finally:
+        if opened_file:
+            opened_file.close()
+
+
+def enviar_video_todos(ruta_video, caption=""):
+    """Envía un video con mensaje a todos los usuarios registrados."""
+    usuarios = cargar_usuarios()
+    if not usuarios:
+        print("Error: No hay usuarios registrados en usuarios.json.")
+        return False
+
+    print(f"Enviando video a {len(usuarios)} suscriptores...")
+    exito = True
+    for chat_id in usuarios:
+        if enviar_video(chat_id, ruta_video, caption):
+            print(f"  [OK] Video enviado a {chat_id}")
+        else:
+            print(f"  [Error] No se pudo enviar video a {chat_id}")
+            exito = False
+    return exito
 
 
 if __name__ == "__main__":

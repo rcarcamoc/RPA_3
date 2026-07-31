@@ -262,7 +262,7 @@ class OperacionesPanel(QWidget):
 
     def _update_buttons_state(self):
         # Deshabilitar botones de inicio si hay algo corriendo (UI o BG)
-        is_busy = self.is_bg_running or (self.worker and self.worker.isRunning())
+        is_busy = bool(self.is_bg_running or (self.worker and self.worker.isRunning()))
         self.btn_inicio.setEnabled(not is_busy)
         self.btn_pega.setEnabled(not is_busy)
         self.btn_loop.setEnabled(not is_busy)
@@ -533,25 +533,49 @@ def main():
     except Exception as e:
         print(f"[sync_medicos] No se pudo iniciar: {e}")
     
-    # 🤖 Iniciar Notificador de Resúmenes en segundo plano
+    # Asegurar que el servicio de Telegram/Notificador independiente esté corriendo
     try:
-        import threading
-        from utils.telegram_manager import registrar_usuarios
-        from utils.notificador_resumen import main as start_notificador
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        result = s.connect_ex(("127.0.0.1", 28374))
+        s.close()
         
-        notifier_thread = threading.Thread(target=start_notificador, daemon=True)
-        notifier_thread.start()
-        
+        if result == 0:
+            print("🤖 Servicio de Telegram/Notificador independiente detectado (ya está corriendo).")
+        else:
+            print("🤖 Iniciando servicio de Telegram/Notificador independiente...")
+            bot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "servicio_bot_telegram.py")
+            if os.path.exists(bot_path):
+                creation_flags = 0
+                if sys.platform == "win32":
+                    creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                
+                subprocess.Popen(
+                    [sys.executable, bot_path],
+                    creationflags=creation_flags,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True
+                )
+                print("🚀 Servicio de Telegram/Notificador lanzado en segundo plano de forma independiente.")
+            else:
+                print("⚠️ No se encontró servicio_bot_telegram.py para iniciar.")
     except Exception as e:
-        print(f"⚠️ No se pudo iniciar el servicio de Notificador: {e}")
-    
-    # El Listener de Telegram se ejecutará ahora de forma independiente.
-    # Si quieres correrlo, inicia "python servicio_bot_telegram.py"
+        print(f"⚠️ Error al verificar/iniciar el servicio de Telegram independiente: {e}")
     
     app = QApplication(sys.argv)
     window = MainWindow()
     
     window.show()
+    
+    # Validar y actualizar modelos LLM automáticamente en segundo plano al arrancar
+    try:
+        from utils.llm_validator import run_background_llm_validation
+        run_background_llm_validation()
+    except Exception as _e:
+        print(f"⚠️ No se pudo lanzar validación LLM al inicio: {_e}")
+        
     sys.exit(app.exec())
 
 if __name__ == "__main__":

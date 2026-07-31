@@ -22,6 +22,7 @@ LEGACY_MODULES_DIR = LEGACY_ROOT / "modules"
 UI_RECORDINGS_DIR = RECORDINGS_DIR / "ui"
 WEB_RECORDINGS_DIR = RECORDINGS_DIR / "web"
 OCR_RECORDINGS_DIR = RECORDINGS_DIR / "ocr"
+ERROR_RECORDINGS_DIR = RECORDINGS_DIR / "error_recordings"
 WORKFLOWS_DIR = BASE_DIR / "workflows"
 
 # Other directories
@@ -38,6 +39,7 @@ def ensure_directories():
         UI_RECORDINGS_DIR,
         WEB_RECORDINGS_DIR,
         OCR_RECORDINGS_DIR,
+        ERROR_RECORDINGS_DIR,
         WORKFLOWS_DIR,
         SCRIPTS_DIR,
         QUICK_SCRIPTS_DIR,
@@ -47,6 +49,12 @@ def ensure_directories():
     
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def get_error_recording_path(filename: str) -> Path:
+    """Get full path for an error recording video file."""
+    ERROR_RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    return ERROR_RECORDINGS_DIR / filename
 
 
 def get_ui_recording_path(filename: str) -> Path:

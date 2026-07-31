@@ -1,12 +1,28 @@
 import os
 import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 import json
 import time
 import threading
 import requests
+import socket
 from pathlib import Path
 from dotenv import load_dotenv
 import traceback
+
+_lock_socket = None
+
+def check_single_instance(port=28374):
+    global _lock_socket
+    try:
+        _lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _lock_socket.bind(("127.0.0.1", port))
+        _lock_socket.listen(1)
+        return True
+    except socket.error:
+        _lock_socket = None
+        return False
 
 # Forzar el directorio raíz de rpa_framework
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -171,6 +187,14 @@ def telegram_polling_loop():
 
     # Iniciar el verificador diario de modelos LLM en segundo plano
     threading.Thread(target=run_llm_daily_checker, daemon=True, name="LLM_Daily_Checker").start()
+
+    # 📊 Iniciar Notificador de Resúmenes en segundo plano
+    try:
+        from utils.notificador_resumen import main as start_notificador
+        threading.Thread(target=start_notificador, daemon=True, name="NotifierResumen").start()
+        print("📊 Notificador de Resúmenes iniciado.")
+    except Exception as e:
+        print(f"⚠️ No se pudo iniciar el servicio de Notificador: {e}")
 
     # 🔄 Sincronizar tabla ris.medicos con SharePoint en segundo plano
     try:
@@ -389,4 +413,7 @@ def telegram_polling_loop():
             time.sleep(5)
 
 if __name__ == "__main__":
+    if not check_single_instance():
+        print("⚠️ El servicio de Telegram ya se está ejecutando en otra instancia. Saliendo...")
+        sys.exit(0)
     telegram_polling_loop()

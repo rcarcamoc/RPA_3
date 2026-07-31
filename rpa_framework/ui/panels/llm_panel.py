@@ -199,8 +199,70 @@ class AutoReplaceWorker(QThread):
                 model_id = matched["id"]
                 usage[model_id] = usage.get(model_id, 0) + tokens
 
+        # Obtener candidatos de Nvidia NIM si hay llave
+        nvidia_candidates = []
+        nvidia_key = os.getenv("NVIDIA_API_KEY", "")
+        if nvidia_key:
+            self.signals.log.emit("📥 Paso 3.1: Descargando y ordenando modelos de Nvidia NIM...")
+            try:
+                r_nv = requests.get("https://integrate.api.nvidia.com/v1/models", headers={"Authorization": f"Bearer {nvidia_key}"}, timeout=10)
+                if r_nv.status_code == 200:
+                    exclude_keywords = [
+                        "embed", "rerank", "parse", "pii", "clip", "translation", "translate", 
+                        "reward", "safety", "guard", "diffusion", "deplot", "fuyu", "vila", "detector", "calibration"
+                    ]
+                    include_keywords = [
+                        "instruct", "-it", "chat", "large", "medium", "small", "pro", "flash", "nemotron"
+                    ]
+                    nvidia_models = []
+                    for m in r_nv.json().get("data", []):
+                        m_id = m["id"]
+                        m_lower = m_id.lower()
+                        if any(kw in m_lower for kw in exclude_keywords):
+                            continue
+                        if any(kw in m_lower for kw in include_keywords):
+                            nvidia_models.append(m_id)
+                    
+                    # Helper de normalización
+                    def normalize(model_id):
+                        base = model_id.split(":")[0]
+                        base = base.replace("meta-llama/", "meta/")
+                        base = base.replace("nv-mistralai/", "mistralai/")
+                        return base.lower()
+                        
+                    nvidia_map = {normalize(m): m for m in nvidia_models}
+                    
+                    # Sumar tokens para modelos Nvidia en rankings
+                    nvidia_usage = {}
+                    for item in rankings:
+                        d_str = item.get("date")
+                        if not d_str or d_str < start_date_str:
+                            continue
+                        slug = item.get("model_permaslug")
+                        tokens = int(item.get("total_tokens", 0))
+                        
+                        norm_slug = normalize(slug)
+                        if norm_slug in nvidia_map:
+                            real_id = nvidia_map[norm_slug]
+                            nvidia_usage[real_id] = nvidia_usage.get(real_id, 0) + tokens
+                            
+                    sorted_nvidia = [m for m, _ in sorted(nvidia_usage.items(), key=lambda x: x[1], reverse=True)]
+                    for m in nvidia_models:
+                        if m not in sorted_nvidia:
+                            sorted_nvidia.append(m)
+                    nvidia_candidates = sorted_nvidia
+            except Exception as e:
+                self.signals.log.emit(f"⚠️ Error obteniendo catálogo de Nvidia: {e}")
+
+        # Unir candidatos (Nvidia primero, luego OpenRouter free)
         sorted_popular_free = [m_id for m_id, _ in sorted(usage.items(), key=lambda x: x[1], reverse=True)]
-        self.signals.log.emit(f"🔥 Top 10 modelos gratuitos más usados: {sorted_popular_free[:10]}")
+        
+        candidates = []
+        if nvidia_candidates:
+            candidates.extend(nvidia_candidates[:5]) # Top 5 de Nvidia
+        candidates.extend([c for c in sorted_popular_free if c not in candidates])
+        
+        self.signals.log.emit(f"🔥 Top candidatos a probar (Nvidia + OR Free): {candidates[:10]}")
 
         # 4. Validar candidatos populares usando un PROMPT CLÍNICO REAL (evaluación rigurosa)
         self.signals.log.emit("🩺 Paso 4: Validando candidatos con prompt clínico...")
@@ -214,13 +276,28 @@ class AutoReplaceWorker(QThread):
         {"es_match": true, "confianza": 1.0}
         """
 
-        for cand in sorted_popular_free[:10]:
+        for cand in candidates[:12]:
             if cand in self.current_models and current_status.get(cand, False):
                 # Ya está en la lista y funciona, no se usa como candidato nuevo
                 continue
             
             self.signals.log.emit(f"  - Validando candidato: {cand}...")
-            url = "https://openrouter.ai/api/v1/chat/completions"
+            
+            # Obtener parámetros de llamada correctos (API base, llave, proveedor)
+            try:
+                from utils.llm_config import get_llm_request_params
+                base_url, target_key, provider = get_llm_request_params(cand)
+            except Exception:
+                base_url = "https://openrouter.ai/api/v1"
+                target_key = self.api_key
+                provider = "openrouter"
+                
+            url = f"{base_url}/chat/completions"
+            headers_call = {
+                "Authorization": f"Bearer {target_key}",
+                "Content-Type":  "application/json",
+                "HTTP-Referer":  "https://rpa-framework.local",
+            }
             payload = {
                 "model": cand,
                 "messages": [{"role": "user", "content": prompt_clinico}],
@@ -228,18 +305,18 @@ class AutoReplaceWorker(QThread):
                 "temperature": 0.0,
             }
             try:
-                r = requests.post(url, headers=headers, json=payload, timeout=8)
+                r = requests.post(url, headers=headers_call, json=payload, timeout=8)
                 if r.status_code == 200:
                     # Verificar que devuelva un JSON válido
                     data = r.json()
                     content = data['choices'][0]['message'].get('content', '')
                     if "es_match" in content:
                         validated_candidates.append(cand)
-                        self.signals.log.emit(f"    ✅ Candidato VÁLIDO (Clínicamente compatible): {cand}")
+                        self.signals.log.emit(f"    ✅ Candidato VÁLIDO ({provider.upper()}): {cand}")
                     else:
                         self.signals.log.emit(f"    ⚠️ Candidato RECHAZADO (No responde JSON estructurado): {cand}")
                 else:
-                    self.signals.log.emit(f"    ❌ Candidato OFFLINE ({r.status_code}): {cand}")
+                    self.signals.log.emit(f"    ❌ Candidato OFFLINE/ERROR ({r.status_code}): {cand}")
             except Exception as e:
                 self.signals.log.emit(f"    ❌ Error validando candidato: {e}")
 
@@ -317,9 +394,9 @@ class LLMPanel(QWidget):
         tbl_group = QGroupBox("📋 Rendimiento Local y Estado (BASE_LLM_MODELS)")
         tbl_layout = QVBoxLayout(tbl_group)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
-            "Modelo", "Éxitos / Intentos", "Tasa (1°)", "Tiempo Prom.", "Estado", "Detalle"
+            "Modelo", "Proveedor", "Éxitos / Intentos", "Tasa (1°)", "Tiempo Prom.", "Estado", "Detalle"
         ])
         
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -327,7 +404,8 @@ class LLMPanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -380,13 +458,13 @@ class LLMPanel(QWidget):
         self.btn_validate.clicked.connect(self._run_validation)
         btn_grid.addWidget(self.btn_validate, 0, 0)
 
-        self.btn_auto_replace = QPushButton("⚡ Reemplazar Caídos con Populares Free")
+        self.btn_auto_replace = QPushButton("⚡ Auto-Reemplazar Caídos (Nvidia / OpenRouter)")
         self.btn_auto_replace.setMinimumHeight(40)
         self.btn_auto_replace.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_auto_replace.setStyleSheet(self._btn_style("#e0a800", "#c69500"))
         self.btn_auto_replace.setToolTip(
-            "Busca modelos caídos, descarga estadísticas de rankings semanales de OpenRouter, "
-            "valida candidatos y los reemplaza automáticamente."
+            "Busca modelos caídos, descarga catálogo de Nvidia y rankings semanales de OpenRouter, "
+            "valida candidatos y los reemplaza automáticamente con prioridad Nvidia."
         )
         self.btn_auto_replace.clicked.connect(self._run_auto_replace)
         btn_grid.addWidget(self.btn_auto_replace, 0, 1)
@@ -487,6 +565,25 @@ class LLMPanel(QWidget):
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(model_id))
 
+        # Determinar Proveedor
+        prov_text = "OpenRouter"
+        try:
+            from utils.llm_config import get_llm_request_params
+            _, _, provider = get_llm_request_params(model_id)
+            prov_text = "Nvidia" if provider == "nvidia" else "OpenRouter"
+        except Exception:
+            if not model_id.endswith(":free"):
+                nvidia_prefixes = (
+                    "01-ai/", "abacusai/", "adept/", "ai21labs/", "aisingapore/", "baai/", "bigcode/",
+                    "bytedance/", "databricks/", "deepseek-ai/", "google/", "ibm/", "meta/", "microsoft/",
+                    "minimaxai/", "mistralai/", "moonshotai/", "nv-mistralai/", "nvidia/", "openai/",
+                    "poolside/", "qwen/", "sarvamai/", "snowflake/", "stepfun-ai/", "thinkingmachines/",
+                    "upstage/", "writer/", "z-ai/", "zyphra/"
+                )
+                if any(model_id.startswith(p) for p in nvidia_prefixes):
+                    prov_text = "Nvidia"
+        self.table.setItem(row, 1, QTableWidgetItem(prov_text))
+
         # Poblar estadísticas
         if model_stats:
             intentos = model_stats['total_intentos']
@@ -494,16 +591,16 @@ class LLMPanel(QWidget):
             tiempo = model_stats['tiempo_promedio_ms'] or 0
             tasa = (exitos / intentos * 100) if intentos > 0 else 0.0
 
-            self.table.setItem(row, 1, QTableWidgetItem(f"{exitos} / {intentos}"))
-            self.table.setItem(row, 2, QTableWidgetItem(f"{tasa:.1f}%"))
-            self.table.setItem(row, 3, QTableWidgetItem(f"{tiempo / 1000:.2f}s"))
+            self.table.setItem(row, 2, QTableWidgetItem(f"{exitos} / {intentos}"))
+            self.table.setItem(row, 3, QTableWidgetItem(f"{tasa:.1f}%"))
+            self.table.setItem(row, 4, QTableWidgetItem(f"{tiempo / 1000:.2f}s"))
         else:
-            self.table.setItem(row, 1, QTableWidgetItem("0 / 0"))
-            self.table.setItem(row, 2, QTableWidgetItem("—"))
+            self.table.setItem(row, 2, QTableWidgetItem("0 / 0"))
             self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 4, QTableWidgetItem("—"))
 
-        self.table.setItem(row, 4, self._colored_item(status, color))
-        self.table.setItem(row, 5, QTableWidgetItem(detail))
+        self.table.setItem(row, 5, self._colored_item(status, color))
+        self.table.setItem(row, 6, QTableWidgetItem(detail))
 
     def _colored_item(self, text: str, color: str) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
@@ -536,8 +633,8 @@ class LLMPanel(QWidget):
 
         # Reset visual
         for r in range(self.table.rowCount()):
-            self.table.setItem(r, 4, self._colored_item("⏳ Validando…", "#f59e0b"))
-            self.table.setItem(r, 5, QTableWidgetItem(""))
+            self.table.setItem(r, 5, self._colored_item("⏳ Validando…", "#f59e0b"))
+            self.table.setItem(r, 6, QTableWidgetItem(""))
 
         self.btn_validate.setEnabled(False)
         self.btn_auto_replace.setEnabled(False)

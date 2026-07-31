@@ -19,6 +19,7 @@ Modelos vigentes y probados:
   - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free  ✅ OK (Reasoning)
 """
 
+import os
 import logging
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,36 @@ logger = logging.getLogger(__name__)
 # URL base de la API de OpenRouter (no cambiar)
 # ---------------------------------------------------------------------------
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+def get_llm_request_params(model_id):
+    """
+    Retorna la URL base, API Key y el nombre del proveedor correspondiente para el modelo.
+    Detecta si corresponde a NVIDIA NIM o a OpenRouter.
+    """
+    try:
+        from dotenv import load_dotenv
+        from pathlib import Path
+        project_root = Path(__file__).parent.parent.parent
+        env_path = project_root / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path)
+    except Exception:
+        pass
+
+    nvidia_key = os.getenv("NVIDIA_API_KEY", "")
+    if nvidia_key and not model_id.endswith(":free"):
+        nvidia_prefixes = (
+            "01-ai/", "abacusai/", "adept/", "ai21labs/", "aisingapore/", "baai/", "bigcode/",
+            "bytedance/", "databricks/", "deepseek-ai/", "google/", "ibm/", "meta/", "microsoft/",
+            "minimaxai/", "mistralai/", "moonshotai/", "nv-mistralai/", "nvidia/", "openai/",
+            "poolside/", "qwen/", "sarvamai/", "snowflake/", "stepfun-ai/", "thinkingmachines/",
+            "upstage/", "writer/", "z-ai/", "zyphra/"
+        )
+        if any(model_id.startswith(p) for p in nvidia_prefixes):
+            return "https://integrate.api.nvidia.com/v1", nvidia_key, "nvidia"
+            
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+    return "https://openrouter.ai/api/v1", openrouter_key, "openrouter"
 
 # ---------------------------------------------------------------------------
 # Lista BASE de modelos LLM (orden de edición manual / fallback estático)
@@ -37,13 +68,13 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # reordena esta lista según el rendimiento histórico en log_llm_ranking.
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "google/gemma-4-31b-it:free",                            # Primario — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                # Fallback 1 — Validado OK
-   "openai/gpt-oss-120b:free",                              # Fallback 2 — Validado OK
-   "openrouter/owl-alpha",                                  # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                # Fallback 4 — Validado OK
-   "qwen/qwen3-235b-a22b-thinking-2507",                    # Fallback 5 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",    # Fallback 6 — Validado OK
+   "deepseek-ai/deepseek-v4-flash",                          # Primario - Validado OK
+   "google/diffusiongemma-26b-a4b-it",                       # Fallback 1 - Validado OK
+   "google/gemma-4-26b-a4b-it:free",                         # Fallback 2 - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 3 - Validado OK
+   "abacusai/dracarys-llama-3.1-70b-instruct",               # Fallback 4 - Validado OK
+   "deepseek-ai/deepseek-v4-pro",                            # Fallback 5 - Validado OK
+   "tencent/hy3:free",                                       # Fallback 6 - Validado OK
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)
@@ -95,10 +126,14 @@ def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
     if base_list is None:
         base_list = BASE_LLM_MODELS
 
+    offline_models = set()
     try:
         import mysql.connector
+        from datetime import datetime, timedelta
         conn = mysql.connector.connect(**_DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
+        
+        # 1. Obtener estadísticas históricas
         cursor.execute("""
             SELECT
                 modelo,
@@ -111,25 +146,53 @@ def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
             GROUP BY modelo
         """, (contexto,))
         rows = cursor.fetchall()
-        conn.close()
-
         stats = {r['modelo']: r for r in rows}
-
+        
+        # 2. Detectar modelos caídos recientemente (últimas 24 horas con intentos pero 0 éxitos)
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            SELECT 
+                modelo,
+                SUM(es_match) AS recent_exitos,
+                COUNT(*) AS recent_intentos
+            FROM ris.log_llm_ranking
+            WHERE timestamp >= %s AND contexto = %s
+            GROUP BY modelo
+        """, (yesterday, contexto))
+        recent_rows = cursor.fetchall()
+        for r in recent_rows:
+            if r['recent_intentos'] > 0 and int(r['recent_exitos'] or 0) == 0:
+                offline_models.add(r['modelo'])
+                
+        conn.close()
     except Exception as e:
         logger.debug(f"[llm_config] DB no disponible para ranking ({e}), usando orden base.")
         return list(base_list)
 
     def _score(model_id):
+        base_url, target_key, provider = get_llm_request_params(model_id)
+        provider_priority = 0 if provider == "nvidia" else 1
+
         if model_id not in stats:
             # Modelo sin historial: score neutro (50%), tiempo asumido 5s
-            return (0.5, 5000.0)
+            return (0, provider_priority, -0.5, 5000.0)
+
         r = stats[model_id]
         exitos  = int(r['exitos'] or 0)
         intentos = int(r['intentos'] or 0)
         tiempo  = float(r['tiempo_prom_ms'] or 5000.0)
+
+        # Si el modelo está en offline_models o está completamente roto históricamente (exitos == 0 y intentos > 0),
+        # lo mandamos al final (is_broken = 1). De lo contrario, is_broken = 0.
+        is_broken = 1 if (model_id in offline_models or (exitos == 0 and intentos > 0)) else 0
+
         laplace = (exitos + 1) / (intentos + 2)
-        # Retorna tupla para sort: score DESC (negado), tiempo ASC
-        return (-laplace, tiempo)
+        # Retorna tupla para sort:
+        # 1. is_broken ASC (0 no rotos, 1 rotos)
+        # 2. provider_priority ASC (nvidia=0, openrouter=1)
+        # 3. score DESC (negado)
+        # 4. tiempo ASC
+        return (is_broken, provider_priority, -laplace, tiempo)
 
     sorted_list = sorted(base_list, key=_score)
     logger.debug(f"[llm_config] Modelos reordenados para contexto='{contexto}': {sorted_list}")
@@ -147,6 +210,7 @@ def log_llm_result(
     id_registro: int = 0,
     es_primer_intento: bool = True,
     contexto: str = "busqueda_ocr",
+    proveedor: str = "openrouter",
 ):
     """
     Registra el resultado de una llamada LLM en ris.log_llm_ranking.
@@ -167,6 +231,7 @@ def log_llm_result(
         es_primer_intento: True si este modelo fue el primero intentado en esa llamada.
                            False si fue un fallback (modelo anterior falló por cuota/red).
         contexto:          Tipo de tarea ('busqueda_ocr', 'deteccion_patologia', etc.)
+        proveedor:         API que sirvió la consulta ('openrouter', 'nvidia', etc.)
     """
     try:
         import mysql.connector
@@ -176,8 +241,8 @@ def log_llm_result(
             INSERT INTO ris.log_llm_ranking
               (id_registro, modelo, target_buscado, texto_ocr,
                es_match, razonamiento, confianza, tiempo_ms,
-               es_primer_intento, contexto)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               es_primer_intento, contexto, proveedor)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             id_registro,
             modelo,
@@ -189,12 +254,13 @@ def log_llm_result(
             int(tiempo_ms),
             1 if es_primer_intento else 0,
             contexto,
+            proveedor,
         ))
         conn.commit()
         conn.close()
         logger.debug(
             f"[log_llm_result] {modelo} | match={es_match} | "
-            f"conf={confianza:.2f} | {tiempo_ms}ms | primer={es_primer_intento} | ctx={contexto}"
+            f"conf={confianza:.2f} | {tiempo_ms}ms | primer={es_primer_intento} | ctx={contexto} | prov={proveedor}"
         )
     except Exception as e:
         logger.warning(f"[log_llm_result] No se pudo registrar en DB: {e}")

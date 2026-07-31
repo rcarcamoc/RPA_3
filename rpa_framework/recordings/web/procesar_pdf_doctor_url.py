@@ -15,8 +15,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 try:
     from utils.telegram_manager import enviar_alerta_todos
 except ImportError:
-    def enviar_alerta_todos(msg):
-        print(f"Alerta Telegram: {msg}")
+    try:
+        from rpa_framework.utils.telegram_manager import enviar_alerta_todos
+    except ImportError:
+        def enviar_alerta_todos(msg):
+            print(f"Alerta Telegram: {msg}")
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -252,10 +255,116 @@ class ExtractorPDFDoctorURL:
             logger.error(f"Error en extracción: {e}")
             return None
 
-def main():
-    pdf_url = r"c:\Desarrollo\RPA_3\rpa_framework\utils\pdf.pdf"
+def pedir_id_registro_gui():
+    """Pregunta el ID del registro usando Tkinter"""
+    import tkinter as tk
+    from tkinter import simpledialog, messagebox
     
+    # Inicializar Tkinter ocultando la ventana principal
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    
+    id_registro = None
+    while id_registro is None:
+        try:
+            respuesta = simpledialog.askstring(
+                "RPA - Seleccionar ID", 
+                "Ingrese el ID del registro que desea modificar en la base de datos:",
+                initialvalue="1"
+            )
+            
+            # Si el usuario cierra la ventana o presiona Cancelar
+            if respuesta is None:
+                confirmar = messagebox.askyesno(
+                    "Cancelar proceso", 
+                    "¿Desea cancelar la ejecución del robot?"
+                )
+                if confirmar:
+                    print("Ejecución cancelada por el usuario.")
+                    sys.exit(0)
+                else:
+                    continue  # Preguntar de nuevo
+            
+            respuesta = respuesta.strip()
+            if not respuesta:
+                id_registro = 1
+                break
+                
+            if respuesta.isdigit():
+                id_registro = int(respuesta)
+            else:
+                messagebox.showerror("Error de entrada", "El ID debe ser un número entero válido.")
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"Error en GUI Tkinter: {e}. Usando ID por defecto: 1")
+            id_registro = 1
+            break
+            
+    root.destroy()
+    return id_registro
+
+def pedir_url_pdf_gui(default_url):
+    """Pregunta la URL o ruta del PDF usando Tkinter"""
+    import tkinter as tk
+    from tkinter import simpledialog, messagebox
+    
+    # Inicializar Tkinter ocultando la ventana principal
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    
+    pdf_url = None
+    while pdf_url is None:
+        try:
+            respuesta = simpledialog.askstring(
+                "RPA - Seleccionar PDF", 
+                "Ingrese la URL o la ruta local del archivo PDF a procesar:",
+                initialvalue=default_url
+            )
+            
+            # Si el usuario cierra la ventana o presiona Cancelar
+            if respuesta is None:
+                confirmar = messagebox.askyesno(
+                    "Cancelar proceso", 
+                    "¿Desea cancelar la ejecución del robot?"
+                )
+                if confirmar:
+                    print("Ejecución cancelada por el usuario al ingresar URL.")
+                    sys.exit(0)
+                else:
+                    continue  # Preguntar de nuevo
+            
+            respuesta = respuesta.strip()
+            if not respuesta:
+                messagebox.showerror("Error de entrada", "Debe ingresar una URL o ruta de archivo válida.")
+            else:
+                pdf_url = respuesta
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"Error en GUI Tkinter para URL: {e}. Usando URL por defecto.")
+            pdf_url = default_url
+            break
+            
+    root.destroy()
+    return pdf_url
+
+def main():
+    pdf_url_default = r"c:\Desarrollo\RPA_3\rpa_framework\utils\pdf.pdf"
+    
+    # Preguntar el ID usando Tkinter
+    id_registro = pedir_id_registro_gui()
+    
+    # Preguntar la URL usando Tkinter
+    pdf_url = pedir_url_pdf_gui(pdf_url_default)
+
+    print(f"ℹ️ Configurado para actualizar Registro ID: {id_registro}")
+    print(f"ℹ️ Documento PDF a procesar: {pdf_url}")
+
     bd = BuscadorBaseDatosPDF()
+    bd.id_registro = id_registro
     extractor = ExtractorPDFDoctorURL()
     
     try:
