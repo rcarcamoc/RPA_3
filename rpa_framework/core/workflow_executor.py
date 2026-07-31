@@ -27,15 +27,20 @@ except ImportError:
 class WorkflowExecutor:
     """Ejecutor de workflows con soporte para IF/ELSE y LOOP"""
     
-    def __init__(self, workflow: Workflow, log_dir: str = "logs"):
+    def __init__(self, workflow: Workflow, log_dir: str = "logs", enable_recording: bool = True, is_sub_workflow: bool = False):
         """
         Inicializa el ejecutor.
         
         Args:
             workflow: Workflow a ejecutar
             log_dir: Directorio para guardar logs
+            enable_recording: Si es True, graba la pantalla durante la ejecución
+            is_sub_workflow: Indica si es un flujo hijo llamado por otro workflow
         """
         self.workflow = workflow
+        self.enable_recording = enable_recording
+        self.is_sub_workflow = is_sub_workflow
+        self.screen_recorder = None
         
         # Create a unique log filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -56,6 +61,29 @@ class WorkflowExecutor:
         
         self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
         self.logger.log(f"   Variables iniciales: {self.context}")
+        
+    def _get_subprocess_env(self) -> Dict[str, str]:
+        """Prepara el entorno para ejecutar subprocesses de forma robusta"""
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        
+        # Agregar project_root y rpa_framework a PYTHONPATH para asegurar importaciones robustas
+        from pathlib import Path
+        project_root = Path(__file__).parent.parent.parent.resolve()
+        rpa_framework_root = project_root / "rpa_framework"
+        
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        separator = ";" if os.name == 'nt' else ":"
+        if existing_pythonpath:
+            env["PYTHONPATH"] = f"{project_root}{separator}{rpa_framework_root}{separator}{existing_pythonpath}"
+        else:
+            env["PYTHONPATH"] = f"{project_root}{separator}{rpa_framework_root}"
+            
+        for key, value in self.context.items():
+            env[f"VAR_{key}"] = str(value)
+            
+        return env
     
     def execute(self) -> Dict[str, Any]:
         """
@@ -67,9 +95,21 @@ class WorkflowExecutor:
                 "status": "success" | "error" | "stopped",
                 "context": dict con variables finales,
                 "logs": list de logs,
-                "error": mensaje de error (si hubo)
+                "error": mensaje de error (si hubo),
+                "video_path": ruta del video guardado si hubo error
             }
         """
+        recorder = None
+        if self.enable_recording and not self.is_sub_workflow:
+            try:
+                from utils.screen_recorder import ScreenRecorder
+                recorder = ScreenRecorder(fps=6, max_width=1280, format="mp4")
+                if recorder.start():
+                    self.screen_recorder = recorder
+                    self.logger.log("🎥 Grabación de pantalla optimizada (6 FPS, 720p) iniciada en segundo plano")
+            except Exception as rec_e:
+                self.logger.log(f"⚠️ No se pudo iniciar el grabador de pantalla: {rec_e}")
+
         try:
             self.logger.log("=" * 60)
             self.logger.log(f"▶️ Iniciando ejecución: {self.workflow.name}")
@@ -107,6 +147,12 @@ class WorkflowExecutor:
             self.logger.log(f"   Variables finales: {self.context}")
             self.logger.log("=" * 60)
             
+            # Si terminó correctamente o fue detenido, descartar grabación
+            if recorder:
+                recorder.discard()
+                self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso/detenido)")
+                self.screen_recorder = None
+
             return {
                 "status": status,
                 "context": self.context,
@@ -118,16 +164,36 @@ class WorkflowExecutor:
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
             
-#            try:
-#                enviar_alerta_todos(f"⏸️ <b>Proceso Pausado</b>\nEl asistente virtual (<b>'{self.workflow.name}'</b>) se ha detenido.\n<b>Motivo:</b> {str(e)}\n\nPor favor, revisa la aplicación para continuar u omitir este caso.")
-#            except Exception as tel_e:
-#                self.logger.log(f"⚠️ Error enviando alerta de Telegram: {tel_e}")
-            
+            saved_video_path = None
+            if recorder:
+                try:
+                    from utils.paths import get_error_recording_path
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    safe_name = "".join([c for c in self.workflow.name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
+                    video_filename = f"error_{safe_name}_{timestamp}.mp4"
+                    dest_path = get_error_recording_path(video_filename)
+                    
+                    saved_video_path = recorder.save(str(dest_path))
+                    self.screen_recorder = None
+                    if saved_video_path:
+                        self.logger.log(f"💾 Grabación de pantalla de error guardada en: {saved_video_path}")
+                        
+                        try:
+                            from utils.telegram_manager import enviar_video_todos
+                            caption = f"❌ <b>Error en Workflow: {self.workflow.name}</b>\n<b>Motivo:</b> {str(e)[:250]}"
+                            enviar_video_todos(saved_video_path, caption=caption)
+                            self.logger.log("📱 Grabación de video del error enviada a Telegram")
+                        except Exception as tel_e:
+                            self.logger.log(f"⚠️ Error al enviar video por Telegram: {tel_e}")
+                except Exception as rec_err:
+                    self.logger.log(f"⚠️ Error guardando grabación de pantalla: {rec_err}")
+
             return {
                 "status": "error",
                 "context": self.context,
                 "logs": self.logger.get_logs(),
-                "error": error_msg
+                "error": error_msg,
+                "video_path": saved_video_path
             }
     
     def stop(self):
@@ -135,6 +201,13 @@ class WorkflowExecutor:
         self.should_stop = True
         self.logger.log("⏹️ Deteniendo workflow...")
         
+        if self.screen_recorder:
+            try:
+                self.screen_recorder.stop()
+                self.screen_recorder = None
+            except Exception:
+                pass
+
         # 1. Detener executor anidado si existe
         if self.nested_executor:
             self.logger.log("   Propagando stop a workflow anidado...")
@@ -230,12 +303,7 @@ class WorkflowExecutor:
              self.logger.log(f"💻 Ejecutando comando: {node.command}")
              try:
                 # Preparar entorno
-                env = os.environ.copy()
-                for key, value in self.context.items():
-                    try:
-                        env[f"VAR_{key}"] = str(value)
-                    except:
-                        pass
+                env = self._get_subprocess_env()
                 
                 # MEJORA: Asegurar que los pipes se cierren correctamente con un bloque try-finally robusto
                 # Usamos shell=True por compatibilidad con comandos complejos de Windows
@@ -314,12 +382,7 @@ class WorkflowExecutor:
         self.logger.log(f"🐍 Ejecutando script: {node.script}")
         
         try:
-            # Preparar entorno con variables del contexto
-            env = os.environ.copy()
-            env["PYTHONUNBUFFERED"] = "1"
-            env["PYTHONIOENCODING"] = "utf-8"
-            for key, value in self.context.items():
-                env[f"VAR_{key}"] = str(value)
+            env = self._get_subprocess_env()
             
             # Resolver ruta del script
             script_path = Path(node.script)
@@ -386,6 +449,7 @@ class WorkflowExecutor:
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
+                errors='replace',
                 env=env,
                 cwd=str(exec_cwd),
                 bufsize=1,
@@ -638,7 +702,7 @@ class WorkflowExecutor:
         nested_wf.variables.update(self.context)
         
         # Executor
-        self.nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
+        self.nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir, is_sub_workflow=True)
         
         # Patch logs
         original_log = self.nested_executor.logger.log
@@ -661,9 +725,7 @@ class WorkflowExecutor:
 
     def _run_script_internal(self, node):
         """Helper para ejecutar script python del loop"""
-        env = os.environ.copy()
-        for key, value in self.context.items():
-            env[f"VAR_{key}"] = str(value)
+        env = self._get_subprocess_env()
         
         # Pasamos variables como JSON string también para estructuras complejas
         # O confiamos en env vars simples. 
@@ -682,6 +744,7 @@ class WorkflowExecutor:
             stderr=subprocess.STDOUT,
             text=True,
             encoding='utf-8',
+            errors='replace',
             env=env,
             cwd=str(exec_cwd),
             bufsize=1,
@@ -926,7 +989,7 @@ class WorkflowExecutor:
             nested_wf.variables.update(self.context)
             
             # Crear executor
-            nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir)
+            nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir, is_sub_workflow=True)
             
             # --- PATCH LOGGER ---
             # Para que los logs del hijo suban al padre (y a la UI)

@@ -17,3 +17,11 @@ execution:
 
 logging:
   level: "INFO"
+
+screen_recorder:
+  enabled: true
+  fps: 6
+  max_width: 1280
+  format: "mp4"
+  send_to_telegram_on_error: true
+

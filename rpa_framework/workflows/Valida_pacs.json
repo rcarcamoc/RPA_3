@@ -1,0 +1,189 @@
+{
+  "id": "valida_pacs",
+  "name": "Valida_pacs",
+  "description": "",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -913.0,
+        "y": -630.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "action",
+      "label": "muestra escitorio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -363.00864553314113,
+        "y": -493.06724303554273
+      },
+      "script": "",
+      "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
+      "output_variable": "",
+      "command_type": "desktop",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n3_0",
+      "type": "action",
+      "label": "abre pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -578.3775216138329,
+        "y": -502.1508165225745
+      },
+      "script": "ui\\Abre_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n4_0",
+      "type": "action",
+      "label": "ingresa user pacs",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -867.435158501441,
+        "y": -498.48655139289144
+      },
+      "script": "ui\\ingresa_user_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n6_0",
+      "type": "action",
+      "label": "busca dinamicamente \"busca paciente\"",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -571.4951969260326,
+        "y": -358.3938520653218
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ocr\\busca_busqueda de pacientes.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n7_0",
+      "type": "action",
+      "label": "ingresa id cliente",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -350.0,
+        "y": -360.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\busqueda_paciente.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n11_0",
+      "type": "action",
+      "label": "comprueba vpn",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -384.0,
+        "y": -625.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n12_0",
+      "type": "action",
+      "label": "verifica open",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -616.0,
+        "y": -624.0
+      },
+      "script": "sistema\\verifica_openrouter.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n15_0",
+      "type": "action",
+      "label": "Verifica inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -841.0,
+        "y": -364.0
+      },
+      "script": "c:\\Desarrollo\\RPA_3\\rpa_framework\\recordings\\ui\\verifica_inicio_v4_similitud.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    },
+    {
+      "from": "n11_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n1_0",
+      "to": "n12_0"
+    },
+    {
+      "from": "n12_0",
+      "to": "n11_0"
+    },
+    {
+      "from": "n15_0",
+      "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n15_0"
+    }
+  ],
+  "variables": {}
+}

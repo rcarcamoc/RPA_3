@@ -195,9 +195,10 @@ def main():
     window = MainWindow()
     window.show()
 
-    # Validar modelos LLM en segundo plano justo después de mostrar la ventana
+    # Validar y actualizar modelos LLM automáticamente en segundo plano al arrancar
     try:
-        window.llm_panel.run_startup_validation()
+        from utils.llm_validator import run_background_llm_validation
+        run_background_llm_validation()
     except Exception as _e:
         print(f"⚠️ No se pudo lanzar validación LLM al inicio: {_e}")
 
