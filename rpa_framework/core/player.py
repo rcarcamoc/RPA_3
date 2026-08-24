@@ -72,6 +72,13 @@ class RecordingPlayer:
         if not self.setup():
             return {"status": "FAILED", "reason": "Setup failed"}
         
+        # Verificar y desactivar Bloq Mayús si está activo
+        try:
+            from utils.keyboard_utils import ensure_capslock_off
+            ensure_capslock_off(logger.info)
+        except Exception as cap_e:
+            logger.warning(f"No se pudo verificar estado de Bloq Mayús: {cap_e}")
+
         # Detección de tipo de grabación
         is_web = "steps" in self.data and "session" in self.data
         actions_list = self.data.get("actions") or self.data.get("steps")

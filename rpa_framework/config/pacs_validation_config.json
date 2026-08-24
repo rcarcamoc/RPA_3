@@ -1,0 +1,35 @@
+{
+    "habilitado": true,
+    "hora_validacion": "09:00",
+    "dias_validacion": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+    ],
+    "max_reintentos": 3,
+    "timeout_minutos": 10,
+    "delay_entre_reintentos_seg": 120,
+    "doctor_validacion": "Cristian Navarro",
+    "user_validacion": "CNAVARROGA",
+    "pass_validacion": "cristian",
+    "telegram": {
+        "enviar_alertas": true,
+        "enviar_en_exito": true,
+        "enviar_en_error": true,
+        "dias_notificacion": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+        ],
+        "hora_inicio_notificacion": 9,
+        "hora_fin_notificacion": 18
+    }
+}

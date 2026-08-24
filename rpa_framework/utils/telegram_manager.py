@@ -35,13 +35,16 @@ def configurar_menu_comandos():
         {"command": "start", "description": "👋 Bienvenida y panel principal"},
         {"command": "inicio", "description": "▶️ Iniciar flujo completo"},
         {"command": "pega", "description": "📑 Iniciar solo pega en Integra"},
+        {"command": "cuenta_casos_pendientes", "description": "🔢 Cuenta casos pendientes"},
         {"command": "loop", "description": "🔄 Configurar y ejecutar flujo continuo"},
         {"command": "rehabilitar", "description": "🛟 Rehabilitar último registro"},
         {"command": "detener", "description": "🛑 Detener ejecución actual"},
         {"command": "resumen", "description": "📊 Resumen del día en curso"},
         {"command": "deten_notificaciones", "description": "🔕 Suspender notificaciones horarias y diarias"},
         {"command": "reanudar_notificaciones", "description": "🔔 Reanudar notificaciones horarias y diarias"},
-        {"command": "ver_log", "description": "📋 Ver las últimas 15 líneas del log de ejecución"}
+        {"command": "ver_log", "description": "📋 Ver las últimas 15 líneas del log de ejecución"},
+        {"command": "bateria", "description": "🔋 Estado de la batería del PC"},
+        {"command": "estado_pacs", "description": "🔍 Verificar estado de validación PACS"}
     ]
     try:
         res = requests.post(url, json={"commands": commands}).json()
@@ -170,6 +173,13 @@ def registrar_usuarios(command_callback=None, panel_ref=None):
                         else:
                             if command_callback: command_callback("pega")
                             enviar_mensaje(chat_id, "✅ Workflow 'Solo Pega en Integra' iniciado correctamente.")
+
+                    elif comando in ["/cuenta_casos_pendientes", "/casos_pendientes", "/cuenta_casos"]:
+                        if panel_ref and panel_ref.worker and panel_ref.worker.isRunning():
+                            enviar_mensaje(chat_id, "⚠️ Ya hay un workflow en ejecución. Espere a que termine o deténgalo primero (/detener).")
+                        else:
+                            if command_callback: command_callback("cuenta_casos_pendientes")
+                            enviar_mensaje(chat_id, "✅ Solicitud de conteo de casos pendientes enviada.")
                             
                     elif comando == "/rehabilitar":
                         if command_callback: command_callback("rehabilitar")
@@ -221,6 +231,38 @@ def registrar_usuarios(command_callback=None, panel_ref=None):
                             enviar_mensaje(chat_id, f"📋 <b>Últimas 15 líneas del log:</b>\n<code>{tail}</code>")
                         except Exception as e:
                             enviar_mensaje(chat_id, f"❌ Error leyendo log: {e}")
+
+                    elif comando == "/bateria":
+                        try:
+                            from utils.battery_monitor import obtener_estado_bateria_msg
+                            enviar_mensaje(chat_id, obtener_estado_bateria_msg())
+                        except Exception as e:
+                            enviar_mensaje(chat_id, f"❌ Error consultando batería: {e}")
+
+                    elif comando == "/estado_pacs":
+                        try:
+                            import mysql.connector
+                            _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=5)
+                            _cur = _conn.cursor(dictionary=True)
+                            _cur.execute("SHOW TABLES LIKE 'validacion_pacs'")
+                            if not _cur.fetchone():
+                                enviar_mensaje(chat_id, "⚠️ La tabla <b>validacion_pacs</b> aún no existe.")
+                            else:
+                                _cur.execute("SELECT * FROM ris.validacion_pacs ORDER BY id DESC LIMIT 1")
+                                _ult = _cur.fetchone()
+                                if not _ult:
+                                    enviar_mensaje(chat_id, "ℹ️ No hay registros de validación PACS aún.")
+                                else:
+                                    _est = _ult.get('estado', '?')
+                                    _ico = {'Exitoso': '🟢', 'Error': '🔴', 'En Proceso': '🟡'}.get(_est, '⚪')
+                                    _msg = f"🔍 <b>Estado PACS</b>\n{_ico} Estado: <b>{_est}</b>\n"
+                                    _msg += f"📅 Última verificación: {_ult.get('fecha_validacion', '--')}\n"
+                                    _msg += f"📝 {_ult.get('observacion') or 'Sin observaciones'}"
+                                    enviar_mensaje(chat_id, _msg)
+                            _cur.close()
+                            _conn.close()
+                        except Exception as e:
+                            enviar_mensaje(chat_id, f"❌ Error consultando PACS: {e}")
 
                     elif comando == "/loop":
                         markup = {

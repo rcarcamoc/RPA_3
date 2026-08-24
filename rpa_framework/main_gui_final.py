@@ -76,6 +76,7 @@ try:
     from ui.workflow_panel_final import WorkflowPanelFinal
     from ui.panels.debug_panel import DebugPanel
     from ui.panels.llm_panel import LLMPanel
+    from ui.panels.pacs_validation_panel import PacsValidationPanel
 
     from core.models import Workflow
     from ui.workflow_panel import WorkflowExecutorWorker
@@ -552,8 +553,12 @@ class ModernOperacionesPanel(QWidget):
             self._update_buttons_state()
             
             if bg_running:
-                self.lbl_status_val.setText(f"🟢 Servicio BG: {wf_name}")
-                self.lbl_status_val.setStyleSheet("color: #8b5cf6; font-weight: bold;")
+                if wf_name == "Validación PACS":
+                    self.lbl_status_val.setText("🔍 Validación PACS en curso...")
+                    self.lbl_status_val.setStyleSheet("color: #d97706; font-weight: bold;")
+                else:
+                    self.lbl_status_val.setText(f"🟢 Servicio BG: {wf_name}")
+                    self.lbl_status_val.setStyleSheet("color: #8b5cf6; font-weight: bold;")
                 self.progress_bar.setRange(0, 0)
                 self.start_time = datetime.now()
                 self.duration_timer.start(1000)
@@ -849,6 +854,7 @@ class MainWindow(QMainWindow):
         # Instanciar paneles una sola vez para preservar sus estados
         self.panel_operaciones = ModernOperacionesPanel(self.config, self)
         self.llm_panel = LLMPanel()
+        self.pacs_panel = PacsValidationPanel(self.config, self)
         
         # Definición de pestañas
         self.tabs_list = [
@@ -861,6 +867,7 @@ class MainWindow(QMainWindow):
             {"widget": WebRecordPanel(self.config), "title": "Web Recorder", "dev_only": True},
             {"widget": DebugPanel(self.config), "title": "🐛 Debug", "dev_only": True},
             {"widget": self.llm_panel, "title": "🤖 Modelos LLM", "dev_only": True},
+            {"widget": self.pacs_panel, "title": "🔍 Validación PACS", "dev_only": True},
         ]
         
         # Footer con año dinámico

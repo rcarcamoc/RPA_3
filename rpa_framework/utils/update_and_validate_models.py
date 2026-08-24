@@ -14,51 +14,73 @@ import requests
 from pathlib import Path
 from dotenv import load_dotenv
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # Configuración de rutas
 UTILS_DIR = Path(__file__).parent
-ROOT_DIR = UTILS_DIR.parent.parent
+RPA_DIR = UTILS_DIR.parent
+ROOT_DIR = RPA_DIR.parent
 CONFIG_FILE = UTILS_DIR / "llm_config.py"
 ENV_FILE = ROOT_DIR / ".env"
+
+if str(RPA_DIR) not in sys.path:
+    sys.path.insert(0, str(RPA_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # Cargar variables de entorno
 load_dotenv(ENV_FILE, override=True)
 API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-# Lista de modelos candidata por defecto
+# Lista de modelos candidata por defecto (5 Nvidia NIM + 5 OpenRouter Free)
 DEFAULT_CANDIDATES = [
-    "google/gemma-4-31b-it:free",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openai/gpt-oss-120b:free",
-    "openrouter/owl-alpha",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "qwen/qwen3-235b-a22b-thinking-2507",
+    "meta/llama-3.1-8b-instruct",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
+    "meta/llama-3.2-11b-vision-instruct",
+    "nvidia/nemotron-nano-12b-v2-vl",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openrouter/free",
 ]
 
 def check_model(model_id):
-    """Verifica si el modelo está activo en OpenRouter."""
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    """Verifica si el modelo está activo en su respectivo proveedor (Nvidia NIM u OpenRouter)."""
+    try:
+        from utils.llm_config import get_llm_request_params
+        base_url, target_key, provider = get_llm_request_params(model_id)
+    except Exception:
+        base_url = "https://openrouter.ai/api/v1"
+        target_key = API_KEY
+        provider = "openrouter"
+
+    if not target_key:
+        target_key = API_KEY
+
+    url = f"{base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {target_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://rpa-framework.local",
     }
     payload = {
         "model": model_id,
         "messages": [{"role": "user", "content": "Di solo la palabra: OK"}],
-        "max_tokens": 10,
+        "max_tokens": 250,
         "temperature": 0.0,
     }
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            return True, "Online"
+            return True, f"Online ({provider.upper()})"
         else:
             try:
-                err_msg = response.json().get("error", {}).get("message", "Error desconocido")
+                err_msg = response.json().get("error", {}).get("message", f"HTTP {response.status_code}")
             except Exception:
                 err_msg = f"HTTP {response.status_code}"
             return False, err_msg

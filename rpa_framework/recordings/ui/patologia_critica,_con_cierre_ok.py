@@ -36,7 +36,7 @@ except ImportError:
 # Agregar raíz del proyecto al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS
+from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, get_llm_request_params
 
 from pywinauto import Application, findwindows
 from core.executor import ActionExecutor
@@ -214,9 +214,12 @@ RESPONDE SOLO EN FORMATO JSON:
         for current_model in models:
             logger.info(f"🤖 Consultando LLM {current_model}...")
             try:
+                base_url, target_key, provider = get_llm_request_params(current_model)
+                if not target_key:
+                    target_key = OPENROUTER_API_KEY
                 response = requests.post(
-                    f"{OPENROUTER_BASE_URL}/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {target_key}", "Content-Type": "application/json"},
                     json={"model": current_model, "messages": [{"role": "user", "content": prompt}], "temperature": LLM_DEFAULT_TEMPERATURE, "max_tokens": LLM_DEFAULT_MAX_TOKENS},
                     timeout=15 # Aumentamos timeout por latencia de modelos gratuitos
                 )

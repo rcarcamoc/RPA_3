@@ -35,13 +35,16 @@ DEFAULT_TEST_CASES = [
 ]
 
 FALLBACK_POPULAR_FREE = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "google/gemma-4-31b-it:free",
-    "qwen/qwen3-coder:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free"
+    "meta/llama-3.1-8b-instruct",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "meta/llama-3.2-11b-vision-instruct",
+    "nvidia/nemotron-nano-12b-v2-vl",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openai/gpt-oss-20b:free",
+    "openrouter/free"
 ]
 
 
@@ -210,7 +213,7 @@ Responde ÚNICAMENTE en formato JSON plano sin bloques de código markdown:
     payload = {
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 80,
+        "max_tokens": 300,
         "temperature": 0.0,
     }
     
@@ -224,7 +227,7 @@ Responde ÚNICAMENTE en formato JSON plano sin bloques de código markdown:
     
     for attempt in range(max_retries):
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=8)
+            r = requests.post(url, headers=headers, json=payload, timeout=10)
             if r.status_code == 200:
                 try:
                     data = r.json()

@@ -8,15 +8,18 @@ Para cambiar los modelos utilizados en TODOS los scripts, sólo edita BASE_LLM_M
 Los modelos se ordenan dinámicamente en tiempo de ejecución según su rendimiento
 histórico registrado en ris.log_llm_ranking.
 
-Verificado: 2026-06-16  (via update_and_validate_models.py)
-Modelos vigentes y probados:
-  - google/gemma-4-31b-it:free                          ✅ OK (No reasoning, muy rápido)
-  - nvidia/nemotron-3-ultra-550b-a55b:free              ✅ OK (No reasoning, 550B)
-  - openai/gpt-oss-120b:free                            ✅ OK (No reasoning, 120B)
-  - openrouter/owl-alpha                                ✅ OK (Routing inteligente)
-  - nvidia/nemotron-3-super-120b-a12b:free              ✅ OK (No reasoning, 120B)
-  - qwen/qwen3-235b-a22b-thinking-2507                  ✅ OK (Reasoning)
-  - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free  ✅ OK (Reasoning)
+# Verificado: 2026-08-16 (10 modelos activos y validados)
+# Modelos vigentes y probados (5 Nvidia NIM + 5 OpenRouter Free):
+#   - meta/llama-3.1-8b-instruct                         ✅ OK (Nvidia NIM, 1.07s)
+#   - nvidia/llama-3.3-nemotron-super-49b-v1             ✅ OK (Nvidia NIM, 1.86s)
+#   - nvidia/nemotron-nano-12b-v2-vl:free                ✅ OK (OpenRouter Free, 1.41s)
+#   - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning      ✅ OK (Nvidia NIM, 2.85s)
+#   - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free ✅ OK (OpenRouter Free, 3.35s)
+#   - meta/llama-3.2-11b-vision-instruct                 ✅ OK (Nvidia NIM, 1.35s)
+#   - nvidia/nemotron-nano-12b-v2-vl                     ✅ OK (Nvidia NIM, 1.70s)
+#   - nvidia/nemotron-3-super-120b-a12b:free             ✅ OK (OpenRouter Free, 2.92s)
+#   - openai/gpt-oss-20b:free                            ✅ OK (OpenRouter Free, 100% match)
+#   - openrouter/free                                    ✅ OK (OpenRouter Free Router)
 """
 
 import os
@@ -40,7 +43,7 @@ def get_llm_request_params(model_id):
         project_root = Path(__file__).parent.parent.parent
         env_path = project_root / ".env"
         if env_path.exists():
-            load_dotenv(dotenv_path=env_path)
+            load_dotenv(dotenv_path=env_path, override=True)
     except Exception:
         pass
 
@@ -60,21 +63,19 @@ def get_llm_request_params(model_id):
     return "https://openrouter.ai/api/v1", openrouter_key, "openrouter"
 
 # ---------------------------------------------------------------------------
-# Lista BASE de modelos LLM (orden de edición manual / fallback estático)
-#
-# Esta es la lista que edita la GUI y update_and_validate_models.py.
-# El orden aquí es el orden de FALLBACK cuando la DB no está disponible.
-# En ejecución normal, los scripts llaman a get_ranked_models() que
-# reordena esta lista según el rendimiento histórico en log_llm_ranking.
+# Lista BASE de modelos LLM (10 modelos: 5 Nvidia NIM y 5 OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "deepseek-ai/deepseek-v4-flash",                          # Primario - Validado OK
-   "google/diffusiongemma-26b-a4b-it",                       # Fallback 1 - Validado OK
-   "google/gemma-4-26b-a4b-it:free",                         # Fallback 2 - Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 3 - Validado OK
-   "abacusai/dracarys-llama-3.1-70b-instruct",               # Fallback 4 - Validado OK
-   "deepseek-ai/deepseek-v4-pro",                            # Fallback 5 - Validado OK
-   "tencent/hy3:free",                                       # Fallback 6 - Validado OK
+   "meta/llama-3.1-8b-instruct",                             # Primario — Validado OK
+   "nvidia/llama-3.3-nemotron-super-49b-v1",                 # Fallback 1 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Fallback 2 — Validado OK
+   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 3 — Validado OK
+   "nvidia/nemotron-nano-12b-v2-vl",                         # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 5 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 6 — Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 7 — Validado OK
+   "openrouter/free",                                        # Fallback 8 — Validado OK
+   "stealth/ox-alpha",                                       # Fallback 9 — Validado OK
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

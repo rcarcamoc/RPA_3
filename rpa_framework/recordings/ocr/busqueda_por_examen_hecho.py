@@ -63,7 +63,7 @@ from utils.logging_setup import setup_logging
 from ocr.engine import OCREngine
 from PIL import Image
 from utils.telegram_manager import enviar_alerta_todos
-from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT
+from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT, get_llm_request_params
 
 try:
     from recordings.ocr.utilidades.preproceso_ocr import preprocess_high_fidelity, normalize_coordinates
@@ -271,10 +271,13 @@ RESPONDE SOLO EN FORMATO JSON:
             for current_model in models:
                 logger.info(f"🤖 Modelo: {current_model} | TARGET: '{target_diag}' | OCR: '{ocr_text}'")
                 try:
+                    base_url, target_key, provider = get_llm_request_params(current_model)
+                    if not target_key:
+                        target_key = OPENROUTER_API_KEY
                     response = requests.post(
-                        f"{OPENROUTER_BASE_URL}/chat/completions",
+                        f"{base_url}/chat/completions",
                         headers={
-                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                            "Authorization": f"Bearer {target_key}",
                             "Content-Type": "application/json",
                             "HTTP-Referer": "https://rpa-framework.local"
                         },
@@ -283,7 +286,6 @@ RESPONDE SOLO EN FORMATO JSON:
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": LLM_DEFAULT_TEMPERATURE,
                             "max_tokens": LLM_DEFAULT_MAX_TOKENS,
-                            "reasoning": {"exclude": True}
                         },
                         timeout=LLM_DEFAULT_TIMEOUT
                     )

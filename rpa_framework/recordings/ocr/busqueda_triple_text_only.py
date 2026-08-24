@@ -57,7 +57,7 @@ from utils.telegram_manager import enviar_alerta_todos
 from utils.llm_config import (
     OPENROUTER_BASE_URL, BASE_LLM_MODELS, LLM_MODELS,
     LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT,
-    get_ranked_models, log_llm_result,
+    get_ranked_models, log_llm_result, get_llm_request_params,
 )
 
 # Importar utilidades de preprocesamiento
@@ -571,10 +571,13 @@ RESPONDE SOLO EN FORMATO JSON:
                 return None
 
             try:
+                base_url, target_key, provider = get_llm_request_params(model_id)
+                if not target_key:
+                    target_key = OPENROUTER_API_KEY
                 response = requests.post(
-                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    f"{base_url}/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Authorization": f"Bearer {target_key}",
                         "Content-Type":  "application/json",
                         "HTTP-Referer":  "https://rpa-framework.local",
                     },
@@ -583,7 +586,6 @@ RESPONDE SOLO EN FORMATO JSON:
                         "messages":    [{"role": "user", "content": prompt}],
                         "temperature": LLM_DEFAULT_TEMPERATURE,
                         "max_tokens":  LLM_DEFAULT_MAX_TOKENS,
-                        "reasoning":   {"exclude": True},
                     },
                     timeout=LLM_DEFAULT_TIMEOUT,
                 )

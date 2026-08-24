@@ -23,7 +23,7 @@ import time
 # Agregar al sys.path para imports globales
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from utils.telegram_manager import enviar_alerta_todos
-from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT
+from utils.llm_config import OPENROUTER_BASE_URL, LLM_MODELS, LLM_DEFAULT_TEMPERATURE, LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TIMEOUT, get_llm_request_params
 
 # Cargar variables de entorno
 load_dotenv()
@@ -161,10 +161,13 @@ def _consultar_modelo_llm(id_registro: int, current_model: str, prompt: str, lis
         start_time = time.time()
         try:
             logger.info(f"[{current_model}] Intentando (Intento {intento + 1}/{retries + 1})...")
+            base_url, target_key, provider = get_llm_request_params(current_model)
+            if not target_key:
+                target_key = OPENROUTER_API_KEY
             response = requests.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {target_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": "https://rpa-framework.local"
                 },
@@ -173,7 +176,6 @@ def _consultar_modelo_llm(id_registro: int, current_model: str, prompt: str, lis
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": LLM_DEFAULT_TEMPERATURE,
                     "max_tokens": LLM_DEFAULT_MAX_TOKENS,
-                    "reasoning": {"exclude": True}
                 },
                 timeout=LLM_DEFAULT_TIMEOUT
             )
