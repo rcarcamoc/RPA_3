@@ -10,6 +10,8 @@ PyQt6-Charts>=6.4.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 pillow>=10.0.0
+pystray>=0.19.5
+
 
 # OCR Dependencies
 easyocr>=1.7.0

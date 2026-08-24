@@ -56,6 +56,7 @@ class WorkflowExecutor:
         self.logger = WorkflowLogger(log_path)
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
+        self._external_stop = False  # True solo cuando stop() es llamado por el usuario
         self.active_process = None
         self.nested_executor = None
         
@@ -115,6 +116,13 @@ class WorkflowExecutor:
             self.logger.log(f"▶️ Iniciando ejecución: {self.workflow.name}")
             self.logger.log("=" * 60)
             
+            # Verificar y desactivar Bloq Mayús si está activo
+            try:
+                from utils.keyboard_utils import ensure_capslock_off
+                ensure_capslock_off(self.logger.log)
+            except Exception as cap_e:
+                self.logger.log(f"⚠️ No se pudo verificar estado de Bloq Mayús: {cap_e}")
+
             # Obtener nodo inicial
             current_node = self.workflow.get_start_node()
             
@@ -199,6 +207,7 @@ class WorkflowExecutor:
     def stop(self):
         """Detiene la ejecución del workflow"""
         self.should_stop = True
+        self._external_stop = True  # Marcar como stop externo (usuario/Telegram)
         self.logger.log("⏹️ Deteniendo workflow...")
         
         if self.screen_recorder:
@@ -671,9 +680,13 @@ class WorkflowExecutor:
 
             finally:
                 # Si algo interno puso should_stop=True, lo revertimos
+                # PERO si fue un stop externo (usuario/Telegram), lo respetamos
                 if self.should_stop and not snapshot_should_stop:
-                    self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
-                    self.should_stop = False
+                    if self._external_stop:
+                        self.logger.log("⏹️ Stop externo detectado dentro del loop. Respetando detención del usuario.")
+                    else:
+                        self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
+                        self.should_stop = False
 
             idx += 1
 

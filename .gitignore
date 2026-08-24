@@ -23,3 +23,12 @@ tmp/
 *.txt
 *.ico
 *.bat
+
+# Media & runtime
+*.mp4
+*.avi
+*.mkv
+*.lock
+rpa_framework/recordings/error_recordings/
+rpa_framework/config/battery_state.json
+rpa_framework/config/llm_verification_log.json

@@ -57,6 +57,11 @@ def get_log_tail(n: int = 15) -> str:
         return f"❌ Error leyendo log: {e}"
 
 def get_db_connection():
+    try:
+        from utils.mysql_auto_starter import ensure_mysql_running
+        ensure_mysql_running()
+    except Exception:
+        pass
     return mysql.connector.connect(
         host="localhost",
         user="root",

@@ -92,6 +92,7 @@ from pywinauto import Application, findwindows
 from core.executor import ActionExecutor
 from core.action import Action, ActionType
 from utils.logging_setup import setup_logging
+from utils.keyboard_utils import ensure_capslock_off
 
 # Configuración de base de datos MySQL (opcional para tracking)
 try:
@@ -295,6 +296,12 @@ class {class_name}Automation:
         if not self.setup():
             return {{"status": "FAILED", "reason": "Setup failed"}}
         
+        # Verificar y desactivar Bloq Mayús si está activo
+        try:
+            ensure_capslock_off(logger.info)
+        except Exception as cap_e:
+            logger.warning(f"No se pudo verificar el estado de Bloq Mayús: {{cap_e}}")
+
         results = {{
             "session_id": self.session_id,
             "status": "RUNNING",
