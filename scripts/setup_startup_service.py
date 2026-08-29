@@ -14,7 +14,7 @@ from pathlib import Path
 
 TASK_NAME = "RPA_Servicio_Notificaciones_Telegram"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VENV_PYTHONW = PROJECT_ROOT / "venv" / "Scripts" / "pythonw.exe"
+VENV_PYTHON = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
 BOT_SCRIPT = PROJECT_ROOT / "rpa_framework" / "servicio_bot_telegram.py"
 BAT_SCRIPT = PROJECT_ROOT / "Iniciar_Servicio_Notificaciones.bat"
 
@@ -27,52 +27,64 @@ def get_startup_folder():
     return None
 
 def install_service():
-    print("🚀 Configurando inicio automático del servicio de notificaciones...")
+    print("🚀 Configurando inicio del servicio de notificaciones (modo visible)...")
     
-    pythonw_path = str(VENV_PYTHONW) if VENV_PYTHONW.exists() else "pythonw.exe"
+    python_path = str(VENV_PYTHON) if VENV_PYTHON.exists() else "python.exe"
     bot_path = str(BOT_SCRIPT)
     bat_path = str(BAT_SCRIPT)
     
-    # 1. Programador de Tareas de Windows (schtasks)
-    cmd = [
-        "schtasks", "/Create",
-        "/TN", TASK_NAME,
-        "/TR", f'"{pythonw_path}" "{bot_path}"',
-        "/SC", "ONLOGON",
-        "/F"
-    ]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-        if res.returncode == 0:
-            print("  ✅ Tarea programada registrada exitosamente en Windows (schtasks).")
-        else:
-            print(f"  ⚠️ Advertencia en schtasks: {res.stderr.strip()}")
-    except Exception as e:
-        print(f"  ⚠️ Error al intentar registrar tarea programada: {e}")
+    # 1. Programador de Tareas de Windows (vía PowerShell create_scheduled_task.ps1 o schtasks fallback)
+    ps_script = PROJECT_ROOT / "scripts" / "create_scheduled_task.ps1"
+    if ps_script.exists():
+        try:
+            ps_cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)]
+            res = subprocess.run(ps_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if res.returncode == 0:
+                print("  ✅ Tarea programada registrada exitosamente (PowerShell).")
+            else:
+                print(f"  ⚠️ Advertencia al ejecutar create_scheduled_task.ps1: {res.stderr.strip() or res.stdout.strip()}")
+        except Exception as e:
+            print(f"  ⚠️ Error invocando create_scheduled_task.ps1: {e}")
+    else:
+        cmd = [
+            "schtasks", "/Create",
+            "/TN", TASK_NAME,
+            "/TR", f'"{python_path}" "{bot_path}"',
+            "/SC", "ONLOGON",
+            "/F"
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if res.returncode == 0:
+                print("  ✅ Tarea programada registrada exitosamente en Windows (schtasks).")
+            else:
+                print(f"  ⚠️ Advertencia en schtasks: {res.stderr.strip()}")
+        except Exception as e:
+            print(f"  ⚠️ Error al intentar registrar tarea programada: {e}")
 
-    # 2. Carpeta de Inicio de Windows (shell:startup) mediante VBS (ejecución invisible)
+    # 2. Carpeta de Inicio de Windows (shell:startup) mediante VBS (ejecución visible en pantalla)
     startup_dir = get_startup_folder()
     if startup_dir:
         vbs_file = startup_dir / "RPA_Servicio_Notificaciones.vbs"
         vbs_content = f'Set WshShell = CreateObject("WScript.Shell")\n' \
-                      f'WshShell.Run """{pythonw_path}"" ""{bot_path}""", 0, False\n'
+                      f'WshShell.Run """{python_path}"" ""{bot_path}""", 1, False\n'
         try:
             with open(vbs_file, "w", encoding="utf-8") as f:
                 f.write(vbs_content)
-            print(f"  ✅ Script de inicio VBS creado en Startup: {vbs_file}")
+            print(f"  ✅ Script de inicio VBS creado en Startup (modo visible): {vbs_file}")
         except Exception as e:
             print(f"  ⚠️ Error al crear script en carpeta Startup: {e}")
 
     # 3. Registro de Windows (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run)
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
-        winreg.SetValueEx(key, "RPA_Servicio_Notificaciones", 0, winreg.REG_SZ, f'"{pythonw_path}" "{bot_path}"')
+        winreg.SetValueEx(key, "RPA_Servicio_Notificaciones", 0, winreg.REG_SZ, f'"{python_path}" "{bot_path}"')
         winreg.CloseKey(key)
-        print("  ✅ Clave agregada al Registro de Windows (HKCU Run).")
+        print("  ✅ Clave agregada al Registro de Windows (HKCU Run - modo visible).")
     except Exception as e:
         print(f"  ⚠️ Error al actualizar Registro de Windows: {e}")
 
-    print("\n🎉 ¡El servicio de notificaciones quedará activo automáticamente al iniciar Windows!")
+    print("\n🎉 ¡El servicio de notificaciones quedará activo visiblemente al iniciar Windows!")
 
 def remove_service():
     print("🗑️ Removiendo inicio automático del servicio de notificaciones...")

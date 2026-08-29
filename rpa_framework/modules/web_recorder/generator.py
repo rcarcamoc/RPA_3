@@ -189,6 +189,10 @@ class WebAutomation:
                     print("[INFO] Lanzamiento estándar exitoso.", flush=True)
 
             self.wait = WebDriverWait(self.driver, 10)
+            try:
+                self.driver.maximize_window()
+            except Exception:
+                pass
             self.screenshots_dir = Path.cwd() / "screenshots_results"
             self.screenshots_dir.mkdir(exist_ok=True)
             print("[INFO] Configuración de navegador completada.", flush=True)

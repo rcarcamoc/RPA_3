@@ -120,7 +120,8 @@ def cerrar_todos_carestream():
     ps_cmd = 'Get-Process | Where-Object { $_.Description -match "Carestream Radiology Client|Carestream Vue PACS|Carestream RIS" -or $_.MainWindowTitle -match "Carestream" } | Where-Object { $_.Name -notmatch "svchost|carestream_host" } | Stop-Process -Force'
     try:
         import subprocess
-        subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+        cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, creationflags=cflags)
     except Exception as e:
         logger.warning(f"Error al ejecutar powershell stop-process: {e}")
 

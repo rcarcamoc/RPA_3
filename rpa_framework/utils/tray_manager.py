@@ -50,9 +50,18 @@ def get_rpa_summary_info():
 
         conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
         cursor = conn.cursor(dictionary=True)
-        today = datetime.datetime.now().strftime("%Y-%m-%d 00:00:00")
-        
-        cursor.execute("SELECT estado, COUNT(*) as cant FROM registro_acciones WHERE inicio >= %s GROUP BY estado", (today,))
+        query = """
+        SELECT estado, COUNT(*) as cant 
+        FROM registro_acciones 
+        WHERE inicio >= %s 
+          AND (
+              (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS'))
+              OR numero_documento IS NOT NULL
+          )
+          AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%') OR numero_documento IS NOT NULL)
+        GROUP BY estado
+        """
+        cursor.execute(query, (today,))
         rows = cursor.fetchall()
         for r in rows:
             cant = r.get("cant", 0)
@@ -76,18 +85,23 @@ def get_rpa_summary_info():
 
 def build_tooltip_text(info):
     """Genera el texto multilínea que se muestra al pasar el puntero sobre el icono."""
-    if info["is_running"]:
-        wf_str = f"▶️ Flujo: {info['workflow_name']}"
+    if info.get("is_running"):
+        wf = info.get("workflow_name", "En ejecución")
+        wf_str = f"▶️ {wf}" if len(wf) <= 25 else f"▶️ {wf[:22]}..."
     else:
         wf_str = "⏸️ Estado: Inactivo (En espera)"
         
-    if info["total_hoy"] > 0:
-        casos_str = f"📊 Casos hoy: {info['total_hoy']} (✅{info['ok_hoy']} | ❌{info['err_hoy']})"
+    total = info.get("total_hoy", 0)
+    if total > 0:
+        casos_str = f"📊 Casos: {total} (✅{info.get('ok_hoy', 0)} | ❌{info.get('err_hoy', 0)})"
     else:
         casos_str = "📊 Casos hoy: 0"
         
     llm_str = get_llm_status_summary()
-    return f"Bot RPA - Atrys\n{wf_str}\n{casos_str}\n{llm_str}"
+    tip = f"Bot RPA - Atrys\n{wf_str}\n{casos_str}\n{llm_str}"
+    if len(tip) > 127:
+        tip = tip[:124] + "..."
+    return tip
 
 def create_robot_icon(status='idle'):
     """
@@ -217,16 +231,27 @@ class SystemTrayManager:
 
     def update_icon(self):
         if self.icon:
-            info = get_rpa_summary_info()
-            if notificaciones_pausadas():
-                status = 'paused'
-            elif info['is_running']:
-                status = 'active'
-            else:
-                status = 'idle'
-                
-            self.icon.icon = create_robot_icon(status)
-            self.icon.title = build_tooltip_text(info)
+            try:
+                info = get_rpa_summary_info()
+                if notificaciones_pausadas():
+                    status = 'paused'
+                elif info.get('is_running', False):
+                    status = 'active'
+                else:
+                    status = 'idle'
+                    
+                self.icon.icon = create_robot_icon(status)
+                self.icon.title = build_tooltip_text(info)
+            except Exception as e:
+                pass
+
+    def notify(self, message: str, title: str = "🤖 Bot RPA - Atrys"):
+        """Muestra una burbuja o notificación emergente desde el icono de la bandeja."""
+        if self.icon:
+            try:
+                self.icon.notify(message, title)
+            except Exception as e:
+                print(f"Error mostrando notificación tray: {e}")
 
     def _start_auto_update_loop(self):
         def loop():

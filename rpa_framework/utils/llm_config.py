@@ -66,16 +66,16 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM (10 modelos: 5 Nvidia NIM y 5 OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "meta/llama-3.1-8b-instruct",                             # Primario — Validado OK
-   "nvidia/llama-3.3-nemotron-super-49b-v1",                 # Fallback 1 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Fallback 2 — Validado OK
-   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 3 — Validado OK
-   "nvidia/nemotron-nano-12b-v2-vl",                         # Fallback 4 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 5 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 6 — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 7 — Validado OK
-   "openrouter/free",                                        # Fallback 8 — Validado OK
-   "stealth/ox-alpha",                                       # Fallback 9 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Primario — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
+   "nvidia/nemotron-3-nano-30b-a3b",                         # Fallback 2 — Validado OK
+   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 3 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 5 — Validado OK
+   "openrouter/free",                                        # Fallback 6 — Validado OK
+   "minimax/minimax-m3:free",                                # Fallback 7 — Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 8 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 9 — Validado OK
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

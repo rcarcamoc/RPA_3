@@ -23,6 +23,27 @@ try:
 except ImportError:
     pass
 
+def get_python_exe() -> str:
+    """Retorna la ruta al ejecutable python (preferiendo pythonw.exe para evitar que aparezcan consolas negras)."""
+    exe = sys.executable
+    if "pythonw.exe" in exe.lower():
+        return exe
+    cand = exe.lower().replace("python.exe", "pythonw.exe")
+    if os.path.exists(cand):
+        return cand
+    return exe
+
+def _get_silent_process_flags():
+    """Retorna creationflags y startupinfo configurados para ocultar totalmente consolas de Windows."""
+    creationflags = 0
+    startupinfo = None
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+    return creationflags, startupinfo
+
 
 class WorkflowExecutor:
     """Ejecutor de workflows con soporte para IF/ELSE y LOOP"""
@@ -101,6 +122,16 @@ class WorkflowExecutor:
             }
         """
         recorder = None
+        keep_awake_cm = None
+        if not self.is_sub_workflow:
+            try:
+                from utils.keep_alive import keep_system_awake
+                keep_awake_cm = keep_system_awake(keep_display=True)
+                keep_awake_cm.__enter__()
+            except Exception as ka_e:
+                self.logger.log(f"⚠️ No se pudo inicializar Keep-Alive: {ka_e}")
+
+        recorder = None
         if self.enable_recording and not self.is_sub_workflow:
             try:
                 from utils.screen_recorder import ScreenRecorder
@@ -108,7 +139,10 @@ class WorkflowExecutor:
                 if recorder.start():
                     self.screen_recorder = recorder
                     self.logger.log("🎥 Grabación de pantalla optimizada (6 FPS, 720p) iniciada en segundo plano")
+                else:
+                    recorder = None
             except Exception as rec_e:
+                recorder = None
                 self.logger.log(f"⚠️ No se pudo iniciar el grabador de pantalla: {rec_e}")
 
         try:
@@ -203,6 +237,12 @@ class WorkflowExecutor:
                 "error": error_msg,
                 "video_path": saved_video_path
             }
+        finally:
+            if keep_awake_cm:
+                try:
+                    keep_awake_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
     
     def stop(self):
         """Detiene la ejecución del workflow"""
@@ -318,6 +358,7 @@ class WorkflowExecutor:
                 # Usamos shell=True por compatibilidad con comandos complejos de Windows
                 full_output = []
                 process = None
+                creationflags, startupinfo = _get_silent_process_flags()
                 try:
                     process = subprocess.Popen(
                         node.command,
@@ -329,7 +370,9 @@ class WorkflowExecutor:
                         env=env,
                         bufsize=1,
                         universal_newlines=True,
-                        errors='replace'
+                        errors='replace',
+                        creationflags=creationflags,
+                        startupinfo=startupinfo
                     )
                     self.active_process = process
                     
@@ -442,7 +485,7 @@ class WorkflowExecutor:
             self.logger.log(f"   Ruta absoluta: {script_path}")
 
             # Ejecutar script con Popen para streaming
-            cmd = [sys.executable, str(script_path)]
+            cmd = [get_python_exe(), str(script_path)]
             self.logger.log(f"   Comando a ejecutar: {cmd}")
             
             # Use root directory (parent of rpa_framework) as CWD if possible
@@ -452,6 +495,7 @@ class WorkflowExecutor:
             else:
                 exec_cwd = current_cwd
 
+            creationflags, startupinfo = _get_silent_process_flags()
             self.active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -462,7 +506,9 @@ class WorkflowExecutor:
                 env=env,
                 cwd=str(exec_cwd),
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                creationflags=creationflags,
+                startupinfo=startupinfo
             )
             process = self.active_process
             
@@ -511,13 +557,24 @@ class WorkflowExecutor:
                 self.logger.log(f"❌ Error en script (código {returncode})")
                 
                 try:
-                    # Capturar la última línea de la salida como posible mensaje de error, si lo hay
                     ultimo_log = "\n".join(full_stdout[-3:]) if full_stdout else "Sin salida devuelta."
-                    # El propio script individual suele enviar su alerta detallada.
-                    # Mantenemos logs de esto en la consola, pero omitimos un mensaje extra en telegram
-                    # enviar_alerta_todos(f"❌ <b>Error en Script</b>\nNodo: {node.label}\nScript falló con código {returncode}\nUltimos logs:\n<code>{ultimo_log}</code>")
+                    # Respaldo: si el script crashó antes de su error_handler, asegurar notificación
+                    try:
+                        conn_chk = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=3)
+                        cur_chk = conn_chk.cursor(dictionary=True)
+                        cur_chk.execute("SELECT id, estado, estado_notificacion FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
+                        rec_chk = cur_chk.fetchone()
+                        if rec_chk and rec_chk.get('estado_notificacion') is None:
+                            rec_id = rec_chk['id']
+                            cur_chk.execute("UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE id = %s", (f"[{node.label}] Error código {returncode}: {ultimo_log[:300]}", rec_id))
+                            conn_chk.commit()
+                            enviar_alerta_todos(f"🚨 <b>ERROR en {node.label}</b>\n\n📋 <b>Problema:</b>\nScript terminó con código de error {returncode}.\n\n<code>{ultimo_log}</code>", record_id=rec_id)
+                        cur_chk.close()
+                        conn_chk.close()
+                    except Exception as chk_e:
+                        self.logger.log(f"⚠️ Error en verificación de fallback: {chk_e}")
                 except Exception as tel_e:
-                    self.logger.log(f"⚠️ Error al procesar ultimo log: {tel_e}")
+                    self.logger.log(f"⚠️ Error al procesar alerta de respaldo: {tel_e}")
                 
                 if getattr(node, 'on_error', 'stop') == 'stop':
                     raise RuntimeError(f"El asistente no pudo completar la tarea en la fase '{node.label}'.")
@@ -751,8 +808,9 @@ class WorkflowExecutor:
         else:
             exec_cwd = current_cwd
 
+        creationflags, startupinfo = _get_silent_process_flags()
         process = subprocess.Popen(
-            [sys.executable, node.script],
+            [get_python_exe(), node.script],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -761,7 +819,9 @@ class WorkflowExecutor:
             env=env,
             cwd=str(exec_cwd),
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            creationflags=creationflags,
+            startupinfo=startupinfo
         )
         self.active_process = process
         

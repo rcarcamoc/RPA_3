@@ -12,6 +12,13 @@
     <LogonTrigger>
       <Enabled>true</Enabled>
     </LogonTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-08-01T08:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -34,13 +41,13 @@
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
+    <WakeToRun>true</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
+    <Priority>4</Priority>
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>c:\Desarrollo\RPA_3\venv\Scripts\pythonw.exe</Command>
+      <Command>c:\Desarrollo\RPA_3\venv\Scripts\python.exe</Command>
       <Arguments>c:\Desarrollo\RPA_3\rpa_framework\servicio_bot_telegram.py</Arguments>
       <WorkingDirectory>c:\Desarrollo\RPA_3</WorkingDirectory>
     </Exec>

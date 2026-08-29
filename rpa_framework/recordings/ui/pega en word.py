@@ -678,7 +678,8 @@ class Test1Automation:
                                 script_ext = r"c:\Desarrollo\RPA_3\rpa_framework\recordings\ui\patologia_critica,_NO.py"
                             
                             import subprocess
-                            subprocess.run([sys.executable, script_ext], check=False)
+                            cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                            subprocess.run([sys.executable, script_ext], check=False, creationflags=cflags)
                         except Exception as e_cond:
                             logger.error(f"⚠️ Error en ejecución condicional: {e_cond}")
                     # -------------------------------------

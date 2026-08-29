@@ -451,6 +451,11 @@ class DashboardPanel(QWidget):
                     url as pdf
                 FROM registro_acciones
                 WHERE DATE(inicio) BETWEEN %s AND %s
+                  AND (
+                      (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS'))
+                      OR numero_documento IS NOT NULL
+                  )
+                  AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%') OR numero_documento IS NOT NULL)
             """
             
             cursor.execute(base_query, (date_from, date_to))

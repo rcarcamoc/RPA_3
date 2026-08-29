@@ -23,9 +23,16 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-# Importar para alertas de telegram
+# Importar para alertas y envío de fotos por Telegram
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from utils.telegram_manager import enviar_alerta_todos
+try:
+    from utils.telegram_manager import enviar_alerta_todos, enviar_foto_todos
+except ImportError:
+    try:
+        from rpa_framework.utils.telegram_manager import enviar_alerta_todos, enviar_foto_todos
+    except ImportError:
+        enviar_alerta_todos = None
+        enviar_foto_todos = None
 
 try:
     from selenium import webdriver
@@ -83,29 +90,8 @@ class WebAutomation:
             return None
 
     def db_update_node(self, status='En Proceso'):
-        """Updates the current 'En Proceso' record with current node and timestamp"""
-        conn = self._get_db_connection()
-        if not conn:
-            return
-
-        try:
-            cursor = conn.cursor()
-            
-            # Update the record that is 'En Proceso'
-            query = """
-            UPDATE registro_acciones 
-            SET `update` = NOW(), ultimo_nodo = %s, estado = %s 
-            WHERE estado = 'En Proceso'
-            """
-            cursor.execute(query, (self.script_name, status))
-            conn.commit()
-            print(f"[DB] Updated node to '{self.script_name}' (Status: {status})")
-            
-        except Exception as e:
-            print(f"[ERROR] Database update failed: {e}")
-        finally:
-            if conn and conn.is_connected():
-                conn.close()
+        """No actualiza registro_acciones porque el conteo de casos no es una ejecución clínica."""
+        pass
 
     def db_guardar_casos_pendientes(self, total: int, cliente: str = 'integramedica', observacion: str = None):
         """Guarda en la base de datos la cantidad de casos pendientes encontrados con fecha y hora actual"""
@@ -196,6 +182,10 @@ class WebAutomation:
                     print("[INFO] Lanzamiento estándar exitoso.", flush=True)
 
             self.wait = WebDriverWait(self.driver, 10)
+            try:
+                self.driver.maximize_window()
+            except Exception:
+                pass
             self.screenshots_dir = Path.cwd() / "screenshots_results"
             self.screenshots_dir.mkdir(exist_ok=True)
             print("[INFO] Configuración de navegador completada.", flush=True)
@@ -324,6 +314,55 @@ class WebAutomation:
         print("[WARNING] No se pudo encontrar 'Total de registros = X' dentro del tiempo límite.")
         return None
 
+    def capturar_y_enviar_telegram(self, total_registros: Optional[int] = None):
+        """
+        Asegura que el navegador esté maximizado, toma una captura de pantalla del navegador
+        y la envía a Telegram antes de cerrar la ventana de Chrome.
+        """
+        if not self.driver:
+            print("[WARNING] No hay instancia de navegador activa para tomar la captura.", flush=True)
+            return
+
+        try:
+            print("[INFO] Asegurando que el navegador esté maximizado para la captura...", flush=True)
+            try:
+                self.driver.maximize_window()
+                time.sleep(1.0)  # Pausa para permitir que la interfaz se renderice completamente maximizada
+            except Exception as e_max:
+                print(f"[WARNING] Error al maximizar la ventana del navegador: {e_max}", flush=True)
+
+            # Directorio para guardar capturas
+            screenshots_dir = Path(__file__).resolve().parent / "screenshots_results"
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = screenshots_dir / f"captura_conteo_ris_{timestamp}.png"
+
+            print(f"[INFO] Guardando captura de pantalla en: {screenshot_path}", flush=True)
+            self.driver.save_screenshot(str(screenshot_path))
+
+            if screenshot_path.exists() and screenshot_path.stat().st_size > 0:
+                print("[INFO] Captura generada correctamente. Enviando a Telegram...", flush=True)
+                total_str = str(total_registros) if total_registros is not None else "No detectado"
+                fecha_hora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                caption = (
+                    f"📸 <b>Captura RIS - Conteo de Casos Pendientes</b>\n\n"
+                    f"🔢 <b>Total de registros:</b> <code>{total_str}</code>\n"
+                    f"🏥 <b>Cliente:</b> Integramédica\n"
+                    f"🕒 <b>Fecha y hora:</b> {fecha_hora}"
+                )
+
+                if enviar_foto_todos:
+                    enviar_foto_todos(str(screenshot_path), caption=caption)
+                    print("[INFO] Captura enviada exitosamente a Telegram.", flush=True)
+                else:
+                    print("[WARNING] No se pudo enviar a Telegram: 'enviar_foto_todos' no disponible.", flush=True)
+            else:
+                print("[WARNING] El archivo de captura no se generó o se encuentra vacío.", flush=True)
+
+        except Exception as e:
+            print(f"[ERROR] Error al capturar pantalla o enviar a Telegram: {e}", flush=True)
+
     def run(self, start_url: str = None) -> Optional[int]:
         """Main execution flow"""
         total_registros = None
@@ -408,6 +447,9 @@ class WebAutomation:
             else:
                 self.db_guardar_casos_pendientes(total=0, cliente='integramedica', observacion='No se pudo detectar el total en pantalla')
 
+            # Maximizar ventana, tomar captura de pantalla del navegador y enviarla a Telegram
+            self.capturar_y_enviar_telegram(total_registros)
+
             print("[INFO] Automation completed successfully")
             # Inform success
             self.db_update_node(status='En Proceso')
@@ -424,13 +466,33 @@ class WebAutomation:
             self._cleanup()
     
     def _cleanup(self):
-        """Cleans up resources"""
+        """Cleans up resources and closes exclusively the Chrome RPA instance"""
         if self.driver:
             try:
-                # self.driver.quit() # Commented out to keep browser open as requested
-                print("[INFO] Automation finished. Keeping browser open.")
-            except:
-                pass
+                print("[INFO] Cerrando ventana de Chrome RPA tras conteo de casos...", flush=True)
+                self.driver.quit()
+                self.driver = None
+            except Exception as e:
+                print(f"[WARNING] Error al ejecutar driver.quit(): {e}", flush=True)
+
+        # Asegurar cierre de procesos Chrome asociados al RPA sin afectar sesiones personales
+        try:
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    name = proc.info.get('name') or ''
+                    if 'chrome' in name.lower():
+                        cmdline = ' '.join(proc.info.get('cmdline') or [])
+                        if '9222' in cmdline or 'RPA_Remote_Profile' in cmdline:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except psutil.TimeoutExpired:
+                                proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception as e:
+            print(f"[WARNING] Error al limpiar procesos de Chrome RPA: {e}", flush=True)
 
 
 def main():

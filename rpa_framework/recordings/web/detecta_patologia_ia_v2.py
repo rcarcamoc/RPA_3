@@ -6,7 +6,7 @@ Utiliza ÚNICAMENTE análisis semántico con LLM (OpenRouter/DeepSeek).
 """
 
 import pandas as pd
-import sqlalchemy
+import mysql.connector
 import unicodedata
 import re
 import requests
@@ -88,24 +88,23 @@ def _buscar_en_lista_normalizado(texto: str, lista_patologias: List[str]) -> Opt
 
 
 
-def conectar_bd(config: dict) -> sqlalchemy.Engine:
+def conectar_bd(config: dict):
     """Establece conexión con la base de datos MySQL."""
-    connection_string = (
-        f"mysql+mysqlconnector://{config['user']}:{config['password']}"
-        f"@{config['host']}/{config['database']}"
-    )
     try:
-        engine = sqlalchemy.create_engine(connection_string)
-        with engine.connect() as conn:
-            conn.execute(sqlalchemy.text("SELECT 1"))
+        conn = mysql.connector.connect(
+            host=config['host'],
+            user=config['user'],
+            password=config['password'],
+            database=config['database']
+        )
         logger.info("[OK] Conexion a BD establecida")
-        return engine
+        return conn
     except Exception as e:
         logger.error(f"[ERROR] Error al conectar BD: {e}")
         raise
 
 
-def cargar_datos(engine: sqlalchemy.Engine) -> Tuple[pd.DataFrame, list]:
+def cargar_datos(conn) -> Tuple[pd.DataFrame, list]:
     """Carga diagnósticos y patologías de la BD."""
     logger.info("Cargando datos de BD...")
 
@@ -121,13 +120,20 @@ def cargar_datos(engine: sqlalchemy.Engine) -> Tuple[pd.DataFrame, list]:
     """
 
     try:
-        df_acciones = pd.read_sql(query_acciones, engine)
-        df_patologias = pd.read_sql(query_patologias, engine)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(query_acciones)
+        filas_acciones = cursor.fetchall()
+        df_acciones = pd.DataFrame(filas_acciones) if filas_acciones else pd.DataFrame(columns=['id', 'diagnostico'])
+
+        cursor.execute(query_patologias)
+        filas_pat = cursor.fetchall()
+        patologias = [r['nombre_patologia'] for r in filas_pat]
+        cursor.close()
 
         logger.info(f"[OK] {len(df_acciones)} diagnosticos cargados")
-        logger.info(f"[OK] {len(df_patologias)} patologias criticas cargadas")
+        logger.info(f"[OK] {len(patologias)} patologias criticas cargadas")
 
-        return df_acciones, df_patologias['nombre_patologia'].tolist()
+        return df_acciones, patologias
 
     except Exception as e:
         logger.error(f"[ERROR] Error al cargar datos: {e}")
@@ -438,7 +444,7 @@ def analizar_diagnosticos(df_acciones: pd.DataFrame, patologias: list) -> pd.Dat
 # ACTUALIZACIÓN DE BASE DE DATOS
 # ============================================================================
 
-def actualizar_registro_acciones(engine: sqlalchemy.Engine, df_resultados: pd.DataFrame) -> None:
+def actualizar_registro_acciones(conn, df_resultados: pd.DataFrame) -> None:
     """
     Actualiza la tabla ris.registro_acciones con los resultados detectados.
     Campos: patologia_critica_detectada, patologia_critica, update.
@@ -449,42 +455,38 @@ def actualizar_registro_acciones(engine: sqlalchemy.Engine, df_resultados: pd.Da
     actualizados = 0
     errores = 0
 
-    with engine.connect() as connection:
-        for idx, row in df_resultados.iterrows():
-            try:
-                id_registro = row['id']
-                patologia = row['patologia_detectada']
+    cursor = conn.cursor()
+    for idx, row in df_resultados.iterrows():
+        try:
+            id_registro = row['id']
+            patologia = row['patologia_detectada']
 
-                patologia_critica_flag = 'si' if pd.notna(patologia) else 'no'
-                patologia_val = patologia if pd.notna(patologia) else None
+            patologia_critica_flag = 'si' if pd.notna(patologia) else 'no'
+            patologia_val = str(patologia) if pd.notna(patologia) else None
 
-                query_update = """
-                UPDATE ris.registro_acciones
-                SET
-                    patologia_critica_detectada = :patologia,
-                    patologia_critica = :patologia_critica_flag,
-                    `update` = :fecha_hora
-                WHERE id = :id_registro AND estado = 'En Proceso'
-                """
+            query_update = """
+            UPDATE ris.registro_acciones
+            SET
+                patologia_critica_detectada = %s,
+                patologia_critica = %s,
+                `update` = %s
+            WHERE id = %s AND estado = 'En Proceso'
+            """
 
-                connection.execute(
-                    sqlalchemy.text(query_update),
-                    {
-                        'patologia': patologia_val,
-                        'patologia_critica_flag': patologia_critica_flag,
-                        'fecha_hora': fecha_actual,
-                        'id_registro': id_registro
-                    }
-                )
+            cursor.execute(
+                query_update,
+                (patologia_val, patologia_critica_flag, fecha_actual, int(id_registro))
+            )
 
-                actualizados += 1
-                logger.info(f"  → Registro ID {id_registro} actualizado: {patologia_val if patologia_val else '[SIN PATOLOGÍA]'}")
+            actualizados += 1
+            logger.info(f"  → Registro ID {id_registro} actualizado: {patologia_val if patologia_val else '[SIN PATOLOGÍA]'}")
 
-            except Exception as e:
-                logger.error(f"[ERROR] Actualizando registro ID {id_registro}: {e}")
-                errores += 1
+        except Exception as e:
+            logger.error(f"[ERROR] Actualizando registro ID {id_registro}: {e}")
+            errores += 1
 
-        connection.commit()
+    conn.commit()
+    cursor.close()
 
     logger.info(f"[OK] Actualizacion completada:")
     logger.info(f"  - Registros procesados: {actualizados}")
@@ -499,18 +501,18 @@ def main():
     logger.info("INICIANDO ANALISIS POR IA v3")
     logger.info("=" * 70)
 
-    engine = None
+    conn = None
 
     try:
-        engine = conectar_bd(DB_CONFIG)
-        df_acciones, patologias = cargar_datos(engine)
+        conn = conectar_bd(DB_CONFIG)
+        df_acciones, patologias = cargar_datos(conn)
 
         if df_acciones.empty:
             logger.info("No hay registros para procesar.")
             return
 
         df_resultados = analizar_diagnosticos(df_acciones, patologias)
-        actualizar_registro_acciones(engine, df_resultados)
+        actualizar_registro_acciones(conn, df_resultados)
 
         logger.info("\n" + "=" * 70)
         logger.info("[OK] PROCESO COMPLETADO")
@@ -518,15 +520,22 @@ def main():
 
     except Exception as e:
         try:
-            from rpa_framework.utils.error_handler import handle_error_and_exit
+            from utils.error_handler import handle_error_and_exit
             handle_error_and_exit("detecta_patologia_ia_v2.py", str(e))
-        except ImportError:
-            logger.error(f"\n[ERROR] CRITICO: {e}")
-            sys.exit(1)
+        except Exception:
+            try:
+                from rpa_framework.utils.error_handler import handle_error_and_exit
+                handle_error_and_exit("detecta_patologia_ia_v2.py", str(e))
+            except Exception:
+                logger.error(f"\n[ERROR] CRITICO: {e}")
+                sys.exit(1)
     finally:
-        if engine:
-            engine.dispose()
-            logger.info("[OK] Conexion cerrada")
+        if conn:
+            try:
+                conn.close()
+                logger.info("[OK] Conexion cerrada")
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

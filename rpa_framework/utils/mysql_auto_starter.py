@@ -64,9 +64,10 @@ def launch_wamp_manager():
         except Exception as e:
             print(f"⚠️ Error al lanzar WampManager vía ShellExecute: {e}")
 
+        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
-            subprocess.Popen([wamp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print("✅ Proceso WampManager lanzado.")
+            subprocess.Popen([wamp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creation_flags)
+            print("✅ Proceso WampManager lanzado en segundo plano.")
             return True
         except Exception as e:
             print(f"⚠️ Error al lanzar WampManager vía Popen: {e}")
@@ -78,7 +79,7 @@ def ensure_mysql_running(host="127.0.0.1", port=3306, max_wait_seconds=15):
     """
     Verifica si MySQL está activo.
     Si está caído, intenta iniciar el servicio WAMP (wampmysqld64), lanzar WampManager.exe 
-    o iniciar directamente el motor mysqld.exe de WAMP.
+    o iniciar directamente el motor mysqld.exe de WAMP en segundo plano (oculto).
     """
     if is_mysql_port_open(host, port):
         return True
@@ -104,13 +105,14 @@ def ensure_mysql_running(host="127.0.0.1", port=3306, max_wait_seconds=15):
     # 2. Iniciar WampManager
     launch_wamp_manager()
 
-    # 3. Como respaldo inmediato, lanzar el motor mysqld.exe de WAMP si el puerto aún no abre
+    # 3. Como respaldo inmediato, lanzar el motor mysqld.exe de WAMP si el puerto aún no abre (100% oculto)
     if not is_mysql_port_open(host, port, timeout=2):
         mysqld_path = find_wamp_mysqld_executable()
         if mysqld_path:
-            print(f"🚀 Iniciando motor MySQL WAMP directo ({mysqld_path})...")
+            print(f"🚀 Iniciando motor MySQL WAMP en segundo plano ({mysqld_path})...")
             try:
-                subprocess.Popen([mysqld_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                subprocess.Popen([mysqld_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creation_flags)
             except Exception as e:
                 print(f"⚠️ Error al lanzar mysqld de WAMP: {e}")
 
