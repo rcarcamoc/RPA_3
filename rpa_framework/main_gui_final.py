@@ -922,10 +922,11 @@ class MainWindow(QMainWindow):
 
 def main():
     # Validar base de datos MySQL antes del arranque
+    cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     db_check = os.path.join("recordings", "sistema", "check_db_connection.py")
     if os.path.exists(db_check):
         print("🚀 Iniciando validación de servicio MySQL...")
-        subprocess.run([sys.executable, db_check])
+        subprocess.run([sys.executable, db_check], creationflags=cflags)
         
     # Limpieza inicial de logs
     try:
@@ -946,6 +947,7 @@ def main():
                         [sys.executable, _sync_script],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        creationflags=cflags
                     )
                     proc.wait()
                 except Exception as _e:

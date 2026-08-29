@@ -166,7 +166,7 @@
       "type": "action",
       "label": "Crea registro",
       "on_error": "stop",
-      "enabled": true,
+      "enabled": false,
       "position": {
         "x": -155.0,
         "y": -512.0
@@ -227,10 +227,6 @@
     },
     {
       "from": "2537e2dc",
-      "to": "n11_0"
-    },
-    {
-      "from": "n11_0",
       "to": "n10_0"
     },
     {

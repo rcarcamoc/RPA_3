@@ -222,8 +222,8 @@ def ejecutar_validacion(dry_run=False, manual=False):
         cursor = conn.cursor()
 
         if workflow_exitoso:
-            # 5. Si termina correctamente, ELIMINA el registro de validación de registro_acciones
-            print(f"[DB] Eliminando registro de validación {reg_acciones_id} de ris.registro_acciones...")
+            # 5. Si termina correctamente, ELIMINA el registro temporal de validación de registro_acciones
+            print(f"[DB] Eliminando registro temporal de validación {reg_acciones_id} de ris.registro_acciones...")
             cursor.execute("DELETE FROM ris.registro_acciones WHERE id = %s", (reg_acciones_id,))
             
             # Actualizar ris.validacion_pacs a Exitoso
@@ -234,18 +234,28 @@ def ejecutar_validacion(dry_run=False, manual=False):
             """, (duracion, val_pacs_id))
             conn.commit()
             print(f"🎉 Validación de PACS COMPLETADA CON ÉXITO en {duracion} segundos.")
+            
+            # Enviar alerta Telegram si está configurado en éxito
+            tg_cfg = config.get("telegram", {})
+            if tg_cfg.get("enviar_alertas", True) and tg_cfg.get("enviar_en_exito", False):
+                if enviar_alerta_todos:
+                    msj = f"✅ <b>VALIDACIÓN PACS EXITOSA</b>\nLa validación diaria de PACS se completó correctamente en {duracion}s (Intento {intento})."
+                    try:
+                        enviar_alerta_todos(msj)
+                    except Exception as tge:
+                        print(f"⚠️ No se pudo enviar alerta Telegram: {tge}")
             res_final = True
         else:
-            # Si falla
+            # Si falla: ELIMINAR también el registro temporal de registro_acciones para que no ensucie reportes de casos
+            print(f"[DB] Eliminando registro temporal de validación {reg_acciones_id} tras fallo de validación...")
+            cursor.execute("DELETE FROM ris.registro_acciones WHERE id = %s", (reg_acciones_id,))
+            
             obs_fail = f"Falló tras {max_reintentos} intentos. Error: {ultimo_error[:250]}"
             cursor.execute("""
             UPDATE ris.validacion_pacs 
             SET estado = 'Error', observacion = %s, duracion_segundos = %s 
             WHERE id = %s
             """, (obs_fail, duracion, val_pacs_id))
-            
-            # Actualizar estado en registro_acciones a Error
-            cursor.execute("UPDATE ris.registro_acciones SET estado = 'Error', observacion = 'Falló validación PACS' WHERE id = %s", (reg_acciones_id,))
             conn.commit()
             print(f"❌ Validación de PACS FALLIDA. Observación: {obs_fail}")
             
@@ -253,7 +263,7 @@ def ejecutar_validacion(dry_run=False, manual=False):
             tg_cfg = config.get("telegram", {})
             if tg_cfg.get("enviar_alertas", True) and tg_cfg.get("enviar_en_error", True):
                 if enviar_alerta_todos:
-                    msj = f"🚨 *ALERTA VALIDACIÓN PACS*\nLa validación diaria de PACS ha fallado tras {max_reintentos} intentos.\n\nDetalle: {ultimo_error[:200]}"
+                    msj = f"🚨 <b>ALERTA VALIDACIÓN PACS</b>\nLa validación diaria de PACS ha fallado tras {max_reintentos} intentos.\n\nDetalle: {ultimo_error[:200]}"
                     try:
                         enviar_alerta_todos(msj)
                     except Exception as tge:
@@ -272,12 +282,22 @@ def ejecutar_validacion(dry_run=False, manual=False):
                 c = conn.cursor()
                 c.execute("UPDATE ris.validacion_pacs SET estado = 'Error', observacion = %s, duracion_segundos = %s WHERE id = %s", 
                           (f"Excepción fatal: {str(e)[:250]}", dur, val_pacs_id))
+                if reg_acciones_id:
+                    c.execute("DELETE FROM ris.registro_acciones WHERE id = %s", (reg_acciones_id,))
                 conn.commit()
                 c.close()
             except Exception:
                 pass
         return False
     finally:
+        if conn and conn.is_connected() and reg_acciones_id:
+            try:
+                c_fin = conn.cursor()
+                c_fin.execute("DELETE FROM ris.registro_acciones WHERE id = %s", (reg_acciones_id,))
+                conn.commit()
+                c_fin.close()
+            except Exception:
+                pass
         set_bg_execution_state(False)
         if conn and conn.is_connected():
             conn.close()

@@ -172,14 +172,15 @@ class VerificaInicioAutomationV2:
                         login_script = Path(__file__).parent / "ingresa_user_pacs.py"
                         
                         try:
+                            cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                             logger.info("Ejecutando clean_ris_folders.py...")
-                            subprocess.run([sys.executable, str(clean_script)], check=False)
+                            subprocess.run([sys.executable, str(clean_script)], check=False, creationflags=cflags)
                             
                             logger.info("Ejecutando Abre_pacs.py...")
-                            subprocess.run([sys.executable, str(abre_pacs_script)], check=False)
+                            subprocess.run([sys.executable, str(abre_pacs_script)], check=False, creationflags=cflags)
                             
                             logger.info("Ejecutando ingresa_user_pacs.py...")
-                            subprocess.run([sys.executable, str(login_script)], check=False)
+                            subprocess.run([sys.executable, str(login_script)], check=False, creationflags=cflags)
                             
                             logger.info("Reinicio completado. Reiniciando ciclo de búsqueda...")
                             start_time = time.time()
@@ -210,7 +211,8 @@ class VerificaInicioAutomationV2:
             
             login_script = Path(__file__).parent / "ingresa_user_pacs.py"
             try:
-                subprocess.run([sys.executable, str(login_script)], check=False)
+                cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                subprocess.run([sys.executable, str(login_script)], check=False, creationflags=cflags)
                 logger.info("Script de login ejecutado. Volviendo a comprobar inicio...")
             except Exception as e:
                 logger.error(f"Error al ejecutar el script de login: {e}")
