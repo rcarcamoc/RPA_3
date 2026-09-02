@@ -34,6 +34,7 @@ def configurar_menu_comandos():
     commands = [
         {"command": "menu", "description": "🎛️ Panel de control general"},
         {"command": "estado", "description": "📸 Estado actual y captura en vivo"},
+        {"command": "stream", "description": "🔴 Transmisión de pantalla en vivo"},
         {"command": "ejecucion", "description": "🚀 Workflows y automatización"},
         {"command": "reportes", "description": "📊 Casos pendientes y métricas"},
         {"command": "excel", "description": "📥 Exportar reporte a Excel (.xlsx)"},
@@ -125,12 +126,49 @@ def get_menu_sistema_markup():
     return {
         "inline_keyboard": [
             [{"text": "📸 Estado Actual + Captura", "callback_data": "cmd_estado_actual"}],
+            [{"text": "🔴 Transmisión en Vivo (Desktop)", "callback_data": "cmd_stream_menu"}],
             [{"text": "🔋 Estado Batería", "callback_data": "cmd_bateria"}],
             [{"text": "📜 Ver Últimos Logs", "callback_data": "cmd_ver_log"}],
             [{"text": "🔄 Rehabilitar Registro", "callback_data": "cmd_rehabilitar"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
         ]
     }
+
+def get_live_status_markup(stream_activo=False):
+    """Teclado inline adjunto al diagnóstico /estado actual."""
+    if stream_activo:
+        stream_btn = {"text": "⏹️ Detener Transmisión", "callback_data": "cmd_detener_stream"}
+    else:
+        stream_btn = {"text": "🔴 Transmitir Pantalla en Vivo", "callback_data": "cmd_iniciar_stream"}
+    
+    return {
+        "inline_keyboard": [
+            [stream_btn],
+            [
+                {"text": "🔄 Actualizar", "callback_data": "cmd_estado_actual"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
+        ]
+    }
+
+def get_menu_stream_markup(stream_activo=False, tiempo_str="00:00"):
+    """Submenú de control de Live Stream."""
+    if stream_activo:
+        return {
+            "inline_keyboard": [
+                [{"text": "⏹️ Detener Transmisión en Vivo", "callback_data": "cmd_detener_stream"}],
+                [{"text": "📸 Captura Rápida", "callback_data": "cmd_estado_actual"}],
+                [{"text": "⬅️ Volver a Sistema", "callback_data": "sec_sistema"}]
+            ]
+        }
+    else:
+        return {
+            "inline_keyboard": [
+                [{"text": "🔴 Iniciar Stream (10 min / Fin de flujo)", "callback_data": "cmd_iniciar_stream_600"}],
+                [{"text": "🔴 Iniciar Stream Continuo", "callback_data": "cmd_iniciar_stream_inf"}],
+                [{"text": "⬅️ Volver a Sistema", "callback_data": "sec_sistema"}]
+            ]
+        }
 
 def get_menu_notificaciones_markup():
     """Submenú Notificaciones y Alertas."""
@@ -196,6 +234,21 @@ def enviar_alerta_todos(mensaje, record_id=None):
         print("Error: No hay usuarios registrados en usuarios.json. Ejecuta el script con --listen primero.")
         return
 
+    # Asegurar que se incluya la resolución de pantalla si no fue añadida previamente
+    if "resoluci" not in mensaje.lower():
+        try:
+            from utils.screen_utils import get_screen_resolution
+            res_str = get_screen_resolution()
+        except ImportError:
+            try:
+                from rpa_framework.utils.screen_utils import get_screen_resolution
+                res_str = get_screen_resolution()
+            except Exception:
+                res_str = "1920x1080"
+        except Exception:
+            res_str = "1920x1080"
+        mensaje = f"{mensaje}\n\n🖥️ <b>Resolución:</b> <code>{res_str}</code>"
+
     reply_markup = None
     if record_id:
         reply_markup = {
@@ -220,10 +273,13 @@ def enviar_alerta_todos(mensaje, record_id=None):
         else:
             print(f"  [Error] No se pudo enviar a {chat_id}")
 
-def enviar_foto(chat_id, ruta_imagen, caption=""):
+def enviar_foto(chat_id, ruta_imagen, caption="", reply_markup=None):
     """Envía una foto a un chat. Si el archivo es muy grande, la comprime antes."""
+    import json
     url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
 
     opened_file = None
     files = {}
@@ -311,6 +367,20 @@ def enviar_video_todos(ruta_video, caption=""):
     if not usuarios:
         print("Error: No hay usuarios registrados en usuarios.json.")
         return False
+
+    if caption and ("error" in caption.lower() or "alerta" in caption.lower()) and "resoluci" not in caption.lower():
+        try:
+            from utils.screen_utils import get_screen_resolution
+            res_str = get_screen_resolution()
+        except ImportError:
+            try:
+                from rpa_framework.utils.screen_utils import get_screen_resolution
+                res_str = get_screen_resolution()
+            except Exception:
+                res_str = "1920x1080"
+        except Exception:
+            res_str = "1920x1080"
+        caption = f"{caption}\n🖥️ <b>Resolución:</b> <code>{res_str}</code>"
 
     print(f"Enviando video a {len(usuarios)} suscriptores...")
     exito = True

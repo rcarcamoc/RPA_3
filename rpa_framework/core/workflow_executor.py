@@ -23,6 +23,15 @@ try:
 except ImportError:
     pass
 
+try:
+    from utils.screen_utils import get_screen_resolution
+except ImportError:
+    try:
+        from rpa_framework.utils.screen_utils import get_screen_resolution
+    except ImportError:
+        def get_screen_resolution():
+            return "1920x1080"
+
 def get_python_exe() -> str:
     """Retorna la ruta al ejecutable python (preferiendo pythonw.exe para evitar que aparezcan consolas negras)."""
     exe = sys.executable
@@ -106,6 +115,22 @@ class WorkflowExecutor:
             env[f"VAR_{key}"] = str(value)
             
         return env
+
+    def _sync_screen_resolution_to_db(self, resolution: str):
+        """Sincroniza la resolución de pantalla con el registro 'En Proceso' en ris.registro_acciones si no está seteada."""
+        try:
+            conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE ris.registro_acciones 
+                SET resolucion_pantalla = %s 
+                WHERE estado = 'En Proceso' AND (resolucion_pantalla IS NULL OR resolucion_pantalla = '')
+            """, (resolution,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            pass
     
     def execute(self) -> Dict[str, Any]:
         """
@@ -157,6 +182,15 @@ class WorkflowExecutor:
             except Exception as cap_e:
                 self.logger.log(f"⚠️ No se pudo verificar estado de Bloq Mayús: {cap_e}")
 
+            # Registrar resolución de pantalla
+            try:
+                screen_res = get_screen_resolution()
+                self.context["screen_resolution"] = screen_res
+                self.logger.log(f"🖥️ Resolución de pantalla detectada: {screen_res}")
+                self._sync_screen_resolution_to_db(screen_res)
+            except Exception as scr_e:
+                self.logger.log(f"⚠️ No se pudo determinar/sincronizar resolución de pantalla: {scr_e}")
+
             # Obtener nodo inicial
             current_node = self.workflow.get_start_node()
             
@@ -169,6 +203,10 @@ class WorkflowExecutor:
                 
                 # Ejecutar nodo y obtener siguiente
                 next_node_id = self._execute_node(current_node)
+                
+                # Asegurar sincronización de resolución si el nodo inicializó el registro
+                if "screen_resolution" in self.context:
+                    self._sync_screen_resolution_to_db(self.context["screen_resolution"])
                 
                 if not next_node_id:
                     self.logger.log("✅ Fin del workflow (no hay más nodos)")
@@ -203,6 +241,18 @@ class WorkflowExecutor:
             }
             
         except Exception as e:
+            if self.should_stop:
+                self.logger.log("⏹️ Workflow interrumpido por solicitud de parada del usuario.")
+                if recorder:
+                    recorder.discard()
+                    self.screen_recorder = None
+                return {
+                    "status": "stopped",
+                    "context": self.context,
+                    "logs": self.logger.get_logs(),
+                    "error": None
+                }
+
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
             
@@ -222,7 +272,8 @@ class WorkflowExecutor:
                         
                         try:
                             from utils.telegram_manager import enviar_video_todos
-                            caption = f"❌ <b>Error en Workflow: {self.workflow.name}</b>\n<b>Motivo:</b> {str(e)[:250]}"
+                            screen_res = self.context.get("screen_resolution") or get_screen_resolution()
+                            caption = f"❌ <b>Error en Workflow: {self.workflow.name}</b>\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(e)[:250]}"
                             enviar_video_todos(saved_video_path, caption=caption)
                             self.logger.log("📱 Grabación de video del error enviada a Telegram")
                         except Exception as tel_e:
@@ -266,18 +317,41 @@ class WorkflowExecutor:
         if self.active_process:
             try:
                 pid = self.active_process.pid
-                self.logger.log(f"   Intentando terminar proceso activo (PID: {pid})...")
+                self.logger.log(f"   Terminando árbol de procesos activo (PID: {pid})...")
                 
-                # Intentar terminación amable
-                self.active_process.terminate()
+                # 2.1. En Windows, forzar la terminación del árbol de procesos completo
+                if sys.platform == "win32":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True,
+                            timeout=3
+                        )
+                    except Exception as tk_e:
+                        self.logger.log(f"   ⚠️ taskkill warning: {tk_e}")
+                
+                # 2.2. psutil para garantizar terminación de hijos
                 try:
-                    self.active_process.wait(timeout=3)
-                    self.logger.log(f"   ✅ Proceso {pid} terminado correctamente.")
-                except subprocess.TimeoutExpired:
-                    self.logger.log(f"   ⚠️ Timeout en terminate(), forzando kill (PID: {pid})...")
+                    import psutil
+                    parent_proc = psutil.Process(pid)
+                    for child in parent_proc.children(recursive=True):
+                        try:
+                            child.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    try:
+                        parent_proc.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                except Exception:
+                    pass
+
+                # 2.3. Fallback directo sobre objeto Popen
+                try:
                     self.active_process.kill()
-                    self.active_process.wait(timeout=2)
-                    self.logger.log(f"   💀 Proceso {pid} forzado a cerrar.")
+                except Exception:
+                    pass
+                self.logger.log(f"   ✅ Proceso {pid} y subprocesos terminados.")
             except Exception as e:
                 self.logger.log(f"⚠️ Error al detener proceso: {e}")
             finally:
@@ -322,7 +396,12 @@ class WorkflowExecutor:
         if isinstance(node, DelayNode):
             sec = node.delay_seconds
             self.logger.log(f"⏳ Pausando por {sec} segundos...")
-            time.sleep(sec)
+            end_time = time.time() + sec
+            while time.time() < end_time and not self.should_stop:
+                time.sleep(0.2)
+            if self.should_stop:
+                self.logger.log("⏹️ Pausa interrumpida por detención de workflow.")
+                return None
         return self.workflow.get_next_node(node.id)
     
     def _execute_action(self, node: ActionNode) -> Optional[str]:
@@ -393,7 +472,12 @@ class WorkflowExecutor:
                     if process:
                         if process.stdout: process.stdout.close()
                         if process.stderr: process.stderr.close()
+                    self.active_process = None
                 
+                if self.should_stop:
+                    self.logger.log("⏹️ Comando interrumpido por detención de workflow.")
+                    return None
+
                 if returncode == 0:
                      self.logger.log(f"✅ Comando ejecutado exitosamente")
                      if node.output_variable:
@@ -496,37 +580,51 @@ class WorkflowExecutor:
                 exec_cwd = current_cwd
 
             creationflags, startupinfo = _get_silent_process_flags()
-            self.active_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                env=env,
-                cwd=str(exec_cwd),
-                bufsize=1,
-                universal_newlines=True,
-                creationflags=creationflags,
-                startupinfo=startupinfo
-            )
-            process = self.active_process
-            
-            # Leer salida en tiempo real
-            full_stdout = []
-            while True:
-                line = process.stdout.readline()
-                if not line:
-                    if process.poll() is not None:
-                        break
-                    continue
+            process = None
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    env=env,
+                    cwd=str(exec_cwd),
+                    bufsize=1,
+                    universal_newlines=True,
+                    creationflags=creationflags,
+                    startupinfo=startupinfo
+                )
+                self.active_process = process
                 
-                clean_line = line.strip()
-                if clean_line:
-                    self.logger.log(f"   [PY] {clean_line}")
-                    full_stdout.append(clean_line)
+                # Leer salida en tiempo real
+                full_stdout = []
+                while True:
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
+                    
+                    clean_line = line.strip()
+                    if clean_line:
+                        self.logger.log(f"   [PY] {clean_line}")
+                        full_stdout.append(clean_line)
+                
+                returncode = process.poll()
+            finally:
+                if process:
+                    try:
+                        if process.stdout: process.stdout.close()
+                        if process.stderr: process.stderr.close()
+                    except Exception:
+                        pass
+                self.active_process = None
             
-            returncode = process.poll()
+            if self.should_stop:
+                self.logger.log("⏹️ Script interrumpido por detención de workflow.")
+                return None
             
             if returncode == 0:
                 self.logger.log(f"✅ Script ejecutado exitosamente")
@@ -729,11 +827,18 @@ class WorkflowExecutor:
                     self._run_script_internal(node)
 
             except Exception as e:
+                if self.should_stop:
+                    self.logger.log("⏹️ Iteración de loop interrumpida por detención externa.")
+                    break
                 self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
                 delay = getattr(node, 'error_delay', 0)
                 if delay > 0:
                     self.logger.log(f"   ⏳ Esperando {delay}s antes de reintentar...")
-                    time.sleep(delay)
+                    end_d = time.time() + delay
+                    while time.time() < end_d and not self.should_stop:
+                        time.sleep(0.2)
+                    if self.should_stop:
+                        break
 
             finally:
                 # Si algo interno puso should_stop=True, lo revertimos
@@ -744,6 +849,9 @@ class WorkflowExecutor:
                     else:
                         self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
                         self.should_stop = False
+
+            if self.should_stop:
+                break
 
             idx += 1
 
@@ -782,16 +890,23 @@ class WorkflowExecutor:
         self.nested_executor.logger.log = bridged_log
         
         self.logger.log(f"   ▶️ Loop Running Workflow: {nested_wf.name}")
-        result = self.nested_executor.execute()
-        self.nested_executor = None
+        try:
+            result = self.nested_executor.execute()
+        finally:
+            self.nested_executor = None
         
-        if result["status"] == "error":
-             if self.should_stop:
-                 self.logger.log("   Workflow anidado detenido por usuario.")
-             else:
-                 raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
+        status = result.get("status") if isinstance(result, dict) else "unknown"
+        if status == "stopped" or self.should_stop:
+            self.logger.log("   Workflow anidado detenido por usuario.")
+            self.should_stop = True
+            self._external_stop = True
+        elif status == "error":
+            if self.should_stop:
+                self.logger.log("   Workflow anidado detenido por usuario.")
+            else:
+                raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
         else:
-             self.context.update(result["context"])
+            self.context.update(result.get("context", {}))
 
     def _run_script_internal(self, node):
         """Helper para ejecutar script python del loop"""
@@ -809,35 +924,44 @@ class WorkflowExecutor:
             exec_cwd = current_cwd
 
         creationflags, startupinfo = _get_silent_process_flags()
-        process = subprocess.Popen(
-            [get_python_exe(), node.script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            env=env,
-            cwd=str(exec_cwd),
-            bufsize=1,
-            universal_newlines=True,
-            creationflags=creationflags,
-            startupinfo=startupinfo
-        )
-        self.active_process = process
-        
+        process = None
         full_stdout = []
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                if process.poll() is not None:
-                    break
-                continue
-            clean_line = line.strip()
-            if clean_line:
-                self.logger.log(f"   [LOOP-PY] {clean_line}")
-                full_stdout.append(clean_line)
-                
-        returncode = process.poll()
+        try:
+            process = subprocess.Popen(
+                [get_python_exe(), node.script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                env=env,
+                cwd=str(exec_cwd),
+                bufsize=1,
+                universal_newlines=True,
+                creationflags=creationflags,
+                startupinfo=startupinfo
+            )
+            self.active_process = process
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    continue
+                clean_line = line.strip()
+                if clean_line:
+                    self.logger.log(f"   [LOOP-PY] {clean_line}")
+                    full_stdout.append(clean_line)
+                    
+            returncode = process.poll()
+        finally:
+            if process:
+                try:
+                    if process.stdout: process.stdout.close()
+                    if process.stderr: process.stderr.close()
+                except Exception:
+                    pass
+            self.active_process = None
         
         if returncode != 0:
             if self.should_stop:
@@ -1063,14 +1187,12 @@ class WorkflowExecutor:
             
             # Crear executor
             nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir, is_sub_workflow=True)
+            self.nested_executor = nested_executor
             
             # --- PATCH LOGGER ---
             # Para que los logs del hijo suban al padre (y a la UI)
             original_child_log = nested_executor.logger.log
             def bridged_log(msg, level="INFO"):
-                # Llamar al original para que quede en el archivo del hijo (opcional)
-                # original_child_log(msg, level) 
-                # O mejor: logguear en el padre con un prefijo
                 prefix = f"   [WF:{nested_wf.name}]"
                 self.logger.log(f"{prefix} {msg}", level)
             
@@ -1078,20 +1200,28 @@ class WorkflowExecutor:
             # --------------------
             
             self.logger.log(f"▶️ Iniciando sub-workflow: {nested_wf.name}")
-            result = nested_executor.execute()
+            try:
+                result = nested_executor.execute()
+            finally:
+                self.nested_executor = None
             
-            if result["status"] == "error":
+            status = result.get("status") if isinstance(result, dict) else "unknown"
+            if status == "stopped" or self.should_stop:
+                self.logger.log("⏹️ Sub-workflow detenido por el usuario. Deteniendo padre.")
+                self.should_stop = True
+                self._external_stop = True
+                return None
+            elif status == "error":
+                if self.should_stop:
+                    self.logger.log("⏹️ Sub-workflow cancelado por detención.")
+                    return None
                 self.logger.log(f"❌ Error en sub-workflow: {result.get('error')}")
                 if getattr(node, 'on_error', 'stop') == 'stop':
                      raise RuntimeError(f"Fallo en sub-workflow: {result.get('error')}")
-            elif result["status"] == "stopped":
-                self.logger.log("⏹️ Sub-workflow detenido (posiblemente sin registros). Deteniendo padre.")
-                self.should_stop = True
-                return None
             else:
                 self.logger.log(f"✅ Sub-workflow finalizado correctamente")
                 # Actualizar contexto padre con resultados del hijo
-                self.context.update(result["context"])
+                self.context.update(result.get("context", {}))
         
         except Exception as e:
             self.logger.log(f"❌ Error ejecutando nodo workflow: {e}")

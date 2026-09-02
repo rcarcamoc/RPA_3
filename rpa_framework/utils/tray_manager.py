@@ -158,10 +158,40 @@ def create_robot_icon(status='idle'):
 class SystemTrayManager:
     """Administrador del icono en la bandeja de sistema (System Tray) para el servicio RPA Bot."""
     
-    def __init__(self, on_stop_callback=None):
+    def __init__(self, on_stop_callback=None, on_stop_workflow_callback=None):
         self.icon = None
         self.on_stop_callback = on_stop_callback
+        self.on_stop_workflow_callback = on_stop_workflow_callback
         self.running = False
+
+    def _get_stop_process_label(self, item=None):
+        info = get_rpa_summary_info()
+        if info.get("is_running"):
+            wf = info.get("workflow_name", "en curso")
+            return f"⏹️ Detener Proceso Actual ({wf})"
+        return "⏹️ Detener Proceso Actual"
+
+    def _stop_current_process(self, icon=None, item=None):
+        print("⏹️ Solicitando detención del proceso actual desde el icono de bandeja...")
+        
+        # 1. Si hay callback registrado, ejecutarlo (ej: detener_ejecucion_actual en el bot)
+        if self.on_stop_workflow_callback:
+            try:
+                self.on_stop_workflow_callback()
+            except Exception as e:
+                print(f"Error en on_stop_workflow_callback: {e}")
+
+        # 2. Respaldo: escribir archivo stop_signal.txt para detener UI o procesos que monitorean archivo
+        try:
+            state_dir = Path(__file__).resolve().parent.parent / "config"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            with open(state_dir / "stop_signal.txt", "w", encoding="utf-8") as f:
+                f.write("stop")
+        except Exception as e:
+            print(f"Error escribiendo stop_signal.txt: {e}")
+
+        self.notify("Se ha solicitado la detención del proceso actual.", "🛑 Bot RPA - Detener Flujo")
+        self.update_icon()
 
     def _get_workflow_menu_label(self, item=None):
         info = get_rpa_summary_info()
@@ -282,6 +312,8 @@ class SystemTrayManager:
             item(self._get_workflow_menu_label, None, enabled=False),
             item(self._get_cases_menu_label, None, enabled=False),
             item(self._get_llm_menu_label, None, enabled=False),
+            Menu.SEPARATOR,
+            item(self._get_stop_process_label, self._stop_current_process),
             Menu.SEPARATOR,
             item("⚡ Actualizar Modelos LLM Manualmente", self._manual_update_llm),
             item(self._get_notification_label, self._toggle_notifications),

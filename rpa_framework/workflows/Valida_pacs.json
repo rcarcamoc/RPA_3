@@ -21,8 +21,8 @@
       "on_error": "stop",
       "enabled": true,
       "position": {
-        "x": -363.00864553314113,
-        "y": -493.06724303554273
+        "x": -330.0,
+        "y": -490.0
       },
       "script": "",
       "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
@@ -121,10 +121,10 @@
       "type": "action",
       "label": "verifica open",
       "on_error": "stop",
-      "enabled": true,
+      "enabled": false,
       "position": {
-        "x": -616.0,
-        "y": -624.0
+        "x": -650.0,
+        "y": -620.0
       },
       "script": "sistema\\verifica_openrouter.py",
       "command": "",
@@ -149,6 +149,34 @@
       "command_type": "",
       "program_path": "",
       "process_name": ""
+    },
+    {
+      "id": "n8_0",
+      "type": "action",
+      "label": "cierra pacs",
+      "on_error": "continue",
+      "enabled": true,
+      "position": {
+        "x": -150.0,
+        "y": -360.0
+      },
+      "script": "ui\\cierra_pacs.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_351d0e",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -140.0,
+        "y": -230.0
+      }
     }
   ],
   "edges": [
@@ -181,8 +209,16 @@
       "to": "n7_0"
     },
     {
+      "from": "n7_0",
+      "to": "n8_0"
+    },
+    {
       "from": "n4_0",
       "to": "n15_0"
+    },
+    {
+      "from": "n8_0",
+      "to": "n_351d0e"
     }
   ],
   "variables": {}

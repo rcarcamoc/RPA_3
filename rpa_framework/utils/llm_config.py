@@ -66,16 +66,15 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM (10 modelos: 5 Nvidia NIM y 5 OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Primario — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
-   "nvidia/nemotron-3-nano-30b-a3b",                         # Fallback 2 — Validado OK
-   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 5 — Validado OK
+   "meta/llama-3.2-90b-vision-instruct",                     # Primario — Validado OK
+   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 1 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 — Validado OK
+   "minimax/minimax-m3:free",                                # Fallback 3 — Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 4 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 5 — Validado OK
    "openrouter/free",                                        # Fallback 6 — Validado OK
-   "minimax/minimax-m3:free",                                # Fallback 7 — Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 8 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 9 — Validado OK
+   "google/gemma-4-31b-it:free",                             # Fallback 7 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 8 — Validado OK
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

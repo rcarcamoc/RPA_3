@@ -32,3 +32,5 @@ tmp/
 rpa_framework/recordings/error_recordings/
 rpa_framework/config/battery_state.json
 rpa_framework/config/llm_verification_log.json
+*.session
+*.session-journal
