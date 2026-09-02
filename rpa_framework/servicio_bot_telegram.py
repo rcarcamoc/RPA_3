@@ -11,6 +11,7 @@ if sys.stderr is not None:
     except Exception:
         pass
 import json
+import html
 import time
 import threading
 import requests
@@ -52,11 +53,13 @@ def check_single_instance(port=28374):
 
 from core.models import Workflow, LoopNode
 from core.workflow_executor import WorkflowExecutor
+from utils.stream_manager import stream_manager
 from utils.telegram_manager import (
     enviar_mensaje, editar_mensaje, responder_callback, configurar_menu_comandos,
     cargar_usuarios, guardar_usuarios, enviar_foto, enviar_documento,
     get_menu_principal_markup, get_menu_ejecucion_markup, get_menu_loop_markup,
-    get_menu_reportes_markup, get_menu_periodo_excel_markup, get_menu_sistema_markup, get_menu_notificaciones_markup
+    get_menu_reportes_markup, get_menu_periodo_excel_markup, get_menu_sistema_markup,
+    get_menu_notificaciones_markup, get_live_status_markup, get_menu_stream_markup
 )
 from utils.excel_generator import generar_excel_reporte
 from utils.notificador_resumen import (
@@ -71,10 +74,10 @@ else:
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # Config paths
-CONFIG_DIR = Path("config")
-CONFIG_DIR.mkdir(exist_ok=True)
+CONFIG_DIR = Path(__file__).resolve().parent / "config"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 DEBUG_LOG = LOG_DIR / "service_debug.log"
 UPDATE_FILE = CONFIG_DIR / "telegram_last_update.json"
 STATE_FILE = CONFIG_DIR / "execution_state.json"
@@ -84,6 +87,7 @@ STOP_SIGNAL = CONFIG_DIR / "stop_signal.txt"
 active_executor = None
 executor_thread = None
 tray_manager = None
+_pacs_proc = None
 
 def get_last_update_id():
     if UPDATE_FILE.exists():
@@ -132,17 +136,80 @@ def set_execution_state(is_running, workflow_name=""):
         except Exception:
             pass
 
-def monitor_stop_signal():
-    """Monitorea si la GUI solicita detener la ejecución."""
-    global active_executor
-    while True:
-        if STOP_SIGNAL.exists() and active_executor:
-            print("🛑 Recibida señal de stop desde la GUI.")
+def detener_ejecucion_actual(chat_id=None, source="Telegram"):
+    """
+    Detiene de manera inmediata y completa cualquier ejecución en curso (workflow activo,
+    subworkflows anidados, scripts en proceso, validación PACS, etc.).
+    """
+    global active_executor, _pacs_validating_now, _pacs_proc
+    stopped_anything = False
+    wf_name = get_current_running_name()
+    
+    print(f"🛑 [STOP] Solicitando detención de ejecución actual desde {source}...")
+    
+    # 1. Si hay executor activo local, propagar stop a todo el árbol
+    if active_executor:
+        try:
+            print(f"   Deteniendo active_executor: {wf_name}")
             active_executor.stop()
+            stopped_anything = True
+        except Exception as e:
+            print(f"⚠️ Error al detener active_executor: {e}")
+
+    # 2. Si hay validación PACS en curso, liquidar el subproceso
+    if _pacs_validating_now:
+        print("   Deteniendo proceso de validación PACS...")
+        stopped_anything = True
+        _pacs_validating_now = False
+        if _pacs_proc and _pacs_proc.poll() is None:
             try:
-                STOP_SIGNAL.unlink()
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(_pacs_proc.pid)], capture_output=True, timeout=3)
+                _pacs_proc.kill()
             except Exception:
                 pass
+            _pacs_proc = None
+
+    # 3. Señalizar archivo STOP_SIGNAL por si hay otro proceso (ej. GUI) ejecutando un worker
+    try:
+        STOP_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
+        with open(STOP_SIGNAL, "w", encoding="utf-8") as f:
+            f.write("stop")
+    except Exception as e:
+        print(f"Error escribiendo STOP_SIGNAL: {e}")
+
+    # 4. Cerrar Chrome RPA si quedó abierto por el bot
+    try:
+        cerrar_chrome_rpa()
+    except Exception:
+        pass
+
+    # 5. Si había ejecución local o remota
+    is_running_flag = is_any_workflow_running()
+    if stopped_anything or is_running_flag:
+        set_execution_state(False)
+        mostrar_notificacion_tray(f"Ejecución de '{wf_name}' detenida.", "🛑 Bot RPA")
+        if chat_id:
+            enviar_mensaje(chat_id, f"🛑 <b>Ejecución Detenida</b>\nSe ha cancelado el proceso: <code>{wf_name}</code>.")
+        return True
+    else:
+        if chat_id:
+            enviar_mensaje(chat_id, "ℹ️ No hay ningún proceso en ejecución.")
+        return False
+
+def monitor_stop_signal():
+    """Monitorea si la GUI solicita detener la ejecución mediante stop_signal.txt."""
+    while True:
+        try:
+            if STOP_SIGNAL.exists():
+                print("🛑 Recibida señal de stop desde archivo stop_signal.txt.")
+                try:
+                    STOP_SIGNAL.unlink()
+                except Exception:
+                    pass
+                detener_ejecucion_actual(source="Archivo Stop Signal")
+        except Exception as e:
+            print(f"Error en monitor_stop_signal: {e}")
         time.sleep(1)
 
 def run_workflow(wf_path, params=None, on_finish=None):
@@ -294,13 +361,7 @@ def forzar_ejecucion_workflow(chat_id, msg_id, action_key):
         enviar_mensaje(chat_id, msg_espera)
         
     def _worker():
-        global active_executor
-        if active_executor:
-            try:
-                print(f"🛑 Interrumpiendo executor activo: {actual}")
-                active_executor.stop()
-            except Exception as e:
-                print(f"Error deteniendo executor: {e}")
+        detener_ejecucion_actual(source="Forzar Interrupción")
         
         # Esperar hasta 4 segundos a que se libere el proceso
         for _ in range(8):
@@ -415,7 +476,7 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
         return False
 
     def _worker():
-        global _pacs_validating_now
+        global _pacs_validating_now, _pacs_proc
         _pacs_validating_now = True
         try:
             from utils.keep_alive import keep_system_awake
@@ -451,6 +512,7 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
                     encoding='utf-8',
                     errors='replace'
                 )
+                _pacs_proc = proc
                 if proc.stdout:
                     for line in proc.stdout:
                         if line.strip():
@@ -466,7 +528,13 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
             if chat_id:
                 enviar_mensaje(chat_id, f"❌ Error ejecutando validación PACS: {e}")
         finally:
+            _pacs_proc = None
             _pacs_validating_now = False
+            try:
+                from recordings.ui.cierra_pacs import cerrar_pacs
+                cerrar_pacs()
+            except Exception:
+                pass
 
     threading.Thread(target=_worker, daemon=True, name="PACS_Validation_Worker").start()
     return True
@@ -747,20 +815,53 @@ def obtener_datos_diagnostico():
             r_exam = reg.get("examen") or "--"
             r_med = reg.get("doctor_detectado") or reg.get("User") or "--"
             r_nodo = reg.get("ultimo_nodo") or "--"
-            r_obs = reg.get("observacion") or "Sin observaciones"
-            
-            r_icono = "✅" if r_estado == "Exitoso" else ("❌" if r_estado == "Error" else "⏳")
-            obs_preview = r_obs[:160] + "..." if len(r_obs) > 160 else r_obs
-            
-            detalle_bd_texto = (
-                f"{r_icono} <b>{r_estado}</b> (ID #{r_id})\n"
-                f"  • <b>Fecha:</b> <code>{r_fecha}</code>\n"
-                f"  • <b>Documento:</b> <code>{r_doc}</code>\n"
-                f"  • <b>Examen:</b> {r_exam}\n"
-                f"  • <b>Médico:</b> {r_med}\n"
-                f"  • <b>Última Fase:</b> <code>{r_nodo}</code>\n"
-                f"  • <b>Detalle:</b> <i>{obs_preview}</i>"
-            )
+            r_obs = reg.get("observacion")
+
+            # Patología Crítica
+            r_pat = reg.get("patologia_critica")
+            r_pat_det = reg.get("patologia_critica_detectada")
+            if r_pat and str(r_pat).strip().lower() in ['si', 'sí', 'true', '1']:
+                if r_pat_det and str(r_pat_det).strip():
+                    pat_texto = f"🚨 <b>SÍ</b> (<i>{html.escape(str(r_pat_det).strip())}</i>)"
+                else:
+                    pat_texto = "🚨 <b>SÍ</b>"
+            elif r_pat and str(r_pat).strip().lower() in ['no', 'false', '0']:
+                pat_texto = "🟢 No"
+            elif r_pat:
+                pat_texto = f"ℹ️ {html.escape(str(r_pat).strip())}"
+            else:
+                pat_texto = "⚪ Sin evaluar"
+
+            # Diagnóstico
+            r_diag = reg.get("diagnostico")
+            if r_diag and str(r_diag).strip():
+                diag_clean = " ".join(str(r_diag).replace('\r', ' ').replace('\n', ' ').replace('\x0c', ' ').split())
+                if len(diag_clean) > 200:
+                    diag_preview = html.escape(diag_clean[:200].rstrip()) + "..."
+                else:
+                    diag_preview = html.escape(diag_clean)
+                diag_texto = f"<i>{diag_preview}</i>"
+            else:
+                diag_texto = "<i>No registrado</i>"
+
+            r_icono = "✅" if any(k in str(r_estado).lower() for k in ["terminado", "exitoso", "finalizado", "éxito", "exito"]) else ("❌" if any(k in str(r_estado).lower() for k in ["error", "fallo", "falla"]) else "⏳")
+
+            lineas_caso = [
+                f"{r_icono} <b>{html.escape(str(r_estado))}</b> (ID #{r_id})",
+                f"  • <b>Fecha:</b> <code>{r_fecha}</code>",
+                f"  • <b>Documento:</b> <code>{html.escape(str(r_doc))}</code>",
+                f"  • <b>Examen:</b> {html.escape(str(r_exam))}",
+                f"  • <b>Médico:</b> {html.escape(str(r_med))}",
+                f"  • <b>Patología Crítica:</b> {pat_texto}",
+                f"  • <b>Diagnóstico:</b> {diag_texto}",
+                f"  • <b>Última Fase:</b> <code>{html.escape(str(r_nodo))}</code>"
+            ]
+            if r_obs and str(r_obs).strip() and str(r_obs).strip().lower() != "sin observaciones":
+                obs_clean = " ".join(str(r_obs).replace('\r', ' ').replace('\n', ' ').split())
+                obs_preview = html.escape(obs_clean[:140].rstrip()) + "..." if len(obs_clean) > 140 else html.escape(obs_clean)
+                lineas_caso.append(f"  • <b>Detalle:</b> <i>{obs_preview}</i>")
+
+            detalle_bd_texto = "\n".join(lineas_caso)
         cursor.close()
         conn.close()
     except Exception as e:
@@ -807,7 +908,7 @@ def obtener_datos_diagnostico():
     }
 
 def enviar_estado_actual(chat_id):
-    """Genera captura de pantalla real del escritorio en vivo y envía reporte con la foto adjunta."""
+    """Genera captura de pantalla real del escritorio en vivo y envía reporte con la foto adjunta y botón de Live Stream."""
     enviar_mensaje(chat_id, "📸 Generando diagnóstico y captura de pantalla en vivo...")
     
     screenshots_dir = Path(__file__).resolve().parent / "logs" / "screenshots"
@@ -815,6 +916,9 @@ def enviar_estado_actual(chat_id):
     shot_path = screenshots_dir / f"live_status_{int(time.time())}.png"
     
     diag_data = obtener_datos_diagnostico()
+    is_streaming = stream_manager.esta_activo()
+    stream_txt = f"🔴 Transmitiendo ({stream_manager.tiempo_transcurrido_str()})" if is_streaming else "⚪ Inactivo"
+    status_markup = get_live_status_markup(is_streaming)
 
     caption_txt = (
         "📸 <b>DIAGNÓSTICO EN VIVO - ATRYS RPA</b>\n\n"
@@ -822,21 +926,130 @@ def enviar_estado_actual(chat_id):
         f"📋 <b>Último Caso Procesado:</b>\n{diag_data['detalle_bd_texto']}\n\n"
         f"🏥 <b>PACS:</b> {diag_data['pacs_txt']}\n"
         f"🔋 <b>Batería:</b> {diag_data['bat_txt']}\n"
+        f"📡 <b>Live Stream:</b> {stream_txt}\n"
         f"⏰ <b>Hora:</b> <code>{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</code>"
     )
     
     capturado = capturar_pantalla_en_vivo(shot_path)
     
     if capturado and os.path.exists(shot_path):
-        if not enviar_foto(chat_id, str(shot_path), caption=caption_txt):
+        if not enviar_foto(chat_id, str(shot_path), caption=caption_txt, reply_markup=status_markup):
             enviar_foto(chat_id, str(shot_path), caption="📸 Captura de pantalla en vivo")
-            enviar_mensaje(chat_id, caption_txt)
+            enviar_mensaje(chat_id, caption_txt, reply_markup=status_markup)
         try:
             shot_path.unlink()
         except Exception:
             pass
     else:
-        enviar_mensaje(chat_id, f"⚠️ No se pudo tomar la captura de pantalla.\n\n{caption_txt}")
+        enviar_mensaje(chat_id, f"⚠️ No se pudo tomar la captura de pantalla.\n\n{caption_txt}", reply_markup=status_markup)
+
+
+def iniciar_live_stream_telegram(chat_id, duracion=600, stop_on_workflow=True):
+    """Inicia la transmisión en vivo de escritorio vía Telethon y Videochat de Telegram."""
+    if stream_manager.esta_activo():
+        enviar_mensaje(
+            chat_id,
+            f"ℹ️ <b>La transmisión ya se encuentra activa</b> ({stream_manager.tiempo_transcurrido_str()}).\n"
+            "Toca la barra superior del grupo para unirte al directo.",
+            reply_markup={"inline_keyboard": [
+                [{"text": "⏹️ Detener Transmisión", "callback_data": "cmd_detener_stream"}],
+                [{"text": "📸 Estado Actual", "callback_data": "cmd_estado_actual"}]
+            ]}
+        )
+        return
+
+    enviar_mensaje(chat_id, "🚀 <b>Iniciando Live Stream en Telegram...</b>\n⏳ Conectando Videochat y configurando captura...")
+
+    def _on_stream_finish(reason="tiempo"):
+        stream_manager._cerrar_videochat_telethon(chat_id)
+        if reason == "workflow":
+            enviar_mensaje(
+                chat_id,
+                "⏹️ <b>Transmisión en vivo finalizada:</b>\nEl workflow en ejecución ha concluido.",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "🔴 Iniciar Stream Nuevo", "callback_data": "cmd_iniciar_stream"}],
+                    [{"text": "📸 Estado Actual", "callback_data": "cmd_estado_actual"}]
+                ]}
+            )
+        elif reason == "tiempo":
+            dur_mins = (duracion // 60) if duracion else 10
+            enviar_mensaje(
+                chat_id,
+                f"⏹️ <b>Transmisión en vivo finalizada:</b>\nSe ha completado el tiempo máximo ({dur_mins} minutos).",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "🔴 Iniciar Stream Nuevo", "callback_data": "cmd_iniciar_stream"}],
+                    [{"text": "📸 Estado Actual", "callback_data": "cmd_estado_actual"}]
+                ]}
+            )
+
+    stop_checker = None
+    if stop_on_workflow:
+        wf_running_at_least_once = is_any_workflow_running() or _pacs_validating_now
+        wf_stopped_time = None
+
+        def _check_workflow_status():
+            nonlocal wf_running_at_least_once, wf_stopped_time
+            currently_running = is_any_workflow_running() or _pacs_validating_now
+
+            if currently_running:
+                wf_running_at_least_once = True
+                wf_stopped_time = None
+                return False, ""
+
+            # Si estuvo corriendo (al inicio o durante el stream) y ahora ya terminó
+            if wf_running_at_least_once and not currently_running:
+                if wf_stopped_time is None:
+                    wf_stopped_time = time.time()
+                # Dejar 3 segundos de gracia tras finalizar el flujo
+                if time.time() - wf_stopped_time >= 3:
+                    return True, "workflow"
+
+            return False, ""
+
+        stop_checker = _check_workflow_status
+
+    def _async_start():
+        ok, msg = stream_manager.iniciar_transmision(
+            duracion_max_segundos=duracion,
+            chat_id=chat_id,
+            on_stop=_on_stream_finish,
+            stop_checker=stop_checker
+        )
+        if ok:
+            if duracion == 600 or (duracion and stop_on_workflow):
+                dur_txt = "10 minutos (o hasta que finalice el workflow en ejecución)"
+            elif duracion:
+                dur_txt = f"{duracion} segundos"
+            else:
+                dur_txt = "modo continuo"
+
+            enviar_mensaje(
+                chat_id,
+                f"🔴 <b>TRANSMISIÓN EN VIVO INICIADA</b>\n\n"
+                f"⏱️ <b>Duración:</b> {dur_txt}\n"
+                f"📺 <b>Cómo ver:</b> Toca la barra superior azul/morada de este grupo (<b>Videochat</b>) para ver el escritorio en tiempo real.",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "⏹️ Detener Transmisión", "callback_data": "cmd_detener_stream"}],
+                    [{"text": "📸 Estado Actual", "callback_data": "cmd_estado_actual"}]
+                ]}
+            )
+        else:
+            enviar_mensaje(chat_id, f"❌ <b>Error al iniciar Live Stream:</b>\n{msg}")
+
+    threading.Thread(target=_async_start, daemon=True).start()
+
+
+def detener_live_stream_telegram(chat_id):
+    """Detiene la transmisión en vivo y descarta el Videochat en Telegram."""
+    ok, msg = stream_manager.detener_transmision(cerrar_videochat=True, chat_id=chat_id)
+    enviar_mensaje(
+        chat_id,
+        "⏹️ <b>Transmisión en vivo y Videochat detenidos correctamente.</b>",
+        reply_markup={"inline_keyboard": [
+            [{"text": "🔴 Iniciar Stream Nuevo", "callback_data": "cmd_iniciar_stream"}],
+            [{"text": "📸 Estado Actual", "callback_data": "cmd_estado_actual"}]
+        ]}
+    )
 
 # =========================================================================
 # Background Workers & Schedulers
@@ -966,7 +1179,10 @@ def telegram_polling_loop():
     global tray_manager
     try:
         from utils.tray_manager import SystemTrayManager
-        tray_manager = SystemTrayManager(on_stop_callback=lambda: set_execution_state(False))
+        tray_manager = SystemTrayManager(
+            on_stop_callback=lambda: set_execution_state(False),
+            on_stop_workflow_callback=lambda: detener_ejecucion_actual(source="Bandeja de Sistema")
+        )
         tray_manager.start()
         mostrar_notificacion_tray("Servicio Bot RPA iniciado y escuchando comandos.", "🤖 Bot RPA - Atrys")
         with open(DEBUG_LOG, "a", encoding="utf-8") as f:
@@ -1061,11 +1277,7 @@ def telegram_polling_loop():
                             
                         elif callback_data == "cmd_detener":
                             responder_callback(cb_id)
-                            if active_executor:
-                                enviar_mensaje(chat_id, "🛑 Solicitando detención de la ejecución actual...")
-                                active_executor.stop()
-                            else:
-                                enviar_mensaje(chat_id, "ℹ️ No hay ningún proceso en ejecución.")
+                            detener_ejecucion_actual(chat_id=chat_id, source="Telegram Botón")
                                 
                         elif callback_data == "cmd_casos":
                             responder_callback(cb_id)
@@ -1160,6 +1372,31 @@ def telegram_polling_loop():
                                 if tray_manager:
                                     tray_manager.update_icon()
                                 enviar_mensaje(chat_id, "🔔 Notificaciones automáticas <b>reanudadas</b>.")
+
+                        elif callback_data == "cmd_stream_menu":
+                            responder_callback(cb_id)
+                            st_activo = stream_manager.esta_activo()
+                            st_txt = f"🔴 <b>Transmitiendo</b> ({stream_manager.tiempo_transcurrido_str()})" if st_activo else "⚪ <b>Inactivo</b>"
+                            editar_mensaje(
+                                chat_id,
+                                msg_id,
+                                f"🔴 <b>Control de Transmisión en Vivo (Live Stream)</b>\n\n"
+                                f"Estado actual: {st_txt}\n\n"
+                                "Selecciona una acción:",
+                                reply_markup=get_menu_stream_markup(st_activo, stream_manager.tiempo_transcurrido_str())
+                            )
+
+                        elif callback_data in ["cmd_iniciar_stream", "cmd_iniciar_stream_600", "cmd_iniciar_stream_120", "cmd_iniciar_stream_300"]:
+                            responder_callback(cb_id, text="Iniciando Live Stream (10 min)...")
+                            iniciar_live_stream_telegram(chat_id, duracion=600, stop_on_workflow=True)
+
+                        elif callback_data == "cmd_iniciar_stream_inf":
+                            responder_callback(cb_id, text="Iniciando Live Stream continuo...")
+                            iniciar_live_stream_telegram(chat_id, duracion=None, stop_on_workflow=False)
+
+                        elif callback_data == "cmd_detener_stream":
+                            responder_callback(cb_id, text="Deteniendo Live Stream...")
+                            detener_live_stream_telegram(chat_id)
                                 
                         elif callback_data and callback_data.startswith("gestionado_"):
                             record_id = callback_data.split("_")[1]
@@ -1217,6 +1454,12 @@ def telegram_polling_loop():
                             
                     elif comando in ["/estado", "/status", "/captura"]:
                         enviar_estado_actual(chat_id)
+                        
+                    elif comando in ["/stream", "/live", "/transmision", "/videochat"]:
+                        iniciar_live_stream_telegram(chat_id, duracion=600, stop_on_workflow=True)
+
+                    elif comando in ["/stream_stop", "/stop_stream", "/detener_stream", "/stream_detener"]:
+                        detener_live_stream_telegram(chat_id)
                         
                     elif comando == "/ejecucion":
                         enviar_mensaje(chat_id, "🚀 <b>Módulo de Ejecución y Workflows</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
@@ -1276,11 +1519,7 @@ def telegram_polling_loop():
                             enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o hubo un error.")
                             
                     elif comando == "/detener":
-                        if active_executor:
-                            enviar_mensaje(chat_id, "🛑 Solicitando detención de la ejecución actual...")
-                            active_executor.stop()
-                        else:
-                            enviar_mensaje(chat_id, "ℹ️ No hay ningún proceso en ejecución.")
+                        detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
                             
                     elif comando == "/resumen":
                         enviar_mensaje(chat_id, "📑 Generando resumen del día en curso...")

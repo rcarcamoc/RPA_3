@@ -73,7 +73,8 @@ def _consultar_registro():
         cursor = conn.cursor(dictionary=True)
         query = """
         SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
-               patologia_critica, patologia_critica_detectada, examen, URL
+               patologia_critica, patologia_critica_detectada, examen, URL,
+               resolucion_pantalla
         FROM ris.registro_acciones
         WHERE estado = 'En Proceso'
         LIMIT 1
@@ -110,7 +111,7 @@ def _marcar_error(script_name, error_description):
 
 
 def _formatear_mensaje(script_name, error_description, record_data):
-    """Genera el texto del mensaje Telegram con formato HTML."""
+    """Genera el texto del mensaje Telegram con formato HTML incluyendo resolución de pantalla."""
     lineas = [
         f"🚨 <b>ERROR en {script_name}</b>",
         "",
@@ -119,11 +120,27 @@ def _formatear_mensaje(script_name, error_description, record_data):
         "",
     ]
 
+    # Obtener resolución actual como fallback si no está en BD
+    resolucion_actual = None
+    try:
+        from utils.screen_utils import get_screen_resolution
+        resolucion_actual = get_screen_resolution()
+    except Exception:
+        try:
+            from rpa_framework.utils.screen_utils import get_screen_resolution
+            resolucion_actual = get_screen_resolution()
+        except Exception:
+            resolucion_actual = "1920x1080"
+
     if record_data:
         lineas.append("─── <b>Datos del Registro</b> ───")
 
+        if not record_data.get("resolucion_pantalla") and resolucion_actual:
+            record_data["resolucion_pantalla"] = resolucion_actual
+
         labels = {
             "inicio":                   "🕐 Inicio",
+            "resolucion_pantalla":      "🖥️ Resolución",
             "doctor_detectado":         "👨‍⚕️ Doctor",
             "numero_documento":         "🪪 N° Documento",
             "fecha_agendada":           "📅 Fecha agendada",
@@ -138,6 +155,8 @@ def _formatear_mensaje(script_name, error_description, record_data):
             if valor is not None and str(valor).strip() not in ("", "None", "null"):
                 lineas.append(f"  {etiqueta}: <code>{valor}</code>")
     else:
+        if resolucion_actual:
+            lineas.append(f"🖥️ <b>Resolución de pantalla:</b> <code>{resolucion_actual}</code>")
         lineas.append("<i>⚠️ No se encontró registro con estado 'En Proceso'.</i>")
 
     return "\n".join(lineas)

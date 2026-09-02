@@ -45,6 +45,12 @@ try:
 except ImportError:
     enviar_alerta_todos = None
 
+try:
+    from utils.screen_utils import get_screen_resolution
+except ImportError:
+    def get_screen_resolution():
+        return os.environ.get("VAR_screen_resolution", "1920x1080")
+
 DB_CONFIG = {
     'host': 'localhost',
     'user': 'root',
@@ -114,6 +120,19 @@ def set_bg_execution_state(is_running, workflow_name=""):
         print(f"[STATE ERROR] No se pudo guardar estado: {e}")
 
 
+def cerrar_aplicacion_pacs():
+    """Cierra la aplicación RIS PACS y procesos Carestream remanentes."""
+    try:
+        from recordings.ui.cierra_pacs import cerrar_pacs
+        cerrar_pacs()
+    except Exception:
+        try:
+            from recordings.ui.Abre_pacs import cerrar_todos_carestream
+            cerrar_todos_carestream()
+        except Exception as e2:
+            print(f"[PACS Close Error] {e2}")
+
+
 def ejecutar_validacion(dry_run=False, manual=False):
     """Ejecuta el proceso completo de validación de PACS."""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🚀 Iniciando Validación Diaria PACS...")
@@ -146,12 +165,13 @@ def ejecutar_validacion(dry_run=False, manual=False):
             print(f"[DB] Se actualizaron {cleaned_rows} registros colgados a estado Error.")
             
         # 2. Query 2: Insert a registro_acciones con id equivalente a 184 (Cristian Navarro)
-        print("[DB] Insertando registro de prueba en ris.registro_acciones...")
+        res_pantalla = get_screen_resolution()
+        print(f"[DB] Insertando registro de prueba en ris.registro_acciones (Resolución: {res_pantalla})...")
         q2 = """
-        INSERT INTO ris.registro_acciones (inicio, `update`, ultimo_nodo, estado, doctor_detectado, User, Pass)
-        VALUES (NOW(), NOW(), 'Validación PACS', 'En Proceso', %s, %s, %s)
+        INSERT INTO ris.registro_acciones (inicio, `update`, ultimo_nodo, estado, doctor_detectado, User, Pass, resolucion_pantalla)
+        VALUES (NOW(), NOW(), 'Validación PACS', 'En Proceso', %s, %s, %s, %s)
         """
-        cursor.execute(q2, (DOCTOR_NOMBRE, DOCTOR_USER, DOCTOR_PASS))
+        cursor.execute(q2, (DOCTOR_NOMBRE, DOCTOR_USER, DOCTOR_PASS, res_pantalla))
         reg_acciones_id = cursor.lastrowid
         conn.commit()
         print(f"✓ Registro acciones creado con ID: {reg_acciones_id}")
@@ -220,6 +240,11 @@ def ejecutar_validacion(dry_run=False, manual=False):
                 
         duracion = int(time.time() - inicio_ts)
         cursor = conn.cursor()
+
+        # Cerrar la aplicación RIS PACS que se abrió durante la validación
+        if not dry_run:
+            print("[PACS] Cerrando aplicación RIS PACS post-validación...")
+            cerrar_aplicacion_pacs()
 
         if workflow_exitoso:
             # 5. Si termina correctamente, ELIMINA el registro temporal de validación de registro_acciones
@@ -290,6 +315,11 @@ def ejecutar_validacion(dry_run=False, manual=False):
                 pass
         return False
     finally:
+        if not dry_run:
+            try:
+                cerrar_aplicacion_pacs()
+            except Exception:
+                pass
         if conn and conn.is_connected() and reg_acciones_id:
             try:
                 c_fin = conn.cursor()

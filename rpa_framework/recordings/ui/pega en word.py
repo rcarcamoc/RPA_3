@@ -154,7 +154,7 @@ def humanized_click(x, y, clicks=1, interval=0.1, hold_time=0.5):
         pyautogui.click(clicks=clicks, interval=interval)
 
 
-def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70):
+def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.65):
     """
     Busca la BARRA COMPLETA de iconos en la pantalla usando MULTI-SCALE MATCHING y DOBLE CONFIRMACIÓN.
     """
@@ -175,29 +175,41 @@ def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70):
         current_screen = pyautogui.screenshot()
         screen_np = np.array(current_screen)
         screen_cv = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
-        
-        # Log inicial (opcional, uno por intento)
-        # guardar_debug_screenshot(screen_cv, suffix="full_screen")
-        
     except Exception as e:
         logger.error(f"❌ Error capturando pantalla: {e}")
         return None
     
-    # Búsqueda EXACTA (1:1) en COLOR (BGR)
-    try:
-        result = cv2.matchTemplate(screen_cv, template, cv2.TM_CCOEFF_NORMED)
-    except Exception as e:
-        logger.error(f"❌ Error crítico en matchTemplate: {e}")
+    # Preparar imágenes en escala de grises para búsqueda multiescala rápida y robusta
+    gray_screen = cv2.cvtColor(screen_cv, cv2.COLOR_BGR2GRAY)
+    gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    
+    # Escalas a evaluar (incluye escala nativa 1.0 y escalados habituales de pantalla como 112%, 125%, etc.)
+    scales = [1.0, 1.12, 1.10, 1.14, 1.08, 1.16, 1.20, 1.25, 0.95, 0.90, 1.05]
+    
+    best_val = -1.0
+    best_match = None
+    
+    for s in scales:
+        tw = int(original_w * s)
+        th = int(original_h * s)
+        if tw >= gray_screen.shape[1] or th >= gray_screen.shape[0]:
+            continue
+            
+        interp = cv2.INTER_CUBIC if s > 1.0 else cv2.INTER_AREA
+        t_resized = cv2.resize(gray_template, (tw, th), interpolation=interp)
+        res = cv2.matchTemplate(gray_screen, t_resized, cv2.TM_CCOEFF_NORMED)
+        min_v, max_v, min_l, max_l = cv2.minMaxLoc(res)
+        
+        if max_v > best_val:
+            best_val = max_v
+            best_match = (max_l[0], max_l[1], tw, th, max_l[0] + tw / 2.0, max_l[1] + th / 2.0, s, max_v)
+            
+    if best_match is None:
+        logger.error("❌ No se pudo procesar la búsqueda multiescala.")
         return None
         
-    template_w = original_w
-    template_h = original_h
-
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-    x, y = max_loc
-    
-    center_x = x + original_w / 2
-    center_y = y + original_h / 2
+    x, y, template_w, template_h, center_x, center_y, best_scale, max_val = best_match
+    logger.info(f"   🔍 Mejor candidato multiescala: escala {best_scale:.2f} (w={template_w}, h={template_h}) con correlación {max_val*100:.2f}% en ({x}, {y})")
 
     match_found = False
     confirmacion_usada = False
@@ -209,9 +221,9 @@ def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70):
         if vf:
             vf.highlight_region(x, y, template_w, template_h, color="#FFEB3B", duration=1.5)
         
-    # 2. Confianza "Aceptable" -> DOBLE CONFIRMACIÓN
-    elif max_val >= 0.20:
-        logger.warning(f"   ⚠️ Confianza preliminar baja ({max_val*100:.2f}%) en ({x}, {y}). DOBLE CONFIRMACIÓN...")
+    # 2. Confianza Media -> DOBLE CONFIRMACIÓN pixel a pixel con template reescalado
+    elif max_val >= 0.35:
+        logger.warning(f"   ⚠️ Confianza preliminar moderada ({max_val*100:.2f}%) en ({x}, {y}). Evaluando DOBLE CONFIRMACIÓN...")
         confirmacion_usada = True
         
         try:
@@ -219,15 +231,19 @@ def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70):
             y2, x2 = min(y + template_h, h_scr), min(x + template_w, w_scr)
             crop = screen_cv[y:y2, x:x2]
 
-            # Redimensionar crop al tamaño exacto de la template para comparación directa
-            crop_resized = cv2.resize(crop, (template_w, template_h), interpolation=cv2.INTER_LINEAR)
+            # Redimensionar template a la escala detectada para comparar directamente en BGR
+            interp = cv2.INTER_CUBIC if best_scale > 1.0 else cv2.INTER_AREA
+            t_bgr_resized = cv2.resize(template, (template_w, template_h), interpolation=interp)
+            
+            if crop.shape[0] != template_h or crop.shape[1] != template_w:
+                crop = cv2.resize(crop, (template_w, template_h), interpolation=cv2.INTER_LINEAR)
 
             # Comparación directa pixel a pixel: similitud por diferencia normalizada
-            diff = cv2.norm(crop_resized.astype(np.float32), template.astype(np.float32), cv2.NORM_L2)
+            diff = cv2.norm(crop.astype(np.float32), t_bgr_resized.astype(np.float32), cv2.NORM_L2)
             max_possible = np.sqrt(template_w * template_h * 3) * 255.0
             similitud = 1.0 - (diff / max_possible)
 
-            logger.info(f"   🔍 Doble Confirmación (similitud directa): {similitud*100:.2f}%")
+            logger.info(f"   🔍 Doble Confirmación (similitud directa pixel a pixel): {similitud*100:.2f}%")
 
             # Umbral de similitud directa (0.70 = 70% de similitud pixel a pixel)
             UMBRAL_CONFIRM2 = 0.70
@@ -235,13 +251,13 @@ def buscar_bloque_toolbar(toolbar_template_path, confidence_threshold=0.70):
             # Guardar imagen del recorte con etiqueta de resultado
             try:
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                crop_viz = crop_resized.copy()
-                label = f"Sim: {similitud*100:.1f}%"
+                crop_viz = crop.copy()
+                label = f"Sim: {similitud*100:.1f}% (s={best_scale:.2f})"
                 color_label = (0, 200, 0) if similitud >= UMBRAL_CONFIRM2 else (0, 0, 255)
                 cv2.putText(crop_viz, label, (4, 22),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
                 cv2.putText(crop_viz, label, (4, 22),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_label, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_label, 2)
                 suffix_crop = "confirm2_ok" if similitud >= UMBRAL_CONFIRM2 else "confirm2_fail"
                 crop_path = os.path.join(LOG_DIR, f"pega_word_{suffix_crop}_{timestamp}.png")
                 cv2.imwrite(crop_path, crop_viz)
@@ -648,17 +664,6 @@ class Test1Automation:
                 pegado_ok = locals().get('validacion_exitosa', False) and not locals().get('pegado_rechazado', False)
                 
                 if pegado_ok:
-                    logger.info("Buscando botón 'scn_confirm' mediante UIA...")
-                    
-                if pegado_ok and hasattr(self, 'bloque_info'):
-                    logger.info("Preparando clic final en el botón Guardar (basado en bloque visual)...")
-                    
-                    x, y, _, _, _, _ = self.bloque_info
-                    
-                    # Coordenadas relativas (Sincronizadas con log: offset izquierdo 246)
-                    target_x = x - 200
-                    target_y = y - 95
-                    
                     # --- LÓGICA CONDICIONAL SOLICITADA ---
                     if HAS_MYSQL:
                         try:
@@ -684,21 +689,20 @@ class Test1Automation:
                             logger.error(f"⚠️ Error en ejecución condicional: {e_cond}")
                     # -------------------------------------
 
-                    logger.info(f"   → Click en botón Guardar (offset izquierdo 246, arriba 97): ({target_x:.0f}, {target_y:.0f})")
+                    logger.info("Ejecutando script grabar_informe_scn_confirm.py...")
+                    script_grabar = Path(__file__).parent / "grabar_informe_scn_confirm.py"
+                    import subprocess
+                    cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    res = subprocess.run([sys.executable, str(script_grabar)], check=False, creationflags=cflags)
                     
-                    # Log del punto de clic real final
-                    try:
-                        scr = pyautogui.screenshot()
-                        scr_cv = cv2.cvtColor(np.array(scr), cv2.COLOR_RGB2BGR)
-                        guardar_debug_screenshot(scr_cv, info=self.bloque_info, suffix="click_final_save", target_point=(target_x, target_y))
-                    except: pass
-
-                    humanized_click(target_x, target_y, hold_time=1.0)
-                    results["completed"] += 1
-                    logger.info(f"[3/3] ✅ click scn_confirm exitoso")
+                    if res.returncode == 0:
+                        results["completed"] += 1
+                        logger.info("[3/3] ✅ click scn_confirm (grabar_informe_scn_confirm.py) exitoso")
+                    else:
+                        raise Exception(f"grabar_informe_scn_confirm.py finalizó con código {res.returncode}")
                     
                 else:
-                    logger.warning("Simulación de Action 3 omitida por falta de validación o coordenadas")
+                    logger.warning("Simulación de Action 3 omitida por falta de validación")
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 3, "type": "click_scn_confirm", "reason": str(e)})

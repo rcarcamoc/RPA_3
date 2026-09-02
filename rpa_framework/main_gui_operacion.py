@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 import warnings
 import subprocess
 
@@ -237,13 +238,25 @@ class OperacionesPanel(QWidget):
     def check_background_state(self):
         """Chequea si el servicio de Telegram está ejecutando un flujo mediante el archivo state.json."""
         import json
-        state_file = os.path.join("config", "execution_state.json")
+        config_dir = Path(__file__).resolve().parent / "config"
+        state_file = config_dir / "execution_state.json"
+        stop_signal_file = config_dir / "stop_signal.txt"
+        
+        # Si se detecta señal de parada externa (de Telegram o Tray) y hay un worker local corriendo:
+        if stop_signal_file.exists() and self.worker and self.worker.isRunning():
+            self.append_log("🛑 Señal de parada externa detectada (Telegram/Tray). Deteniendo worker local...", "WARNING")
+            self.worker.stop()
+            try:
+                stop_signal_file.unlink()
+            except Exception:
+                pass
+
         bg_running = False
         wf_name = ""
         
-        if os.path.exists(state_file):
+        if state_file.exists():
             try:
-                with open(state_file, 'r') as f:
+                with open(state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                     bg_running = state.get("is_running", False)
                     wf_name = state.get("workflow", "")
@@ -377,21 +390,20 @@ class OperacionesPanel(QWidget):
 
     def detiene_todo(self):
         """Detiene la ejecución actual del worker local o del servicio en background."""
+        config_dir = Path(__file__).resolve().parent / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.append_log("🛑 Solicitando detención de UI local...", "WARNING")
+            self.append_log("🛑 Solicitando detención de worker local...", "WARNING")
             self.btn_stop.setEnabled(False)
             
-        if self.is_bg_running:
-            # Crear archivo de señal para el background service
-            try:
-                os.makedirs("config", exist_ok=True)
-                with open(os.path.join("config", "stop_signal.txt"), "w") as f:
-                    f.write("stop")
-                self.append_log("🛑 Señal de parada enviada al servicio en background.", "WARNING")
-                self.btn_stop.setEnabled(False)
-            except Exception as e:
-                print(f"Error escribiendo stop_signal.txt: {e}")
+        try:
+            with open(config_dir / "stop_signal.txt", "w", encoding="utf-8") as f:
+                f.write("stop")
+            self.append_log("🛑 Señal de parada enviada (stop_signal.txt).", "WARNING")
+            self.btn_stop.setEnabled(False)
+        except Exception as e:
+            print(f"Error escribiendo stop_signal.txt: {e}")
 
     def append_log(self, message, level="INFO"):
         print(f"[{level}] {message}")

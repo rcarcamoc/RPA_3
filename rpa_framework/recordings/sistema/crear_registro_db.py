@@ -11,12 +11,29 @@ import os
 import time
 from datetime import datetime
 
+if sys.platform.startswith('win'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 try:
     import mysql.connector
     from mysql.connector import Error
 except ImportError:
     print("Error: El módulo 'mysql.connector' no está instalado.")
     sys.exit(1)
+
+# Importar detector de resolución de pantalla
+try:
+    from utils.screen_utils import get_screen_resolution
+except ImportError:
+    try:
+        from rpa_framework.utils.screen_utils import get_screen_resolution
+    except ImportError:
+        def get_screen_resolution():
+            return os.environ.get("VAR_screen_resolution", "1920x1080")
 
 # Configuración BD
 DB_CONFIG = {
@@ -27,7 +44,7 @@ DB_CONFIG = {
 }
 
 def crear_registro():
-    """Limpia registros previos 'En Proceso' y crea uno nuevo."""
+    """Limpia registros previos 'En Proceso' y crea uno nuevo con resolución de pantalla."""
     conn = None
     try:
         print(f"[{time.strftime('%H:%M:%S')}] Conectando a BD para inicializar seguimiento...")
@@ -42,17 +59,18 @@ def crear_registro():
         if rows_cleaned > 0:
             print(f"[DB] Se cerraron {rows_cleaned} registros antiguos.")
 
-        # 2. Insertar nuevo registro
-        print("[DB] Creando nuevo registro de ejecución...")
+        # 2. Insertar nuevo registro con resolución de pantalla
+        resolucion = get_screen_resolution()
+        print(f"[DB] Creando nuevo registro de ejecución (Resolución: {resolucion})...")
         insert_query = """
-        INSERT INTO registro_acciones (inicio, `update`, ultimo_nodo, estado) 
-        VALUES (NOW(), NOW(), 'Inicio Workflow', 'En Proceso')
+        INSERT INTO registro_acciones (inicio, `update`, ultimo_nodo, estado, resolucion_pantalla) 
+        VALUES (NOW(), NOW(), 'Inicio Workflow', 'En Proceso', %s)
         """
-        cursor.execute(insert_query)
+        cursor.execute(insert_query, (resolucion,))
         record_id = cursor.lastrowid
         
         conn.commit()
-        print(f"✓ Éxito: Registro creado con ID: {record_id}")
+        print(f"✓ Éxito: Registro creado con ID: {record_id} (Resolución: {resolucion})")
         
         cursor.close()
         conn.close()
