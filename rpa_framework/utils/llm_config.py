@@ -66,15 +66,24 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM (10 modelos: 5 Nvidia NIM y 5 OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "meta/llama-3.2-90b-vision-instruct",                     # Primario — Validado OK
-   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 1 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 — Validado OK
-   "minimax/minimax-m3:free",                                # Fallback 3 — Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 4 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 5 — Validado OK
-   "openrouter/free",                                        # Fallback 6 — Validado OK
-   "google/gemma-4-31b-it:free",                             # Fallback 7 — Validado OK
+   "meta/llama-3.2-11b-vision-instruct",                     # Primario — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
+   "deepseek-ai/deepseek-v4-pro-0813",                       # Fallback 2 — Validado OK
+   "deepseek-ai/deepseek-v4-flash-0731",                     # Fallback 3 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 5 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 6 — Validado OK
+   "openrouter/free",                                        # Fallback 7 — Validado OK
    "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 8 — Validado OK
+]
+
+# Listas de respaldo por defecto según especialización
+OCR_DEFAULT_MODELS = BASE_LLM_MODELS
+
+PATOLOGIA_DEFAULT_MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b",
+    "deepseek-ai/deepseek-v4-pro-0813",
+    "deepseek-ai/deepseek-v4-flash-0731",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)
@@ -99,6 +108,44 @@ _DB_CONFIG = dict(host='localhost', user='root', password='', database='ris',
                   connect_timeout=2)
 
 
+def get_models_for_context(contexto: str = 'busqueda_ocr') -> list:
+    """
+    Retorna la lista de modelos permitidos y optimizados para un contexto específico.
+    Consulta ris.catalogo_modelos_llm. Si la BD no responde, retorna las listas de respaldo.
+    
+    Contextos soportados:
+      - 'busqueda_ocr': Modelos aptos para matching léxico y OCR en pantalla.
+      - 'deteccion_patologia': Exclusivamente modelos >= 30B / reasoning para juicio clínico.
+    """
+    filtro_col = "apto_patologia" if contexto == "deteccion_patologia" else "apto_ocr"
+    try:
+        import mysql.connector
+        conn = mysql.connector.connect(**_DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+        query = f"""
+            SELECT modelo 
+            FROM ris.catalogo_modelos_llm 
+            WHERE {filtro_col} = 1 AND activo = 1
+            ORDER BY tiempo_promedio_ms ASC
+        """
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        conn.close()
+        if rows:
+            modelos_db = [r['modelo'] for r in rows]
+            # Si el contexto es detección de patología, garantizar que llama-3.2-90b quede como primario si está disponible
+            if contexto == "deteccion_patologia" and "meta/llama-3.2-90b-vision-instruct" in modelos_db:
+                modelos_db.remove("meta/llama-3.2-90b-vision-instruct")
+                modelos_db.insert(0, "meta/llama-3.2-90b-vision-instruct")
+            return modelos_db
+    except Exception as e:
+        logger.debug(f"[llm_config] No se pudo consultar catalogo_modelos_llm ({e}), usando fallback.")
+
+    if contexto == "deteccion_patologia":
+        return list(PATOLOGIA_DEFAULT_MODELS)
+    return list(OCR_DEFAULT_MODELS)
+
+
 def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
     """
     Retorna base_list reordenada según el rendimiento histórico en ris.log_llm_ranking.
@@ -116,7 +163,7 @@ def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
       - Si la DB no está disponible, retorna base_list sin modificar (fallback seguro).
 
     Args:
-        base_list: lista de model IDs a reordenar. Si None, usa BASE_LLM_MODELS.
+        base_list: lista de model IDs a reordenar. Si None, consulta get_models_for_context(contexto).
         contexto:  tipo de tarea para filtrar el ranking ('busqueda_ocr',
                    'deteccion_patologia', etc.)
 
@@ -124,7 +171,7 @@ def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
         Lista reordenada de model IDs (lista nueva, no modifica base_list).
     """
     if base_list is None:
-        base_list = BASE_LLM_MODELS
+        base_list = get_models_for_context(contexto=contexto)
 
     offline_models = set()
     try:

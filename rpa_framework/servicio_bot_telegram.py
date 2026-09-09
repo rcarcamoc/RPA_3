@@ -441,8 +441,14 @@ def rehabilitar_ultimo_registro():
         print(f"Error rehabilitando registro: {e}")
         return False
 
-def check_pacs_validated_today():
-    """Consulta la base de datos para ver si ya se realizó una validación exitosa de PACS hoy."""
+def get_pacs_daily_status():
+    """
+    Consulta la base de datos para ver el estado de las validaciones de PACS hoy:
+    - ya_exitoso: bool (si hubo al menos una ejecución Exitosa hoy)
+    - total_intentos: int (cantidad total de registros de validación creados hoy)
+    - ultimo_estado: str ('Exitoso', 'Error', 'En Proceso', etc.)
+    - ultimo_timestamp: datetime del último intento
+    """
     try:
         import mysql.connector
         conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=5)
@@ -451,20 +457,44 @@ def check_pacs_validated_today():
         if not cursor.fetchone():
             cursor.close()
             conn.close()
-            return False
-        cursor.execute("SELECT id, fecha_validacion FROM ris.validacion_pacs WHERE DATE(fecha_validacion) = CURDATE() AND estado = 'Exitoso' LIMIT 1")
-        row = cursor.fetchone()
+            return {"ya_exitoso": False, "total_intentos": 0, "ultimo_estado": None, "ultimo_timestamp": None}
+        
+        cursor.execute("""
+            SELECT id, estado, fecha_validacion 
+            FROM ris.validacion_pacs 
+            WHERE DATE(fecha_validacion) = CURDATE() 
+            ORDER BY id DESC
+        """)
+        filas = cursor.fetchall()
         cursor.close()
         conn.close()
-        return row if row else False
+        
+        if not filas:
+            return {"ya_exitoso": False, "total_intentos": 0, "ultimo_estado": None, "ultimo_timestamp": None}
+            
+        ya_exitoso = any(r.get("estado") == "Exitoso" for r in filas)
+        total_intentos = len(filas)
+        ultimo_estado = filas[0].get("estado")
+        ultimo_timestamp = filas[0].get("fecha_validacion")
+        
+        return {
+            "ya_exitoso": ya_exitoso,
+            "total_intentos": total_intentos,
+            "ultimo_estado": ultimo_estado,
+            "ultimo_timestamp": ultimo_timestamp
+        }
     except Exception as e:
         print(f"[PACS Check DB Error] {e}")
-        return False
+        return {"ya_exitoso": False, "total_intentos": 0, "ultimo_estado": None, "ultimo_timestamp": None}
+
+def check_pacs_validated_today():
+    """Consulta la base de datos para ver si ya se realizó una validación exitosa de PACS hoy."""
+    return get_pacs_daily_status()["ya_exitoso"]
 
 _pacs_validating_now = False
 
 def trigger_pacs_validation_process(manual=False, chat_id=None):
-    """Ejecuta el script validar_pacs_diario.py con Keep-Alive y manejo de estado."""
+    """Ejecuta el script validar_pacs_diario.py en primer plano (consola visible) con Keep-Alive y manejo de estado."""
     global _pacs_validating_now
     if _pacs_validating_now:
         print("⚠️ Ya hay una validación de PACS en ejecución.")
@@ -482,41 +512,58 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
             from utils.keep_alive import keep_system_awake
             with keep_system_awake(keep_display=True):
                 tag = "MANUAL" if manual else "AUTO"
-                print(f"🩺 [{tag}] Lanzando proceso de validación PACS...")
+                print(f"🩺 [{tag}] Lanzando proceso de validación PACS (modo visible)...")
                 mostrar_notificacion_tray(f"Iniciando Validación PACS ({tag})...", "🩺 Validación PACS")
                 
+                # Usar python.exe (no pythonw) para poder abrir ventana de consola visible
                 py_exe = sys.executable
-                if "python.exe" in py_exe.lower():
-                    pyw_cand = py_exe.lower().replace("python.exe", "pythonw.exe")
-                    if os.path.exists(pyw_cand):
-                        py_exe = pyw_cand
+                if "pythonw.exe" in py_exe.lower():
+                    py_cand = py_exe.lower().replace("pythonw.exe", "python.exe")
+                    if os.path.exists(py_cand):
+                        py_exe = py_cand
 
                 cmd = [py_exe, str(script_path)]
                 if manual:
                     cmd.append("--manual")
                 
-                creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                startupinfo = None
-                if sys.platform == "win32":
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = 0
+                # Cargar configuración para ver si se ejecuta con consola visible
+                cfg_visible = True
+                try:
+                    cfg_p = Path(__file__).resolve().parent / "config" / "pacs_validation_config.json"
+                    if cfg_p.exists():
+                        with open(cfg_p, 'r', encoding='utf-8') as f:
+                            cfg_visible = json.load(f).get("consola_visible", True)
+                except Exception:
+                    pass
 
-                proc = subprocess.Popen(
-                    cmd, 
-                    creationflags=creation_flags,
-                    startupinfo=startupinfo,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace'
-                )
+                if sys.platform == "win32" and cfg_visible:
+                    # Abrir en una ventana de consola propia y visible en pantalla
+                    creation_flags = subprocess.CREATE_NEW_CONSOLE
+                    proc = subprocess.Popen(cmd, creationflags=creation_flags)
+                else:
+                    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    startupinfo = None
+                    if sys.platform == "win32":
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        startupinfo.wShowWindow = 0
+
+                    proc = subprocess.Popen(
+                        cmd, 
+                        creationflags=creation_flags,
+                        startupinfo=startupinfo,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace'
+                    )
+                    if proc.stdout:
+                        for line in proc.stdout:
+                            if line.strip():
+                                print(f"   [PACS] {line.strip()}")
+                
                 _pacs_proc = proc
-                if proc.stdout:
-                    for line in proc.stdout:
-                        if line.strip():
-                            print(f"   [PACS] {line.strip()}")
                 proc.wait()
                 print(f"✅ Proceso de validación PACS finalizado (exit code: {proc.returncode}).")
                 mostrar_notificacion_tray("Validación PACS finalizada.", "🩺 Validación PACS")
@@ -1072,7 +1119,7 @@ def run_llm_daily_checker():
         time.sleep(3600)
 
 def run_pacs_validation_scheduler():
-    """Ejecuta en segundo plano la validación diaria de PACS según configuración y soporte catch-up."""
+    """Ejecuta en segundo plano la validación diaria de PACS según configuración, con límite de intentos y cooldown."""
     print("🏥 Iniciando scheduler inteligente de validación diaria PACS...")
     config_path = Path(__file__).resolve().parent / "config" / "pacs_validation_config.json"
     
@@ -1083,9 +1130,16 @@ def run_pacs_validation_scheduler():
                     return json.load(f)
             except Exception:
                 pass
-        return {"habilitado": True, "hora_validacion": "09:00", "dias_validacion": [0, 1, 2, 3, 4, 5, 6]}
+        return {
+            "habilitado": True, 
+            "hora_validacion": "09:00", 
+            "dias_validacion": [0, 1, 2, 3, 4, 5, 6],
+            "max_intentos_diarios_scheduler": 2,
+            "cooldown_fallo_minutos": 60
+        }
 
     time.sleep(15)
+    _ultimo_aviso_cooldown = 0
 
     while True:
         try:
@@ -1095,6 +1149,8 @@ def run_pacs_validation_scheduler():
                 dia_actual = ahora.weekday()
                 hora_cfg = cfg.get("hora_validacion", "09:00")
                 dias_permitidos = cfg.get("dias_validacion", [0, 1, 2, 3, 4, 5, 6])
+                max_intentos_diarios = cfg.get("max_intentos_diarios_scheduler", 2)
+                cooldown_minutos = cfg.get("cooldown_fallo_minutos", 60)
                 
                 try:
                     h_target, m_target = [int(x) for x in hora_cfg.split(":")]
@@ -1105,14 +1161,41 @@ def run_pacs_validation_scheduler():
                 hora_alcanzada = (ahora.hour > h_target) or (ahora.hour == h_target and ahora.minute >= m_target)
 
                 if es_dia_permitido and hora_alcanzada:
-                    ya_validado = check_pacs_validated_today()
-                    if not ya_validado:
-                        if not is_any_workflow_running():
-                            print(f"🩺 [{'Catch-Up' if ahora.hour > h_target or ahora.minute > m_target + 5 else 'Horario'}] Ejecutando validación diaria PACS...")
-                            trigger_pacs_validation_process(manual=False)
-                            time.sleep(60)
-                        else:
-                            print("⏳ Validación PACS pendiente, pero hay otro workflow corriendo. Esperando...")
+                    daily_status = get_pacs_daily_status()
+                    
+                    if daily_status["ya_exitoso"]:
+                        # Ya se completó con éxito hoy
+                        pass
+                    elif daily_status["total_intentos"] >= max_intentos_diarios:
+                        # Se alcanzó el límite de reintentos diarios automáticos tras error
+                        pass
+                    else:
+                        # Revisar si hay un cooldown activo por fallo reciente
+                        ultimo_ts = daily_status.get("ultimo_timestamp")
+                        en_cooldown = False
+                        if ultimo_ts:
+                            try:
+                                if isinstance(ultimo_ts, str):
+                                    ultimo_ts = datetime.fromisoformat(ultimo_ts.replace("Z", ""))
+                                mins_pasados = (ahora - ultimo_ts).total_seconds() / 60.0
+                                if mins_pasados < cooldown_minutos:
+                                    en_cooldown = True
+                                    # Loguear sólo cada 15 minutos para no saturar consola
+                                    if time.time() - _ultimo_aviso_cooldown > 900:
+                                        _ultimo_aviso_cooldown = time.time()
+                                        print(f"⏳ PACS en cooldown tras fallo: faltan {int(cooldown_minutos - mins_pasados)} min para reintentar.")
+                            except Exception:
+                                pass
+
+                        if not en_cooldown:
+                            if not is_any_workflow_running():
+                                tag = "Catch-Up" if ahora.hour > h_target or ahora.minute > m_target + 5 else "Horario"
+                                intento_actual = daily_status["total_intentos"] + 1
+                                print(f"🩺 [{tag}] Ejecutando validación diaria PACS (Intento {intento_actual}/{max_intentos_diarios} hoy)...")
+                                trigger_pacs_validation_process(manual=False)
+                                time.sleep(60)
+                            else:
+                                print("⏳ Validación PACS pendiente, pero hay otro workflow corriendo. Esperando...")
         except Exception as e:
             print(f"[PACS Scheduler Error] {e}")
 
