@@ -56,7 +56,7 @@ from core.workflow_executor import WorkflowExecutor
 from utils.stream_manager import stream_manager
 from utils.telegram_manager import (
     enviar_mensaje, editar_mensaje, responder_callback, configurar_menu_comandos,
-    cargar_usuarios, guardar_usuarios, enviar_foto, enviar_documento,
+    cargar_usuarios, guardar_usuarios, enviar_foto, enviar_documento, telegram_request,
     get_menu_principal_markup, get_menu_ejecucion_markup, get_menu_loop_markup,
     get_menu_reportes_markup, get_menu_periodo_excel_markup, get_menu_sistema_markup,
     get_menu_notificaciones_markup, get_live_status_markup, get_menu_stream_markup
@@ -1291,8 +1291,10 @@ def telegram_polling_loop():
     
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={ultimo_update_id + 1}&timeout=30"
-            response = requests.get(url, timeout=40).json()
+            response = telegram_request("GET", f"getUpdates?offset={ultimo_update_id + 1}&timeout=30", timeout=40)
+            if not response:
+                time.sleep(5)
+                continue
             
             if response.get("ok"):
                 for update in response.get("result", []):

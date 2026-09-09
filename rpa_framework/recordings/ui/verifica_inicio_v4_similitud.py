@@ -103,9 +103,14 @@ class VerificaInicioSimilitud:
                 if windows:
                     hwnd = windows[0]
                     win = Desktop(backend="win32").window(handle=hwnd)
+                    try:
+                        win.restore()
+                    except Exception:
+                        pass
                     win.set_focus()
                     return True
-        except: pass
+        except Exception:
+            pass
         return False
 
     def check_process_running(self):
