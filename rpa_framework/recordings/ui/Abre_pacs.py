@@ -173,9 +173,21 @@ def abrir_vue_pacs():
         time.sleep(3)
     debug_listar_ventanas()
 
-    # Tomar ventana PRINCIPAL (soluciona las 2 ventanas)
-    logger.info("top_window()...")
-    main_window = app.top_window()
+    # Tomar ventana PRINCIPAL (priorizando la que tenga título Carestream)
+    main_window = None
+    for titulo in TITULOS_CARESTREAM:
+        try:
+            cand = app.window(title_re=f".*{re.escape(titulo)}.*")
+            if cand.exists() and cand.is_visible():
+                main_window = cand
+                logger.info(f"   Ventana encontrada por coincidencia de título: '{cand.window_text()}' (hwnd: {cand.handle})")
+                break
+        except Exception:
+            pass
+
+    if not main_window:
+        logger.info("top_window()...")
+        main_window = app.top_window()
     
     titulo_real = main_window.window_text()
     logger.info(f"   '{titulo_real}' hwnd: {main_window.handle}")

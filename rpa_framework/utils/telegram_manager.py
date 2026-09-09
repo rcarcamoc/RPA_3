@@ -4,14 +4,56 @@ import time
 import sys
 import subprocess
 import os
+import urllib3
 from dotenv import load_dotenv
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
 # Configuración
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 if not TOKEN:
     print("Warning: TELEGRAM_BOT_TOKEN environment variable not set. Please create a .env file with the token.")
+
+TELEGRAM_BASE_URL = os.environ.get("TELEGRAM_API_URL", "https://api.telegram.org").rstrip("/")
+_telegram_session = requests.Session()
+_telegram_session.verify = False
+
+_last_fw_warning = 0
+
+def telegram_request(method: str, endpoint: str, **kwargs):
+    """
+    Ejecuta peticiones seguras a la API de Telegram.
+    Soporta bypass SSL (para proxies corporativos e inspección Fortinet),
+    URL base personalizada si se usa proxy, y maneja de forma limpia
+    los bloqueos de filtro web corporativo (ej. FortiGuard 403).
+    """
+    global _last_fw_warning
+    url = f"{TELEGRAM_BASE_URL}/bot{TOKEN}/{endpoint.lstrip('/')}"
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = 15
+
+    try:
+        resp = _telegram_session.request(method, url, **kwargs)
+        if resp.status_code == 403 and "forti" in resp.text.lower():
+            now = time.time()
+            if now - _last_fw_warning > 60:
+                print("⚠️ [Firewall] Tráfico a Telegram bloqueado por política de seguridad corporativa (FortiGuard: Instant Messaging).")
+                _last_fw_warning = now
+            return None
+        
+        try:
+            return resp.json()
+        except Exception:
+            return None
+    except requests.exceptions.SSLError as e:
+        now = time.time()
+        if now - _last_fw_warning > 60:
+            print(f"⚠️ [SSL Error] No se pudo verificar el certificado con Telegram/Firewall: {e}")
+            _last_fw_warning = now
+        return None
+    except Exception as e:
+        return None
 
 USUARIOS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usuarios.json")
 
@@ -30,7 +72,6 @@ def guardar_usuarios(usuarios):
 
 def configurar_menu_comandos():
     """Configura el menú nativo de comandos en Telegram (organizado por categorías)."""
-    url = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
     commands = [
         {"command": "menu", "description": "🎛️ Panel de control general"},
         {"command": "estado", "description": "📸 Estado actual y captura en vivo"},
@@ -43,11 +84,11 @@ def configurar_menu_comandos():
         {"command": "detener", "description": "⏹️ Parada de emergencia"}
     ]
     try:
-        res = requests.post(url, json={"commands": commands}, timeout=10).json()
-        if res.get("ok"):
+        res = telegram_request("POST", "setMyCommands", json={"commands": commands}, timeout=10)
+        if res and res.get("ok"):
             print("[OK] Menu de comandos de Telegram configurado exitosamente.")
         else:
-            print(f"[WARN] Error configurando comandos: {res}")
+            print(f"[WARN] No se pudo configurar comandos de Telegram (posible bloqueo de red).")
     except Exception as e:
         print(f"Error en configurar_menu_comandos: {e}")
 
@@ -187,20 +228,18 @@ def get_menu_notificaciones_markup():
 # =========================================================================
 
 def enviar_mensaje(chat_id, texto, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": texto, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        res = requests.post(url, json=payload, timeout=15).json()
-        return res.get("ok", False)
+        res = telegram_request("POST", "sendMessage", json=payload, timeout=15)
+        return res.get("ok", False) if res else False
     except Exception as e:
         print(f"Error en enviar_mensaje: {e}")
         return False
 
 def editar_mensaje(chat_id, message_id, texto, reply_markup=None):
     """Edita un mensaje existente en el chat (navegación fluida)."""
-    url = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -210,20 +249,19 @@ def editar_mensaje(chat_id, message_id, texto, reply_markup=None):
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     try:
-        res = requests.post(url, json=payload, timeout=10).json()
-        return res.get("ok", False)
+        res = telegram_request("POST", "editMessageText", json=payload, timeout=10)
+        return res.get("ok", False) if res else False
     except Exception as e:
         print(f"Error en editar_mensaje: {e}")
         return False
 
 def responder_callback(callback_id, text=None, show_alert=False):
     """Responde al evento callback para ocultar el icono de carga en Telegram."""
-    url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
     payload = {"callback_query_id": callback_id, "show_alert": show_alert}
     if text:
         payload["text"] = text
     try:
-        requests.post(url, json=payload, timeout=5)
+        telegram_request("POST", "answerCallbackQuery", json=payload, timeout=5)
     except Exception:
         pass
 
@@ -306,10 +344,10 @@ def enviar_foto(chat_id, ruta_imagen, caption="", reply_markup=None):
             return False
 
     try:
-        res = requests.post(url, data=data, files=files, timeout=30).json()
-        if not res.get("ok"):
+        res = telegram_request("POST", "sendPhoto", data=data, files=files, timeout=30)
+        if res and not res.get("ok"):
             print(f"  [Telegram API Error] sendPhoto: {res.get('description', res)}")
-        return res.get("ok", False)
+        return res.get("ok", False) if res else False
     except Exception as e:
         print(f"Error enviando foto a {chat_id}: {e}")
         return False
@@ -337,23 +375,21 @@ def enviar_video(chat_id, ruta_video, caption=""):
         print(f"Error: El archivo de video no existe: {ruta_video}")
         return False
         
-    url = f"https://api.telegram.org/bot{TOKEN}/sendVideo"
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
 
     opened_file = None
     try:
         opened_file = open(ruta_video, "rb")
         files = {"video": (os.path.basename(ruta_video), opened_file, "video/mp4")}
-        res = requests.post(url, data=data, files=files, timeout=60).json()
-        if res.get("ok"):
+        res = telegram_request("POST", "sendVideo", data=data, files=files, timeout=60)
+        if res and res.get("ok"):
             return True
             
-        print(f"  [Telegram API Info] sendVideo falló ({res.get('description')}), intentando sendDocument...")
+        print(f"  [Telegram API Info] sendVideo falló ({res.get('description') if res else 'Sin respuesta'}), intentando sendDocument...")
         opened_file.seek(0)
-        url_doc = f"https://api.telegram.org/bot{TOKEN}/sendDocument"
         files_doc = {"document": (os.path.basename(ruta_video), opened_file)}
-        res_doc = requests.post(url_doc, data=data, files=files_doc, timeout=60).json()
-        return res_doc.get("ok", False)
+        res_doc = telegram_request("POST", "sendDocument", data=data, files=files_doc, timeout=60)
+        return res_doc.get("ok", False) if res_doc else False
     except Exception as e:
         print(f"Error enviando video a {chat_id}: {e}")
         return False
@@ -398,23 +434,24 @@ def enviar_documento(chat_id, ruta_documento, caption=""):
         print(f"Error: El archivo no existe: {ruta_documento}")
         return False
 
-    url = f"https://api.telegram.org/bot{TOKEN}/sendDocument"
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
 
     opened_file = None
     try:
         opened_file = open(ruta_documento, "rb")
         files = {"document": (os.path.basename(ruta_documento), opened_file)}
-        res = requests.post(url, data=data, files=files, timeout=60).json()
-        if not res.get("ok"):
+        res = telegram_request("POST", "sendDocument", data=data, files=files, timeout=60)
+        if res and not res.get("ok"):
             print(f"  [Telegram API Error] sendDocument: {res.get('description', res)}")
-        return res.get("ok", False)
+        return res.get("ok", False) if res else False
     except Exception as e:
         print(f"Error enviando documento a {chat_id}: {e}")
         return False
     finally:
         if opened_file:
             opened_file.close()
+
+
 
 def enviar_documento_todos(ruta_documento, caption=""):
     """Envía un documento con mensaje a todos los usuarios registrados."""
