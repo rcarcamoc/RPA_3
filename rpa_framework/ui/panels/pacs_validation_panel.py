@@ -464,7 +464,7 @@ class PacsValidationPanel(QWidget):
 
         def _worker():
             try:
-                creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                creation_flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
                 proc = subprocess.Popen([sys.executable, str(SCRIPT_PATH), "--manual"], creationflags=creation_flags)
                 proc.wait()
             except Exception as e:

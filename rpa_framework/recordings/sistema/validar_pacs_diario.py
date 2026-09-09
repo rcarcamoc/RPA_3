@@ -27,6 +27,9 @@ if sys.platform.startswith('win'):
     except Exception:
         pass
 
+# Asegurar que los scripts ejecutados por el workflow muestren sus ventanas y consola
+os.environ["RPA_SHOW_CONSOLE"] = "1"
+
 try:
     import mysql.connector
     from mysql.connector import Error

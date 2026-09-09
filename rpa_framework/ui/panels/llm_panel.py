@@ -420,6 +420,7 @@ class LLMPanel(QWidget):
         self._auto_bg_worker = None
         self._models   = []       # lista actual del config (BASE_LLM_MODELS)
         self._active   = []       # lista de modelos validados OK en este run
+        self._catalogo_cache = {} # caché de ris.catalogo_modelos_llm
         self._api_key  = os.getenv("OPENROUTER_API_KEY", "")
         self._init_ui()
         self._load_models_from_config()
@@ -521,9 +522,9 @@ class LLMPanel(QWidget):
         tbl_layout.setSpacing(10)
         tbl_layout.setContentsMargins(14, 18, 14, 14)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
-            "Modelo", "Proveedor", "Éxitos / Intentos", "Tasa (1°)", "Tiempo Prom.", "Estado", "Detalle"
+            "Modelo", "Proveedor", "Aptitud / Rol", "Éxitos / Intentos", "Tasa (1°)", "Tiempo Prom.", "Estado", "Detalle / Auditoría"
         ])
         
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -532,7 +533,8 @@ class LLMPanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -880,7 +882,7 @@ class LLMPanel(QWidget):
     # ─── Lógica de Datos y Modelos ───────────────────────────────────────────
 
     def _query_db_stats(self) -> dict:
-        """Consulta ris.log_llm_ranking para obtener estadísticas de los modelos (es_primer_intento=1)."""
+        """Consulta ris.log_llm_ranking y ris.catalogo_modelos_llm para obtener estadísticas y aptitudes."""
         stats = {}
         try:
             import mysql.connector
@@ -897,10 +899,17 @@ class LLMPanel(QWidget):
                 GROUP BY modelo
             """)
             rows = cursor.fetchall()
-            conn.close()
-
             for row in rows:
                 stats[row['modelo']] = row
+
+            cursor.execute("""
+                SELECT modelo, proveedor, tamano_estimado, apto_ocr, apto_patologia, justificacion_agente
+                FROM ris.catalogo_modelos_llm
+            """)
+            cat_rows = cursor.fetchall()
+            self._catalogo_cache = {r['modelo']: r for r in cat_rows}
+
+            conn.close()
         except Exception as e:
             self._log(f"⚠️ Error conectando a DB para estadísticas: {e}")
         return stats
@@ -973,23 +982,46 @@ class LLMPanel(QWidget):
             prov_item.setForeground(QColor("#0284c7"))
         self.table.setItem(row, 1, prov_item)
 
-        # Poblar estadísticas
+        # Columna 2: Aptitud / Rol dictaminada por el Catálogo / Agente
+        cat_info = getattr(self, '_catalogo_cache', {}).get(model_id)
+        apt_text = "⚡ Solo OCR"
+        apt_color = "#0284c7"
+        if cat_info:
+            if cat_info.get("apto_patologia") and cat_info.get("apto_ocr"):
+                apt_text = "⚡ OCR + 🩺 Patología"
+                apt_color = "#7c3aed"
+            elif cat_info.get("apto_patologia"):
+                apt_text = "🩺 Solo Patología"
+                apt_color = "#059669"
+            if not detail and cat_info.get("justificacion_agente"):
+                detail = cat_info.get("justificacion_agente")
+        elif any(kw in model_id.lower() for kw in ["90b", "30b", "31b", "120b"]):
+            apt_text = "⚡ OCR + 🩺 Patología"
+            apt_color = "#7c3aed"
+
+        apt_item = QTableWidgetItem(apt_text)
+        apt_item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        apt_item.setForeground(QColor(apt_color))
+        self.table.setItem(row, 2, apt_item)
+
+        # Poblar estadísticas (Columnas 3, 4, 5)
         if model_stats:
             intentos = model_stats['total_intentos']
             exitos = int(model_stats['total_exitos'] or 0)
             tiempo = model_stats['tiempo_promedio_ms'] or 0
             tasa = (exitos / intentos * 100) if intentos > 0 else 0.0
 
-            self.table.setItem(row, 2, QTableWidgetItem(f"{exitos} / {intentos}"))
-            self.table.setItem(row, 3, QTableWidgetItem(f"{tasa:.1f}%"))
-            self.table.setItem(row, 4, QTableWidgetItem(f"{tiempo / 1000:.2f}s"))
+            self.table.setItem(row, 3, QTableWidgetItem(f"{exitos} / {intentos}"))
+            self.table.setItem(row, 4, QTableWidgetItem(f"{tasa:.1f}%"))
+            self.table.setItem(row, 5, QTableWidgetItem(f"{tiempo / 1000:.2f}s"))
         else:
-            self.table.setItem(row, 2, QTableWidgetItem("0 / 0"))
-            self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 3, QTableWidgetItem("0 / 0"))
             self.table.setItem(row, 4, QTableWidgetItem("—"))
+            self.table.setItem(row, 5, QTableWidgetItem("—"))
 
-        self.table.setItem(row, 5, self._colored_item(status, color))
-        self.table.setItem(row, 6, QTableWidgetItem(detail))
+        # Columna 6: Estado, Columna 7: Detalle
+        self.table.setItem(row, 6, self._colored_item(status, color))
+        self.table.setItem(row, 7, QTableWidgetItem(detail))
 
     def _colored_item(self, text: str, color: str) -> QTableWidgetItem:
         item = QTableWidgetItem(text)

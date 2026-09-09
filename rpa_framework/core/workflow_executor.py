@@ -33,7 +33,14 @@ except ImportError:
             return "1920x1080"
 
 def get_python_exe() -> str:
-    """Retorna la ruta al ejecutable python (preferiendo pythonw.exe para evitar que aparezcan consolas negras)."""
+    """Retorna la ruta al ejecutable python."""
+    if os.environ.get("RPA_SHOW_CONSOLE", "0") == "1":
+        exe = sys.executable
+        if "pythonw.exe" in exe.lower():
+            cand = exe.lower().replace("pythonw.exe", "python.exe")
+            if os.path.exists(cand):
+                return cand
+        return exe
     exe = sys.executable
     if "pythonw.exe" in exe.lower():
         return exe
@@ -43,7 +50,9 @@ def get_python_exe() -> str:
     return exe
 
 def _get_silent_process_flags():
-    """Retorna creationflags y startupinfo configurados para ocultar totalmente consolas de Windows."""
+    """Retorna creationflags y startupinfo configurados para ocultar totalmente consolas de Windows a menos que RPA_SHOW_CONSOLE=1."""
+    if os.environ.get("RPA_SHOW_CONSOLE", "0") == "1":
+        return 0, None
     creationflags = 0
     startupinfo = None
     if sys.platform == "win32":
