@@ -298,13 +298,14 @@ class PacsValidationPanel(QWidget):
         layout_historial.addLayout(historial_header)
 
         self.tabla_historial = QTableWidget()
-        self.tabla_historial.setColumnCount(5)
-        self.tabla_historial.setHorizontalHeaderLabels(["Fecha", "Estado", "Duración", "Intentos", "Observación"])
+        self.tabla_historial.setColumnCount(6)
+        self.tabla_historial.setHorizontalHeaderLabels(["Fecha", "Estado", "Médico", "Duración", "Intentos", "Observación"])
         self.tabla_historial.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.tabla_historial.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.tabla_historial.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.tabla_historial.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.tabla_historial.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.tabla_historial.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.tabla_historial.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.tabla_historial.setMinimumHeight(220)
         self.tabla_historial.setStyleSheet("""
             QTableWidget {
@@ -411,7 +412,10 @@ class PacsValidationPanel(QWidget):
                     self.lbl_badge_estado.setStyleSheet("color: #64748b; background: #f1f5f9; padding: 6px 12px; border-radius: 6px;")
 
                 self.lbl_ultima_ejecucion.setText(f"Última verificación: {fecha}")
-                self.lbl_detalle_estado.setText(f"Observación: {obs or 'Sin observaciones'}")
+                doc_val = ultimo.get("doctor_validacion", "")
+                user_val = ultimo.get("user_validacion", "")
+                doc_str = f" | Médico: {doc_val} ({user_val})" if doc_val else ""
+                self.lbl_detalle_estado.setText(f"Observación: {obs or 'Sin observaciones'}{doc_str}")
             
             # Cargar Historial (últimos 30)
             cursor.execute("SELECT * FROM ris.validacion_pacs ORDER BY id DESC LIMIT 30")
@@ -424,6 +428,9 @@ class PacsValidationPanel(QWidget):
                 
                 f_str = str(r.get("fecha_validacion", ""))
                 est_str = r.get("estado", "")
+                m_nom = r.get("doctor_validacion") or "--"
+                m_usr = r.get("user_validacion")
+                medico_str = f"{m_nom} ({m_usr})" if m_usr else m_nom
                 dur_str = f"{r.get('duracion_segundos', 0)}s" if r.get('duracion_segundos') is not None else "--"
                 int_str = str(r.get("intentos", 1))
                 obs_str = r.get("observacion") or ""
@@ -439,9 +446,10 @@ class PacsValidationPanel(QWidget):
                     item_est.setForeground(QColor("#d97706"))
                 self.tabla_historial.setItem(row_idx, 1, item_est)
                 
-                self.tabla_historial.setItem(row_idx, 2, QTableWidgetItem(dur_str))
-                self.tabla_historial.setItem(row_idx, 3, QTableWidgetItem(int_str))
-                self.tabla_historial.setItem(row_idx, 4, QTableWidgetItem(obs_str))
+                self.tabla_historial.setItem(row_idx, 2, QTableWidgetItem(medico_str))
+                self.tabla_historial.setItem(row_idx, 3, QTableWidgetItem(dur_str))
+                self.tabla_historial.setItem(row_idx, 4, QTableWidgetItem(int_str))
+                self.tabla_historial.setItem(row_idx, 5, QTableWidgetItem(obs_str))
 
             cursor.close()
             conn.close()
@@ -452,7 +460,7 @@ class PacsValidationPanel(QWidget):
         reply = QMessageBox.question(
             self, "Confirmar Validación PACS",
             "¿Desea iniciar la validación de PACS en este momento?\n"
-            "Esto ejecutará el workflow Valida_pacs.json en segundo plano.",
+            "Esto ejecutará el workflow Valida_pacs.json en una ventana visible en primer plano.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

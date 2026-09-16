@@ -27,6 +27,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from utils.logging_setup import setup_logging
 from utils.telegram_manager import enviar_alerta_todos
+try:
+    from utils.window_utils import maximize_hwnd, maximize_pacs_windows
+except ImportError:
+    try:
+        from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows
+    except ImportError:
+        maximize_hwnd = None
+        maximize_pacs_windows = None
 
 # Configuración de MySQL (opcional, siguiendo el estándar del proyecto)
 try:
@@ -72,7 +80,7 @@ class VerificaInicioAutomation:
             logger.warning(f"[DB Error] {e}")
 
     def focus_carestream_ris(self):
-        """Intenta traer 'Carestream RIS' al frente. No es error si falla."""
+        """Intenta traer 'Carestream RIS' al frente y maximizarlo. No es error si falla."""
         try:
             title = "Carestream RIS"
             # Buscamos ventanas que contengan el nombre
@@ -80,10 +88,22 @@ class VerificaInicioAutomation:
             
             if windows:
                 hwnd = windows[0]
-                win = Desktop(backend="win32").window(handle=hwnd)
-                # Intentamos set_focus (traer al frente)
-                win.set_focus()
-                logger.info(f"Ventana '{title}' puesta en primer plano.")
+                if maximize_hwnd:
+                    maximize_hwnd(hwnd)
+                else:
+                    try:
+                        import win32gui
+                        import win32con
+                        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        try:
+                            win = Desktop(backend="win32").window(handle=hwnd)
+                            win.maximize()
+                            win.set_focus()
+                        except Exception:
+                            pass
+                logger.info(f"Ventana '{title}' maximizada y puesta en primer plano.")
                 return True
         except Exception:
             # Si falla (ej: la ventana se está cerrando o no responde), ignoramos

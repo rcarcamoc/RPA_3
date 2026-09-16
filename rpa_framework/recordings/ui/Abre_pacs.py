@@ -43,6 +43,15 @@ except ImportError:
     except ImportError:
         handle_error_and_exit = None
 
+try:
+    from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows
+except ImportError:
+    try:
+        from utils.window_utils import maximize_hwnd, maximize_pacs_windows
+    except ImportError:
+        maximize_hwnd = None
+        maximize_pacs_windows = None
+
 def get_vf():
     return vf_instance
 
@@ -69,6 +78,7 @@ TITULOS_CARESTREAM = [
 # Procesos conocidos que deben cerrarse
 PROCESOS_CARESTREAM = [
     "mp.exe", 
+    "ckmvs.exe",
     "csps_win.exe", 
     "RISClient.exe", 
     "CarestreamRIS.exe",
@@ -210,6 +220,27 @@ def abrir_vue_pacs():
         vf.wait(5, "Finalizando apertura Vue PACS...")
     else:
         time.sleep(5)
+    # Maximización deshabilitada
+    # logger.info("   Maximizando ventana de Vue PACS...")
+    # maximized = False
+    # if maximize_hwnd and main_window.handle:
+    #     maximized = maximize_hwnd(main_window.handle)
+    # if not maximized:
+    #     try:
+    #         import win32gui
+    #         import win32con
+    #         win32gui.ShowWindow(main_window.handle, win32con.SW_MAXIMIZE)
+    #         win32gui.SetForegroundWindow(main_window.handle)
+    #         maximized = True
+    #     except Exception:
+    #         try:
+    #             main_window.maximize()
+    #             maximized = True
+    #         except Exception:
+    #             pass
+    # if maximize_pacs_windows:
+    #     maximize_pacs_windows()
+
     logger.info(f"LISTA: '{titulo_real}'")
     print(f"\nVue PACS listo!\nhwnd: {main_window.handle}")
     

@@ -382,7 +382,7 @@ def run_auto_verification_logic(force=False, log_callback=None) -> dict:
             import utils.llm_config as llm_cfg
         except ImportError:
             import rpa_framework.utils.llm_config as llm_cfg
-        current_models = list(llm_cfg.BASE_LLM_MODELS)
+        current_models = list(dict.fromkeys(list(llm_cfg.BASE_LLM_MODELS) + list(llm_cfg.PATOLOGIA_DEFAULT_MODELS)))
     except Exception as e:
         err_msg = f"Error cargando llm_config: {e}"
         _log(f"❌ {err_msg}")
@@ -412,7 +412,7 @@ def run_auto_verification_logic(force=False, log_callback=None) -> dict:
         _log(m)
 
     # 1. Validar modelos actuales con sus respectivos proveedores
-    emit_log("🔍 Paso 1: Validando modelos actuales con sus proveedores correspondientes...")
+    emit_log("🔍 Paso 1: Validando modelos actuales (OCR + Patología) con sus proveedores correspondientes...")
     current_status = {}
     for m in current_models:
         base_url, target_key, provider = get_llm_request_params(m)
@@ -433,11 +433,22 @@ def run_auto_verification_logic(force=False, log_callback=None) -> dict:
         }
         try:
             r = requests.post(url, headers=headers_call, json=payload, timeout=15)
-            current_status[m] = (r.status_code == 200)
-            if r.status_code == 200:
+            is_ok = (r.status_code == 200)
+            current_status[m] = is_ok
+            if is_ok:
                 emit_log(f"    ✅ Online ({provider.upper()})")
             else:
                 emit_log(f"    ❌ Offline (HTTP {r.status_code})")
+                if r.status_code in [404, 410]:
+                    try:
+                        import mysql.connector
+                        c_tmp = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                        cur_tmp = c_tmp.cursor()
+                        cur_tmp.execute("UPDATE ris.catalogo_modelos_llm SET activo = 0 WHERE modelo = %s", (m,))
+                        c_tmp.commit()
+                        c_tmp.close()
+                    except Exception:
+                        pass
         except Exception as e:
             current_status[m] = False
             emit_log(f"    ❌ Error ({e})")

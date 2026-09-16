@@ -29,6 +29,14 @@ from ocr.matcher import OCRMatcher
 from utils.logging_setup import setup_logging
 from utils.telegram_manager import enviar_alerta_todos
 from utils.visual_feedback import VisualFeedback
+try:
+    from utils.window_utils import maximize_hwnd, maximize_pacs_windows
+except ImportError:
+    try:
+        from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows
+    except ImportError:
+        maximize_hwnd = None
+        maximize_pacs_windows = None
 
 # Configuración de MySQL
 try:
@@ -87,15 +95,28 @@ class VerificaInicioVisualOCR:
             logger.warning(f"[DB Error] {e}")
 
     def focus_ris(self):
-        """Busca y enfoca la ventana del RIS."""
+        """Busca, enfoca y maximiza la ventana del RIS / Vue PACS."""
         try:
-            titles = ["Carestream RIS", "Workflow Information Management", "Vue RIS"]
+            titles = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream Vue PACS"]
             for title in titles:
                 windows = fw.find_windows(title_re=re.compile(f".*{re.escape(title)}.*", re.I))
                 if windows:
                     hwnd = windows[0]
-                    win = Desktop(backend="win32").window(handle=hwnd)
-                    win.set_focus()
+                    if maximize_hwnd:
+                        maximize_hwnd(hwnd)
+                    else:
+                        try:
+                            import win32gui
+                            import win32con
+                            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                            win32gui.SetForegroundWindow(hwnd)
+                        except Exception:
+                            try:
+                                win = Desktop(backend="win32").window(handle=hwnd)
+                                win.maximize()
+                                win.set_focus()
+                            except Exception:
+                                pass
                     return True
         except: pass
         return False

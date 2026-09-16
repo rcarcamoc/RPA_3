@@ -65,9 +65,36 @@ CONFIG_FILE = BASE_DIR / "config" / "pacs_validation_config.json"
 STATE_FILE = BASE_DIR / "config" / "execution_state.json"
 WF_PATH = BASE_DIR / "workflows" / "Valida_pacs.json"
 
-DOCTOR_NOMBRE = "Cristian Navarro"
-DOCTOR_USER = "CNAVARROGA"
-DOCTOR_PASS = "cristian"
+def obtener_medico_azar(conn):
+    """
+    Obtiene un médico activo al azar desde la tabla ris.medicos con usuario y clave válidos.
+    Retorna (nombre_completo, usuario_integra, clave_integra).
+    """
+    cursor = conn.cursor(dictionary=True)
+    try:
+        query = """
+        SELECT nombre_completo, usuario_integra, clave_integra 
+        FROM ris.medicos 
+        WHERE (estado = 'Activo' OR estado IS NULL) 
+          AND usuario_integra IS NOT NULL AND TRIM(usuario_integra) != '' 
+          AND clave_integra IS NOT NULL AND TRIM(clave_integra) != ''
+        ORDER BY RAND() 
+        LIMIT 1
+        """
+        cursor.execute(query)
+        row = cursor.fetchone()
+        if row:
+            nombre = (row.get("nombre_completo") or "Médico Aleatorio").strip()
+            usuario = (row.get("usuario_integra") or "").strip()
+            clave = (row.get("clave_integra") or "").strip()
+            return nombre, usuario, clave
+    except Exception as e:
+        print(f"[DB Error] Error obteniendo médico al azar de ris.medicos: {e}")
+    finally:
+        cursor.close()
+    # Fallback de seguridad en caso de tabla vacía o error
+    return "Cristian Navarro", "CNAVARROGA", "cristian"
+
 
 
 def load_pacs_config():
@@ -167,24 +194,28 @@ def ejecutar_validacion(dry_run=False, manual=False):
         if cleaned_rows > 0:
             print(f"[DB] Se actualizaron {cleaned_rows} registros colgados a estado Error.")
             
-        # 2. Query 2: Insert a registro_acciones con id equivalente a 184 (Cristian Navarro)
+        # 2. Obtener médico y credenciales al azar de la tabla medicos
+        doc_nombre, doc_user, doc_pass = obtener_medico_azar(conn)
+        print(f"[DB] 🎲 Médico seleccionado al azar de ris.medicos: {doc_nombre} (Usuario: {doc_user})")
+
+        # 3. Insert a registro_acciones con las credenciales del médico aleatorio
         res_pantalla = get_screen_resolution()
         print(f"[DB] Insertando registro de prueba en ris.registro_acciones (Resolución: {res_pantalla})...")
         q2 = """
         INSERT INTO ris.registro_acciones (inicio, `update`, ultimo_nodo, estado, doctor_detectado, User, Pass, resolucion_pantalla)
         VALUES (NOW(), NOW(), 'Validación PACS', 'En Proceso', %s, %s, %s, %s)
         """
-        cursor.execute(q2, (DOCTOR_NOMBRE, DOCTOR_USER, DOCTOR_PASS, res_pantalla))
+        cursor.execute(q2, (doc_nombre, doc_user, doc_pass, res_pantalla))
         reg_acciones_id = cursor.lastrowid
         conn.commit()
         print(f"✓ Registro acciones creado con ID: {reg_acciones_id}")
         
-        # 3. Registrar en ris.validacion_pacs
+        # 4. Registrar en ris.validacion_pacs
         q3 = """
         INSERT INTO ris.validacion_pacs (fecha_validacion, estado, doctor_validacion, user_validacion, pass_validacion, registro_acciones_id)
         VALUES (NOW(), 'En Proceso', %s, %s, %s, %s)
         """
-        cursor.execute(q3, (DOCTOR_NOMBRE, DOCTOR_USER, DOCTOR_PASS, reg_acciones_id))
+        cursor.execute(q3, (doc_nombre, doc_user, doc_pass, reg_acciones_id))
         val_pacs_id = cursor.lastrowid
         conn.commit()
         print(f"✓ Registro validación PACS creado con ID: {val_pacs_id}")
@@ -203,6 +234,11 @@ def ejecutar_validacion(dry_run=False, manual=False):
             
         # Marca estado ocupado globalmente
         set_bg_execution_state(True, "Validación PACS")
+        
+        # Limpieza previa de programas Carestream para asegurar inicio limpio
+        print("[PACS] Limpiando instancias previas de Carestream/PACS antes de iniciar...")
+        cerrar_aplicacion_pacs()
+        time.sleep(2)
         
         # 4. Ejecución del Workflow Valida_pacs.json con reintentos
         workflow_exitoso = False
@@ -264,10 +300,11 @@ def ejecutar_validacion(dry_run=False, manual=False):
             print(f"🎉 Validación de PACS COMPLETADA CON ÉXITO en {duracion} segundos.")
             
             # Enviar alerta Telegram si está configurado en éxito
+            doc_info = f"\n👨‍⚕️ <b>Médico probado:</b> {doc_nombre} (<code>{doc_user}</code>)"
             tg_cfg = config.get("telegram", {})
             if tg_cfg.get("enviar_alertas", True) and tg_cfg.get("enviar_en_exito", False):
                 if enviar_alerta_todos:
-                    msj = f"✅ <b>VALIDACIÓN PACS EXITOSA</b>\nLa validación diaria de PACS se completó correctamente en {duracion}s (Intento {intento})."
+                    msj = f"✅ <b>VALIDACIÓN PACS EXITOSA</b>\nLa validación diaria de PACS se completó correctamente en {duracion}s (Intento {intento}).{doc_info}"
                     try:
                         enviar_alerta_todos(msj)
                     except Exception as tge:
@@ -278,7 +315,7 @@ def ejecutar_validacion(dry_run=False, manual=False):
             print(f"[DB] Eliminando registro temporal de validación {reg_acciones_id} tras fallo de validación...")
             cursor.execute("DELETE FROM ris.registro_acciones WHERE id = %s", (reg_acciones_id,))
             
-            obs_fail = f"Falló tras {max_reintentos} intentos. Error: {ultimo_error[:250]}"
+            obs_fail = f"Falló tras {max_reintentos} intentos. Médico: {doc_nombre} ({doc_user}). Error: {ultimo_error[:250]}"
             cursor.execute("""
             UPDATE ris.validacion_pacs 
             SET estado = 'Error', observacion = %s, duracion_segundos = %s 
@@ -288,10 +325,11 @@ def ejecutar_validacion(dry_run=False, manual=False):
             print(f"❌ Validación de PACS FALLIDA. Observación: {obs_fail}")
             
             # Enviar alerta Telegram si está configurado
+            doc_info = f"\n👨‍⚕️ <b>Médico probado:</b> {doc_nombre} (<code>{doc_user}</code>)"
             tg_cfg = config.get("telegram", {})
             if tg_cfg.get("enviar_alertas", True) and tg_cfg.get("enviar_en_error", True):
                 if enviar_alerta_todos:
-                    msj = f"🚨 <b>ALERTA VALIDACIÓN PACS</b>\nLa validación diaria de PACS ha fallado tras {max_reintentos} intentos.\n\nDetalle: {ultimo_error[:200]}"
+                    msj = f"🚨 <b>ALERTA VALIDACIÓN PACS</b>\nLa validación diaria de PACS ha fallado tras {max_reintentos} intentos.{doc_info}\n\nDetalle: {ultimo_error[:200]}"
                     try:
                         enviar_alerta_todos(msj)
                     except Exception as tge:

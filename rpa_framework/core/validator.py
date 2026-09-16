@@ -26,13 +26,54 @@ class WorkflowValidator:
             
         # 2. Validar cada nodo individualmente
         for node in workflow.nodes:
-            # Validar Scripts
-            if node.type in [NodeType.ACTION, NodeType.LOOP]:
-                if not hasattr(node, 'script') or not node.script:
+            # Si el nodo está deshabilitado, no generar errores bloqueantes
+            is_enabled = getattr(node, 'enabled', True)
+            severity_if_disabled = "warning" if not is_enabled else "error"
+
+            # Validar Nodos de Acción (pueden ser Script Python, Comando de Sistema o Ejecutable)
+            if node.type == NodeType.ACTION:
+                has_script = bool(getattr(node, 'script', None) and str(node.script).strip())
+                has_command = bool(getattr(node, 'command', None) and str(node.command).strip())
+                has_program = bool(getattr(node, 'program_path', None) and str(node.program_path).strip())
+
+                if not (has_script or has_command or has_program):
                     errors.append({
                         "node_id": node.id,
-                        "message": "No se ha seleccionado ningún script",
-                        "severity": "error"
+                        "message": "El nodo de acción no tiene script ni comando configurado",
+                        "severity": severity_if_disabled
+                    })
+
+            # Validar Loops (Bucle repetitivo)
+            elif node.type == NodeType.LOOP:
+                has_script = bool(getattr(node, 'script', None) and str(node.script).strip())
+                has_command = bool(getattr(node, 'command', None) and str(node.command).strip())
+                has_wf = bool(getattr(node, 'workflow_path', None) and str(node.workflow_path).strip())
+
+                if not (has_script or has_command or has_wf):
+                    errors.append({
+                        "node_id": node.id,
+                        "message": "No se ha configurado script, workflow ni comando para el bucle",
+                        "severity": severity_if_disabled
+                    })
+
+                loop_t = getattr(node, 'loop_type', 'count')
+                if loop_t == 'count' and not getattr(node, 'iterations', None):
+                    errors.append({
+                        "node_id": node.id,
+                        "message": "Falta definir número de iteraciones",
+                        "severity": severity_if_disabled
+                    })
+                elif loop_t == 'list' and not getattr(node, 'iterable', None):
+                    errors.append({
+                        "node_id": node.id,
+                        "message": "Falta definir la variable iterable para la lista",
+                        "severity": severity_if_disabled
+                    })
+                elif loop_t == 'while' and not getattr(node, 'condition', None):
+                    errors.append({
+                        "node_id": node.id,
+                        "message": "Falta definir la condición del bucle while",
+                        "severity": severity_if_disabled
                     })
             
             # Validar Decisiones

@@ -33,6 +33,13 @@ try:
     
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
     from utils.telegram_manager import enviar_alerta_todos
+    try:
+        from utils.window_utils import maximize_ris_windows
+    except ImportError:
+        try:
+            from rpa_framework.utils.window_utils import maximize_ris_windows
+        except ImportError:
+            maximize_ris_windows = None
 except ImportError:
     print("Error: Missing 'selenium' library. Install it with: pip install selenium")
     sys.exit(1)
@@ -203,9 +210,14 @@ class WebAutomation:
                 self.driver.maximize_window()
             except Exception:
                 pass
+            if maximize_ris_windows:
+                try:
+                    maximize_ris_windows()
+                except Exception:
+                    pass
             self.screenshots_dir = Path.cwd() / "screenshots_results"
             self.screenshots_dir.mkdir(exist_ok=True)
-            print("[INFO] Configuración de navegador completada.", flush=True)
+            print("[INFO] Configuración de navegador completada (maximizado).", flush=True)
             
         except Exception as e:
             print(f"[ERROR] Error fatal al iniciar el navegador: {e}", flush=True)
@@ -393,7 +405,17 @@ class WebAutomation:
 
 
 
-            print("[INFO] Automation completed successfully")
+            try:
+                self.driver.maximize_window()
+            except Exception:
+                pass
+            if maximize_ris_windows:
+                try:
+                    maximize_ris_windows()
+                except Exception:
+                    pass
+
+            print("[INFO] Automation completed successfully (RIS Maximizado)")
             
             # Update database for success
             self.db_finish(success=True)

@@ -42,13 +42,16 @@ def get_rpa_summary_info():
     total_hoy = 0
     ok_hoy = 0
     err_hoy = 0
+    conn = None
+    cursor = None
     try:
         import datetime
         import mysql.connector
         from utils.mysql_auto_starter import ensure_mysql_running
         ensure_mysql_running()
 
-        conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
+        today = datetime.datetime.now().strftime("%Y-%m-%d 00:00:00")
+        conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris", connect_timeout=3)
         cursor = conn.cursor(dictionary=True)
         query = """
         SELECT estado, COUNT(*) as cant 
@@ -69,11 +72,21 @@ def get_rpa_summary_info():
             est = str(r.get("estado", "")).lower()
             if "error" in est:
                 err_hoy += cant
-            elif "terminado" in est or "finalizado" in est:
+            elif "terminado" in est or "finalizado" in est or "exitoso" in est or "éxito" in est or "exito" in est:
                 ok_hoy += cant
-        conn.close()
-    except Exception:
+    except Exception as e:
         pass
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     return {
         "is_running": is_running,
@@ -208,6 +221,38 @@ class SystemTrayManager:
     def _get_llm_menu_label(self, item=None):
         return get_llm_status_summary()
 
+    def _get_ocr_count_label(self, item=None):
+        try:
+            from utils.llm_config import get_models_for_context
+            c = len(get_models_for_context('busqueda_ocr'))
+            return f"🖼️ Para Detección Imágenes / OCR ({c})"
+        except Exception:
+            return "🖼️ Para Detección Imágenes / OCR"
+
+    def _get_pat_count_label(self, item=None):
+        try:
+            from utils.llm_config import get_models_for_context
+            c = len(get_models_for_context('deteccion_patologia'))
+            return f"🩺 Para Patologías Críticas ({c})"
+        except Exception:
+            return "🩺 Para Patologías Críticas"
+
+    def _get_ocr_items(self):
+        try:
+            from utils.llm_config import get_models_for_context
+            models = get_models_for_context('busqueda_ocr')[:8]
+            return [item(f"• {m}", None, enabled=False) for m in models]
+        except Exception:
+            return [item("• Sin modelos", None, enabled=False)]
+
+    def _get_pat_items(self):
+        try:
+            from utils.llm_config import get_models_for_context
+            models = get_models_for_context('deteccion_patologia')[:8]
+            return [item(f"• {m}", None, enabled=False) for m in models]
+        except Exception:
+            return [item("• Sin modelos", None, enabled=False)]
+
     def _manual_update_llm(self, icon, item):
         def task():
             print("⚡ Iniciando actualización manual de modelos LLM desde la bandeja de sistema...")
@@ -272,6 +317,10 @@ class SystemTrayManager:
                     
                 self.icon.icon = create_robot_icon(status)
                 self.icon.title = build_tooltip_text(info)
+                try:
+                    self.icon.update_menu()
+                except Exception:
+                    pass
             except Exception as e:
                 pass
 
@@ -307,15 +356,23 @@ class SystemTrayManager:
         info = get_rpa_summary_info()
         status = 'paused' if notificaciones_pausadas() else ('active' if info['is_running'] else 'idle')
         
+        ocr_items = self._get_ocr_items()
+        pat_items = self._get_pat_items()
+
         menu = Menu(
             item("🤖 Bot RPA - Atrys", None, enabled=False),
             item(self._get_workflow_menu_label, None, enabled=False),
             item(self._get_cases_menu_label, None, enabled=False),
-            item(self._get_llm_menu_label, None, enabled=False),
+            Menu.SEPARATOR,
+            item(self._get_llm_menu_label, Menu(
+                item(self._get_ocr_count_label, Menu(*ocr_items)),
+                item(self._get_pat_count_label, Menu(*pat_items)),
+                Menu.SEPARATOR,
+                item("⚡ Forzar Actualización Modelos LLM", self._manual_update_llm)
+            )),
             Menu.SEPARATOR,
             item(self._get_stop_process_label, self._stop_current_process),
             Menu.SEPARATOR,
-            item("⚡ Actualizar Modelos LLM Manualmente", self._manual_update_llm),
             item(self._get_notification_label, self._toggle_notifications),
             item("📋 Abrir carpeta de logs", self._open_logs_folder),
             Menu.SEPARATOR,

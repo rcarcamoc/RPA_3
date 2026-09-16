@@ -171,12 +171,13 @@ def detener_ejecucion_actual(chat_id=None, source="Telegram"):
             _pacs_proc = None
 
     # 3. Señalizar archivo STOP_SIGNAL por si hay otro proceso (ej. GUI) ejecutando un worker
-    try:
-        STOP_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
-        with open(STOP_SIGNAL, "w", encoding="utf-8") as f:
-            f.write("stop")
-    except Exception as e:
-        print(f"Error escribiendo STOP_SIGNAL: {e}")
+    if source != "Archivo Stop Signal":
+        try:
+            STOP_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
+            with open(STOP_SIGNAL, "w", encoding="utf-8") as f:
+                f.write("stop")
+        except Exception as e:
+            print(f"Error escribiendo STOP_SIGNAL: {e}")
 
     # 4. Cerrar Chrome RPA si quedó abierto por el bot
     try:
@@ -285,6 +286,12 @@ def start_workflow_async(workflow_file, params=None, on_finish_callback=None):
         print(f"⚠️ Workflow no encontrado: {wf_path}")
         return False
         
+    try:
+        if STOP_SIGNAL.exists():
+            STOP_SIGNAL.unlink()
+    except Exception:
+        pass
+
     executor_thread = threading.Thread(
         target=run_workflow, 
         args=(wf_path, params, on_finish_callback), 
@@ -379,6 +386,12 @@ def forzar_ejecucion_workflow(chat_id, msg_id, action_key):
             else:
                 enviar_mensaje(chat_id, "❌ No se encontró el workflow 'Sub_work.json'.")
                 
+        elif action_key in ["pega", "pega_integra"]:
+            if start_workflow_async("pacs.json"):
+                enviar_mensaje(chat_id, "✅ Proceso anterior detenido.\n📋 Workflow <b>'Solo Pega en Integra'</b> iniciado correctamente.")
+            else:
+                enviar_mensaje(chat_id, "❌ No se encontró el workflow 'pacs.json'.")
+                
         elif action_key == "casos":
             def _on_finish_cb_casos(res):
                 cerrar_chrome_rpa()
@@ -398,7 +411,7 @@ def forzar_ejecucion_workflow(chat_id, msg_id, action_key):
         elif action_key == "pacs":
             enviar_mensaje(chat_id, "🩺 Iniciando <b>Validación de PACS</b> bajo demanda...")
             if trigger_pacs_validation_process(manual=True, chat_id=chat_id):
-                enviar_mensaje(chat_id, "⏳ Validación lanzada. Usa /estado_pacs para consultar el progreso.")
+                enviar_mensaje(chat_id, "🩺 <b>Validación PACS iniciada en ventana visible (primer plano).</b>\nPuedes monitorear la consola en pantalla o usar /estado_pacs.")
             else:
                 enviar_mensaje(chat_id, "❌ No se pudo iniciar la validación de PACS.")
                 
@@ -536,40 +549,39 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
                 except Exception:
                     pass
 
-                if sys.platform == "win32" and cfg_visible:
-                    # Abrir en una ventana de consola propia y visible en pantalla
-                    creation_flags = subprocess.CREATE_NEW_CONSOLE
-                    proc = subprocess.Popen(cmd, creationflags=creation_flags)
-                else:
-                    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                    startupinfo = None
-                    if sys.platform == "win32":
-                        startupinfo = subprocess.STARTUPINFO()
-                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                        startupinfo.wShowWindow = 0
-
-                    proc = subprocess.Popen(
-                        cmd, 
-                        creationflags=creation_flags,
-                        startupinfo=startupinfo,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        encoding='utf-8',
-                        errors='replace'
-                    )
-                    if proc.stdout:
-                        for line in proc.stdout:
-                            if line.strip():
-                                print(f"   [PACS] {line.strip()}")
+                # Siempre ejecutar en ventana de consola visible en primer plano (nunca en segundo plano)
+                creation_flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+                base_cwd = str(Path(__file__).resolve().parent)
+                
+                proc = subprocess.Popen(
+                    cmd, 
+                    creationflags=creation_flags,
+                    cwd=base_cwd
+                )
                 
                 _pacs_proc = proc
                 proc.wait()
                 print(f"✅ Proceso de validación PACS finalizado (exit code: {proc.returncode}).")
                 mostrar_notificacion_tray("Validación PACS finalizada.", "🩺 Validación PACS")
                 if chat_id:
-                    res_txt = "✅ <b>Validación PACS Finalizada</b> (Exitosa)" if proc.returncode == 0 else "❌ <b>Validación PACS Finalizada con Error</b>"
-                    enviar_mensaje(chat_id, res_txt + "\n\nUsa /estado_pacs para ver los detalles.")
+                    if proc.returncode == 0:
+                        res_txt = "✅ <b>Validación PACS Finalizada</b> (Exitosa)\n\nUsa /estado_pacs para ver los detalles."
+                    else:
+                        err_detalle = ""
+                        try:
+                            import mysql.connector
+                            c_err = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=3)
+                            cur_err = c_err.cursor(dictionary=True)
+                            cur_err.execute("SELECT observacion, intentos FROM ris.validacion_pacs ORDER BY id DESC LIMIT 1")
+                            r_err = cur_err.fetchone()
+                            if r_err and r_err.get("observacion"):
+                                err_detalle = f"\n\n<b>Detalle del error:</b>\n<code>{html.escape(r_err['observacion'])}</code>"
+                            cur_err.close()
+                            c_err.close()
+                        except Exception as e_sql:
+                            err_detalle = f"\n\n(Código de salida del proceso: {proc.returncode})"
+                        res_txt = f"❌ <b>Validación PACS Finalizada con Error</b>{err_detalle}\n\nUsa /estado_pacs para más información."
+                    enviar_mensaje(chat_id, res_txt)
         except Exception as e:
             print(f"[PACS Process Error] {e}")
             if chat_id:
@@ -617,28 +629,32 @@ def consultar_estado_pacs():
         cursor.execute("SELECT * FROM ris.validacion_pacs ORDER BY id DESC LIMIT 1")
         ultimo = cursor.fetchone()
 
-        val_hoy = check_pacs_validated_today()
+        daily_stat = get_pacs_daily_status()
+        val_hoy = daily_stat.get("ya_exitoso", False)
         if _pacs_validating_now:
             estado_hoy_str = "⏳ <b>En ejecución en este momento...</b>"
         elif val_hoy:
-            f_hoy = val_hoy.get('fecha_validacion')
-            hora_val_str = f_hoy.strftime('%H:%M:%S') if hasattr(f_hoy, 'strftime') else str(f_hoy)
+            f_hoy = daily_stat.get('ultimo_timestamp')
+            hora_val_str = f_hoy.strftime('%H:%M:%S') if hasattr(f_hoy, 'strftime') else str(f_hoy or '')
             estado_hoy_str = f"✅ <b>Completada con éxito hoy a las {hora_val_str}</b>"
         else:
-            ahora = datetime.now()
-            try:
-                ht, mt = [int(x) for x in hora_cfg.split(":")]
-            except Exception:
-                ht, mt = 9, 0
-            if (ahora.hour > ht) or (ahora.hour == ht and ahora.minute >= mt):
-                estado_hoy_str = "⚠️ <b>Pendiente / Próxima a ejecutarse (Catch-Up activo)</b>"
+            if not habilitado:
+                estado_hoy_str = "⏸️ <b>Desactivado (ejecución solo manual en primer plano)</b>"
             else:
-                estado_hoy_str = f"🕒 <b>Programada para hoy a las {hora_cfg}</b>"
+                ahora = datetime.now()
+                try:
+                    ht, mt = [int(x) for x in hora_cfg.split(":")]
+                except Exception:
+                    ht, mt = 9, 0
+                if (ahora.hour > ht) or (ahora.hour == ht and ahora.minute >= mt):
+                    estado_hoy_str = "⚠️ <b>Pendiente de validación</b>"
+                else:
+                    estado_hoy_str = f"🕒 <b>Programada para hoy a las {hora_cfg}</b>"
 
         msg = f"🏥 <b>MONITOR DE VALIDACIÓN PACS</b>\n\n"
         msg += f"• <b>Estado de Hoy:</b> {estado_hoy_str}\n"
         msg += f"• <b>Programación:</b> Diaria a las <code>{hora_cfg}</code> ({dias_str})\n"
-        msg += f"• <b>Servicio automático:</b> {'Activo ✅' if habilitado else 'Desactivado ❌'}\n\n"
+        msg += f"• <b>Servicio automático:</b> {'Activo ✅' if habilitado else 'Desactivado ❌ (ejecución en primer plano)'}\n\n"
 
         if ultimo:
             estado = ultimo.get('estado', 'Sin Datos')
@@ -646,18 +662,22 @@ def consultar_estado_pacs():
             obs = ultimo.get('observacion') or 'Sin observaciones'
             duracion = ultimo.get('duracion_segundos')
             intentos = ultimo.get('intentos', 1)
+            doc_val = ultimo.get('doctor_validacion')
+            user_val = ultimo.get('user_validacion')
             iconos = {'Exitoso': '✅', 'Error': '❌', 'En Proceso': '⏳'}
             icono = iconos.get(estado, '⚠️')
 
             msg += f"📌 <b>Última Verificación Registrada:</b>\n"
             msg += f"  {icono} Estado: <b>{estado}</b> (ID #{ultimo.get('id')})\n"
+            if doc_val:
+                msg += f"  👨‍⚕️ Médico probado: <b>{doc_val}</b> (<code>{user_val}</code>)\n"
             msg += f"  📅 Fecha: {fecha}\n"
             msg += f"  🔄 Intentos: {intentos}\n"
             if duracion is not None:
                 msg += f"  ⏱️ Duración: {duracion}s\n"
             msg += f"  📝 Observación: {obs}\n"
 
-        cursor.execute("SELECT id, fecha_validacion, estado, duracion_segundos, intentos, observacion FROM ris.validacion_pacs ORDER BY id DESC LIMIT 5")
+        cursor.execute("SELECT id, fecha_validacion, estado, duracion_segundos, intentos, observacion, doctor_validacion, user_validacion FROM ris.validacion_pacs ORDER BY id DESC LIMIT 5")
         registros = cursor.fetchall()
 
         if len(registros) > 1:
@@ -668,9 +688,11 @@ def consultar_estado_pacs():
                 r_icono = iconos.get(r_estado, '⚠️')
                 r_fecha = str(r.get('fecha_validacion', '--'))
                 r_dur = f"{r.get('duracion_segundos', 0)}s" if r.get('duracion_segundos') is not None else '--'
-                msg += f"  {r_icono} {r_fecha} | {r_dur} | {r.get('intentos', 1)} int.\n"
+                r_doc = r.get('doctor_validacion') or ''
+                r_doc_txt = f" | {r_doc[:16]}" if r_doc else ""
+                msg += f"  {r_icono} {r_fecha} | {r_dur} | {r.get('intentos', 1)} int.{r_doc_txt}\n"
 
-        msg += "\n💡 <i>Puedes forzar la validación ahora mismo enviando /validar_pacs</i>"
+        msg += "\n💡 <i>Puedes ejecutar la validación desde el Menú de Sistema o con /validar_pacs</i>"
 
         cursor.close()
         conn.close()
@@ -917,12 +939,12 @@ def obtener_datos_diagnostico():
     # Estado PACS
     pacs_txt = "No disponible"
     try:
-        val_hoy = check_pacs_validated_today()
+        daily_stat = get_pacs_daily_status()
         if _pacs_validating_now:
             pacs_txt = "⏳ Validación en curso..."
-        elif val_hoy:
-            f_hoy = val_hoy.get('fecha_validacion')
-            h_str = f_hoy.strftime('%H:%M:%S') if hasattr(f_hoy, 'strftime') else str(f_hoy)
+        elif daily_stat.get("ya_exitoso"):
+            f_hoy = daily_stat.get('ultimo_timestamp')
+            h_str = f_hoy.strftime('%H:%M:%S') if hasattr(f_hoy, 'strftime') else str(f_hoy or '')
             pacs_txt = f"✅ Validado hoy ({h_str})"
         else:
             pacs_txt = "⚠️ Pendiente de hoy"
@@ -1119,88 +1141,9 @@ def run_llm_daily_checker():
         time.sleep(3600)
 
 def run_pacs_validation_scheduler():
-    """Ejecuta en segundo plano la validación diaria de PACS según configuración, con límite de intentos y cooldown."""
-    print("🏥 Iniciando scheduler inteligente de validación diaria PACS...")
-    config_path = Path(__file__).resolve().parent / "config" / "pacs_validation_config.json"
-    
-    def cargar_cfg():
-        if config_path.exists():
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {
-            "habilitado": True, 
-            "hora_validacion": "09:00", 
-            "dias_validacion": [0, 1, 2, 3, 4, 5, 6],
-            "max_intentos_diarios_scheduler": 2,
-            "cooldown_fallo_minutos": 60
-        }
-
-    time.sleep(15)
-    _ultimo_aviso_cooldown = 0
-
-    while True:
-        try:
-            cfg = cargar_cfg()
-            if cfg.get("habilitado", True) and not _pacs_validating_now:
-                ahora = datetime.now()
-                dia_actual = ahora.weekday()
-                hora_cfg = cfg.get("hora_validacion", "09:00")
-                dias_permitidos = cfg.get("dias_validacion", [0, 1, 2, 3, 4, 5, 6])
-                max_intentos_diarios = cfg.get("max_intentos_diarios_scheduler", 2)
-                cooldown_minutos = cfg.get("cooldown_fallo_minutos", 60)
-                
-                try:
-                    h_target, m_target = [int(x) for x in hora_cfg.split(":")]
-                except Exception:
-                    h_target, m_target = 9, 0
-
-                es_dia_permitido = dia_actual in dias_permitidos
-                hora_alcanzada = (ahora.hour > h_target) or (ahora.hour == h_target and ahora.minute >= m_target)
-
-                if es_dia_permitido and hora_alcanzada:
-                    daily_status = get_pacs_daily_status()
-                    
-                    if daily_status["ya_exitoso"]:
-                        # Ya se completó con éxito hoy
-                        pass
-                    elif daily_status["total_intentos"] >= max_intentos_diarios:
-                        # Se alcanzó el límite de reintentos diarios automáticos tras error
-                        pass
-                    else:
-                        # Revisar si hay un cooldown activo por fallo reciente
-                        ultimo_ts = daily_status.get("ultimo_timestamp")
-                        en_cooldown = False
-                        if ultimo_ts:
-                            try:
-                                if isinstance(ultimo_ts, str):
-                                    ultimo_ts = datetime.fromisoformat(ultimo_ts.replace("Z", ""))
-                                mins_pasados = (ahora - ultimo_ts).total_seconds() / 60.0
-                                if mins_pasados < cooldown_minutos:
-                                    en_cooldown = True
-                                    # Loguear sólo cada 15 minutos para no saturar consola
-                                    if time.time() - _ultimo_aviso_cooldown > 900:
-                                        _ultimo_aviso_cooldown = time.time()
-                                        print(f"⏳ PACS en cooldown tras fallo: faltan {int(cooldown_minutos - mins_pasados)} min para reintentar.")
-                            except Exception:
-                                pass
-
-                        if not en_cooldown:
-                            if not is_any_workflow_running():
-                                tag = "Catch-Up" if ahora.hour > h_target or ahora.minute > m_target + 5 else "Horario"
-                                intento_actual = daily_status["total_intentos"] + 1
-                                print(f"🩺 [{tag}] Ejecutando validación diaria PACS (Intento {intento_actual}/{max_intentos_diarios} hoy)...")
-                                trigger_pacs_validation_process(manual=False)
-                                time.sleep(60)
-                            else:
-                                print("⏳ Validación PACS pendiente, pero hay otro workflow corriendo. Esperando...")
-        except Exception as e:
-            print(f"[PACS Scheduler Error] {e}")
-
-        time.sleep(30)
-
+    """Desactivado: Ningún workflow debe ejecutarse en segundo plano."""
+    print("ℹ️ Scheduler de validación PACS en segundo plano desactivado por política de ejecución en primer plano.")
+    return
 # =========================================================================
 # Bucle Principal de Polling y Manejo de Comandos/Callbacks
 # =========================================================================
@@ -1217,9 +1160,9 @@ def telegram_polling_loop():
         print("⚠️ No hay token de Telegram configurado.")
         return
 
-    # Iniciar servicios en segundo plano
+    # Iniciar servicios en segundo plano (Ningún workflow debe ejecutarse en segundo plano)
     threading.Thread(target=run_llm_daily_checker, daemon=True, name="LLM_Daily_Checker").start()
-    threading.Thread(target=run_pacs_validation_scheduler, daemon=True, name="PACS_Validation_Scheduler").start()
+    # PACS_Validation_Scheduler desactivado por política de ejecución en primer plano
 
     try:
         from utils.notificador_resumen import main as start_notificador
@@ -1355,6 +1298,16 @@ def telegram_polling_loop():
                                     enviar_mensaje(chat_id, "✅ Workflow 'Inicio Completo' iniciado correctamente.")
                                 else:
                                     enviar_mensaje(chat_id, "❌ Workflow 'Sub_work.json' no encontrado.")
+
+                        elif callback_data in ["cmd_pega", "cmd_pega_integra"]:
+                            responder_callback(cb_id)
+                            if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                                pedir_confirmacion_interrupcion(chat_id, "pega", "Solo Pega en Integra")
+                            else:
+                                if start_workflow_async("pacs.json"):
+                                    enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Pega en Integra'</b> iniciado correctamente.")
+                                else:
+                                    enviar_mensaje(chat_id, "❌ Workflow 'pacs.json' no encontrado.")
                                     
                         elif callback_data == "cmd_loop_menu":
                             responder_callback(cb_id)
@@ -1412,6 +1365,17 @@ def telegram_polling_loop():
                         elif callback_data == "cmd_estado_pacs":
                             responder_callback(cb_id)
                             enviar_mensaje(chat_id, consultar_estado_pacs())
+
+                        elif callback_data == "cmd_validar_pacs":
+                            responder_callback(cb_id)
+                            if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                                pedir_confirmacion_interrupcion(chat_id, "pacs", "Validación de PACS")
+                            else:
+                                enviar_mensaje(chat_id, "🩺 Iniciando <b>Validación de PACS</b> bajo demanda con médico aleatorio...")
+                                if trigger_pacs_validation_process(manual=True, chat_id=chat_id):
+                                    enviar_mensaje(chat_id, "🩺 <b>Validación PACS iniciada en ventana visible (primer plano).</b>\nPuedes monitorear la consola en pantalla o usar /estado_pacs.")
+                                else:
+                                    enviar_mensaje(chat_id, "❌ No se pudo iniciar la validación de PACS.")
                             
                         elif callback_data == "cmd_bateria":
                             responder_callback(cb_id)
@@ -1428,13 +1392,13 @@ def telegram_polling_loop():
                                 tail = "..." + tail[-3800:]
                             enviar_mensaje(chat_id, f"📜 <b>Últimas 15 líneas del log:</b>\n<code>{tail}</code>")
                             
-                        elif callback_data == "cmd_rehabilitar":
+                        elif callback_data in ["cmd_rehabilitar", "cmd_revalidar", "cmd_revalidar_registro"]:
                             responder_callback(cb_id)
-                            enviar_mensaje(chat_id, "🔄 Rehabilitando el último registro...")
+                            enviar_mensaje(chat_id, "🔄 Revalidando el último registro...")
                             if rehabilitar_ultimo_registro():
-                                enviar_mensaje(chat_id, "✅ Último registro rehabilitado ('En Proceso').")
+                                enviar_mensaje(chat_id, "✅ Último registro revalidado ('En Proceso').")
                             else:
-                                enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o hubo un error.")
+                                enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o ya estaba en proceso.")
                                 
                         elif callback_data == "cmd_deten_notif":
                             responder_callback(cb_id)
@@ -1577,6 +1541,15 @@ def telegram_polling_loop():
                             else:
                                 enviar_mensaje(chat_id, "❌ Workflow 'Sub_work.json' no encontrado.")
 
+                    elif comando in ["/pega", "/solo_pega", "/pega_integra", "/solo_pega_integra"]:
+                        if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                            pedir_confirmacion_interrupcion(chat_id, "pega", "Solo Pega en Integra")
+                        else:
+                            if start_workflow_async("pacs.json"):
+                                enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Pega en Integra'</b> iniciado correctamente.")
+                            else:
+                                enviar_mensaje(chat_id, "❌ Workflow 'pacs.json' no encontrado.")
+
                     elif comando in ["/cuenta_casos_pendientes", "/casos_pendientes", "/cuenta_casos", "/cuentacasos"]:
                         if active_executor or is_any_workflow_running() or _pacs_validating_now:
                             pedir_confirmacion_interrupcion(chat_id, "casos", "Conteo de Casos Pendientes en RIS")
@@ -1596,12 +1569,12 @@ def telegram_polling_loop():
                             if not start_workflow_async("ris_casos pendientes.json", on_finish_callback=_on_finish_casos):
                                 enviar_mensaje(chat_id, "❌ No se pudo iniciar el workflow 'ris_casos pendientes.json'. Verifique si ya hay otro proceso activo.")
                                 
-                    elif comando == "/rehabilitar":
-                        enviar_mensaje(chat_id, "🔄 Rehabilitando el último registro...")
+                    elif comando in ["/rehabilitar", "/revalidar", "/revalidar_registro", "/revalidar_ultimo_registro"]:
+                        enviar_mensaje(chat_id, "🔄 Revalidando el último registro...")
                         if rehabilitar_ultimo_registro():
-                            enviar_mensaje(chat_id, "✅ Último registro rehabilitado ('En Proceso').")
+                            enviar_mensaje(chat_id, "✅ Último registro revalidado ('En Proceso').")
                         else:
-                            enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o hubo un error.")
+                            enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o ya estaba en proceso.")
                             
                     elif comando == "/detener":
                         detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
@@ -1659,7 +1632,7 @@ def telegram_polling_loop():
                         else:
                             enviar_mensaje(chat_id, "🩺 Iniciando <b>Validación de PACS</b> bajo demanda...")
                             if trigger_pacs_validation_process(manual=True, chat_id=chat_id):
-                                enviar_mensaje(chat_id, "⏳ Validación lanzada en segundo plano con soporte Keep-Alive. Usa /estado_pacs para consultar el progreso.")
+                                enviar_mensaje(chat_id, "🩺 <b>Validación PACS iniciada en ventana visible (primer plano).</b>\nPuedes monitorear la consola en pantalla o usar /estado_pacs.")
                             else:
                                 enviar_mensaje(chat_id, "❌ No se pudo iniciar la validación de PACS.")
 

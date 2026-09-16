@@ -1171,6 +1171,15 @@ class ModernOperacionesPanel(QWidget):
             if not found:
                 print("⚠️ No se encontró ningún nodo de tipo Loop en loop.json")
 
+            # Limpiar stop_signal previo si quedó rezagado
+            cfg_dir = Path(__file__).resolve().parent / "config"
+            stop_file = cfg_dir / "stop_signal.txt"
+            try:
+                if stop_file.exists():
+                    stop_file.unlink()
+            except Exception:
+                pass
+
             self.add_log(f"🚀 Iniciando loop continuo en modo: {modo_ui}", level="start")
             
             self.worker = WorkflowExecutorWorker(workflow)
@@ -1212,6 +1221,16 @@ class ModernOperacionesPanel(QWidget):
         try:
             workflow = Workflow.from_json(wf_path)
             wf_name = os.path.basename(wf_path)
+
+            # Limpiar stop_signal previo si quedó rezagado
+            cfg_dir = Path(__file__).resolve().parent / "config"
+            stop_file = cfg_dir / "stop_signal.txt"
+            try:
+                if stop_file.exists():
+                    stop_file.unlink()
+            except Exception:
+                pass
+
             self.add_log(f"🚀 Iniciando workflow: {wf_name}", level="start")
             
             self.worker = WorkflowExecutorWorker(workflow)

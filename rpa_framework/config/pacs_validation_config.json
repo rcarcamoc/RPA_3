@@ -1,5 +1,5 @@
 {
-    "habilitado": true,
+    "habilitado": false,
     "hora_validacion": "09:00",
     "dias_validacion": [
         0,

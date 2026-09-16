@@ -18,6 +18,13 @@ from core.executor import ActionExecutor
 from core.action import Action, ActionType
 from utils.logging_setup import setup_logging
 from utils.telegram_manager import enviar_alerta_todos
+try:
+    from rpa_framework.utils.window_utils import maximize_pacs_windows
+except ImportError:
+    try:
+        from utils.window_utils import maximize_pacs_windows
+    except ImportError:
+        maximize_pacs_windows = None
 
 # Configuración de MySQL (opcional)
 try:
@@ -59,7 +66,7 @@ class IngresaUserPacsAutomation:
             logger.warning(f"[DB Error] {e}")
 
     def get_credentials(self):
-        """Obtiene las credenciales de la BD"""
+        """Obtiene las credenciales de la BD. Si no hay registro en proceso, toma un médico al azar de la tabla medicos."""
         if not HAS_MYSQL:
             return None, None
         try:
@@ -70,16 +77,35 @@ class IngresaUserPacsAutomation:
                 database='ris'
             )
             cursor = conn.cursor()
-            query = "SELECT user, pass FROM ris.registro_acciones WHERE estado = 'En Proceso' LIMIT 1"
+            # 1. Intentar obtener credenciales del registro 'En Proceso' actual
+            query = "SELECT user, pass FROM ris.registro_acciones WHERE estado = 'En Proceso' AND user IS NOT NULL AND TRIM(user) != '' LIMIT 1"
             cursor.execute(query)
             result = cursor.fetchone()
+            if result and result[0] and result[1]:
+                conn.close()
+                return result[0].strip(), result[1].strip()
+            
+            # 2. Si no hay registro en proceso o no tiene credenciales, obtener al azar de la tabla medicos
+            logger.info("No hay credenciales en proceso. Obteniendo médico al azar de la tabla 'medicos'...")
+            cursor.execute("""
+                SELECT usuario_integra, clave_integra, nombre_completo 
+                FROM ris.medicos 
+                WHERE (estado = 'Activo' OR estado IS NULL) 
+                  AND usuario_integra IS NOT NULL AND TRIM(usuario_integra) != '' 
+                  AND clave_integra IS NOT NULL AND TRIM(clave_integra) != '' 
+                ORDER BY RAND() 
+                LIMIT 1
+            """)
+            result = cursor.fetchone()
             conn.close()
-            if result:
-                return result[0], result[1]
+            if result and result[0] and result[1]:
+                logger.info(f"🎲 Médico seleccionado al azar: {result[2]} (Usuario: {result[0]})")
+                return result[0].strip(), result[1].strip()
             return None, None
         except Exception as e:
             logger.warning(f"[DB Error] No se pudieron obtener credenciales: {e}")
             return None, None
+
     
     def setup(self) -> bool:
         """Conecta a la aplicación objetivo (Carestream Vue PACS)."""
@@ -135,7 +161,7 @@ class IngresaUserPacsAutomation:
         # Obtener credenciales de la base de datos
         db_user, db_pass = self.get_credentials()
         if not db_user or not db_pass:
-            error_msg = "No se encontraron credenciales en 'ris.registro_acciones' con estado 'En Proceso' o ocurrió un error en la BD."
+            error_msg = "No se pudieron obtener credenciales válidas (ni en registro_acciones ni en la tabla 'medicos' de la BD)."
             logger.error(error_msg)
             results["status"] = "FAILED"
             results["reason"] = "Missing credentials"
@@ -221,11 +247,16 @@ class IngresaUserPacsAutomation:
                 results["errors"].append({"action_idx": 5, "type": "click", "reason": str(e)})
                 logger.error(f"[5/6] clic: {e}")
 
-            # Espera para permitir la transición de ventana
-            time.sleep(1)
+            # Maximización deshabilitada para este nodo
+            # time.sleep(2)
+            # if maximize_pacs_windows:
+            #     try:
+            #         logger.info("Maximizando ventana de Carestream Vue PACS / RIS tras login...")
+            #         max_count = maximize_pacs_windows()
+            #         logger.info(f"Ventanas maximizadas tras login: {max_count}")
+            #     except Exception as max_e:
+            #         logger.warning(f"Aviso maximizando tras login: {max_e}")
 
-
-            
             results["status"] = "SUCCESS" if results["failed"] == 0 else "PARTIAL"
             
         except Exception as e:
