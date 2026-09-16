@@ -63,27 +63,27 @@ def get_llm_request_params(model_id):
     return "https://openrouter.ai/api/v1", openrouter_key, "openrouter"
 
 # ---------------------------------------------------------------------------
-# Lista BASE de modelos LLM (10 modelos: 5 Nvidia NIM y 5 OpenRouter Free)
+# Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
    "meta/llama-3.2-11b-vision-instruct",                     # Primario — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
-   "deepseek-ai/deepseek-v4-pro-0813",                       # Fallback 2 — Validado OK
-   "deepseek-ai/deepseek-v4-flash-0731",                     # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 5 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 6 — Validado OK
-   "openrouter/free",                                        # Fallback 7 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 8 — Validado OK
+   "openai/gpt-oss-20b",                                     # Fallback 1 — Validado OK
+   "nvidia/nemotron-parse-2.0",                              # Fallback 2 — Validado OK
+   "meta/muse-glimmer-30b",                                  # Fallback 3 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 5 — Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 6 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 7 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 8 — Validado OK
+   "inclusionai/ling-3.0-flash-vl:free",                     # Fallback 9 — Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
-OCR_DEFAULT_MODELS = BASE_LLM_MODELS
+OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
+# Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b",
-    "deepseek-ai/deepseek-v4-pro-0813",
-    "deepseek-ai/deepseek-v4-flash-0731",
+    "nex-agi/nex-n2.5-pro:free",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)
@@ -99,7 +99,7 @@ LLM_MODEL_PRIMARY = BASE_LLM_MODELS[0]
 # ---------------------------------------------------------------------------
 LLM_DEFAULT_TEMPERATURE = 0.0
 LLM_DEFAULT_MAX_TOKENS = 4000  # Aumentado a 4000 para evitar cortes en modelos de reasoning
-LLM_DEFAULT_TIMEOUT = 30  # segundos
+LLM_DEFAULT_TIMEOUT = 15  # 15s máximo para no bloquear ejecuciones en APIs caídas
 
 # ---------------------------------------------------------------------------
 # DB Config (local, sin contraseña — entorno de producción controlado)
@@ -112,10 +112,12 @@ def get_models_for_context(contexto: str = 'busqueda_ocr') -> list:
     """
     Retorna la lista de modelos permitidos y optimizados para un contexto específico.
     Consulta ris.catalogo_modelos_llm. Si la BD no responde, retorna las listas de respaldo.
+    Garantiza alternancia balanceada entre proveedores (NVIDIA NIM y OpenRouter)
+    para evitar fallos si un proveedor específico experimenta problemas de red.
     
     Contextos soportados:
       - 'busqueda_ocr': Modelos aptos para matching léxico y OCR en pantalla.
-      - 'deteccion_patologia': Exclusivamente modelos >= 30B / reasoning para juicio clínico.
+      - 'deteccion_patologia': Modelos con capacidad clínica y coherencia anatómica.
     """
     filtro_col = "apto_patologia" if contexto == "deteccion_patologia" else "apto_ocr"
     try:
@@ -123,7 +125,7 @@ def get_models_for_context(contexto: str = 'busqueda_ocr') -> list:
         conn = mysql.connector.connect(**_DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         query = f"""
-            SELECT modelo 
+            SELECT modelo, proveedor, tiempo_promedio_ms
             FROM ris.catalogo_modelos_llm 
             WHERE {filtro_col} = 1 AND activo = 1
             ORDER BY tiempo_promedio_ms ASC
@@ -132,12 +134,35 @@ def get_models_for_context(contexto: str = 'busqueda_ocr') -> list:
         rows = cursor.fetchall()
         conn.close()
         if rows:
-            modelos_db = [r['modelo'] for r in rows]
-            # Si el contexto es detección de patología, garantizar que llama-3.2-90b quede como primario si está disponible
-            if contexto == "deteccion_patologia" and "meta/llama-3.2-90b-vision-instruct" in modelos_db:
-                modelos_db.remove("meta/llama-3.2-90b-vision-instruct")
-                modelos_db.insert(0, "meta/llama-3.2-90b-vision-instruct")
-            return modelos_db
+            # Separar por proveedor para garantizar mezcla balanceada (no solo NVIDIA ni solo OpenRouter)
+            nv_models = [r['modelo'] for r in rows if r['proveedor'] == 'nvidia']
+            or_models = [r['modelo'] for r in rows if r['proveedor'] != 'nvidia']
+
+            # Alternar modelos de ambos proveedores (ej: OpenRouter, Nvidia, OpenRouter, Nvidia...)
+            balanced = []
+            max_len = max(len(nv_models), len(or_models))
+            for i in range(max_len):
+                if contexto == "deteccion_patologia":
+                    # En patología, priorizar nemotron-3-super-120b (OpenRouter) y llama-3.2-11b (NVIDIA)
+                    if i < len(or_models):
+                        balanced.append(or_models[i])
+                    if i < len(nv_models):
+                        balanced.append(nv_models[i])
+                else:
+                    # En OCR, priorizar modelos rápidos
+                    if i < len(nv_models):
+                        balanced.append(nv_models[i])
+                    if i < len(or_models):
+                        balanced.append(or_models[i])
+
+            # Eliminar duplicados preservando orden
+            seen = set()
+            dedup = []
+            for m in balanced:
+                if m not in seen:
+                    seen.add(m)
+                    dedup.append(m)
+            return dedup
     except Exception as e:
         logger.debug(f"[llm_config] No se pudo consultar catalogo_modelos_llm ({e}), usando fallback.")
 

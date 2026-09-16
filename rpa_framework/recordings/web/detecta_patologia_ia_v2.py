@@ -61,10 +61,10 @@ MODELS = get_models_for_context('deteccion_patologia')
 
 # Configuración de concurrencia y reintentos para LLM
 MAX_WORKERS = 3
-MODELS_TO_USE = 3  # Tomar solo los primeros 3 modelos
+MODELS_TO_USE = 3  # Tomar los 3 primeros modelos concurrentes
 MAX_RETRIES = 1
-RETRY_DELAY = 2  # Segundos a esperar antes de reintentar
-DELAY_BETWEEN_WORKERS = 1.0  # Tiempo en segundos entre el inicio de cada worker
+RETRY_DELAY = 1  # Segundos a esperar antes de reintentar
+DELAY_BETWEEN_WORKERS = 0.0  # Sin delay artificial entre workers para máxima velocidad
 
 # ============================================================================
 # MATRIZ DETERMINISTA DE COMPATIBILIDAD ANATÓMICA (FILTRO DE SEGURIDAD 0 ms)
@@ -369,8 +369,11 @@ def _consultar_modelo_llm(
     examen: str = "", 
     diagnostico: str = "", 
     retries: int = MAX_RETRIES
-) -> Optional[str]:
-    """Realiza la consulta a un modelo específico con reintentos y guarda el log con filtro anatómico."""
+) -> Tuple[Optional[str], bool]:
+    """
+    Realiza la consulta a un modelo específico con reintentos y guarda el log con filtro anatómico.
+    Retorna (patologia_o_none, respondio_exitosamente_bool).
+    """
     for intento in range(retries + 1):
         start_time = time.time()
         try:
@@ -396,17 +399,25 @@ def _consultar_modelo_llm(
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
-            if response.status_code == 404:
-                logger.warning(f"⚠️ [{current_model}] No encontrado (404).")
-                log_llm_result(id_registro, current_model, 'error', None, "HTTP 404 - Modelo no encontrado", elapsed_ms)
-                return None
+            if response.status_code in [404, 410]:
+                logger.warning(f"⚠️ [{current_model}] Modelo no disponible / eliminado ({response.status_code}). Desactivando en BD.")
+                log_llm_result(id_registro, current_model, 'error', None, f"HTTP {response.status_code} - Modelo no disponible", elapsed_ms)
+                try:
+                    conn_tmp = mysql.connector.connect(**DB_CONFIG)
+                    cur_tmp = conn_tmp.cursor()
+                    cur_tmp.execute("UPDATE ris.catalogo_modelos_llm SET activo = 0 WHERE modelo = %s", (current_model,))
+                    conn_tmp.commit()
+                    conn_tmp.close()
+                except Exception:
+                    pass
+                return None, False
             elif response.status_code == 429:
                 logger.warning(f"⚠️ [{current_model}] Rate limit (429).")
                 log_llm_result(id_registro, current_model, 'error', None, "HTTP 429 - Rate Limit", elapsed_ms)
                 if intento < retries:
                     time.sleep(RETRY_DELAY)
                     continue
-                return None
+                return None, False
 
             response.raise_for_status()
             result = response.json()
@@ -435,19 +446,19 @@ def _consultar_modelo_llm(
                                 f"Filtro Anatómico RECHAZÓ: {motivo_anat} | LLM razonó: {razonamiento}", 
                                 elapsed_ms
                             )
-                            return None
+                            return None, True
 
                         logger.info(f"✅ [{current_model}] VALIDACIÓN EXITOSA Y ANATÓMICAMENTE COMPATIBLE: '{p_validada}'")
                         log_llm_result(id_registro, current_model, 'si', p_validada, razonamiento, elapsed_ms)
-                        return p_validada
+                        return p_validada, True
                     else:
                         logger.warning(f"⚠️ [{current_model}] VALIDACIÓN FALLIDA: '{patologia}' no está en la lista.")
                         log_llm_result(id_registro, current_model, 'invalida', patologia, razonamiento, elapsed_ms)
-                        return None
+                        return None, True
 
                 logger.info(f"ℹ️ [{current_model}] Concluyó que NO es patología crítica.")
                 log_llm_result(id_registro, current_model, 'no', None, razonamiento, elapsed_ms)
-                return None
+                return None, True
                 
             # Si responde pero no hay JSON válido
             log_llm_result(id_registro, current_model, 'error', None, f"Sin JSON válido en respuesta: {content[:200]}", elapsed_ms)
@@ -459,7 +470,7 @@ def _consultar_modelo_llm(
             if intento < retries:
                 time.sleep(RETRY_DELAY)
                 continue
-            return None
+            return None, False
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"❌ [{current_model}] Error: {e}")
@@ -467,9 +478,9 @@ def _consultar_modelo_llm(
             if intento < retries:
                 time.sleep(RETRY_DELAY)
                 continue
-            return None
+            return None, False
             
-    return None
+    return None, False
 
 def consultar_llm_patologia(id_registro: int, examen: str, diagnostico: str, lista_patologias: List[str]) -> Optional[str]:
     """
@@ -556,67 +567,78 @@ FORMATO DE RESPUESTA:
     deadline = None
     resultado_final = None
     respuestas_positivas = {}
+    respuestas_validas = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {}
-        for index, model in enumerate(modelos_a_usar):
-            if index > 0 and DELAY_BETWEEN_WORKERS > 0:
-                time.sleep(DELAY_BETWEEN_WORKERS)
-            future = executor.submit(
-                _consultar_modelo_llm, id_registro, model, prompt, lista_patologias, examen, diagnostico
-            )
-            futures[future] = model
-        
-        try:
-            while futures:
-                iter_timeout = None
-                if deadline is not None:
-                    iter_timeout = max(0.0, deadline - time.time())
-                    if iter_timeout <= 0:
-                        logger.warning("⏱️ [Race] Expiró el tiempo de espera tras la primera respuesta. Cancelando hilos lentos.")
+    def _ejecutar_lote_modelos(lista_modelos):
+        nonlocal deadline, resultado_final, respuestas_positivas, respuestas_validas
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {}
+            for index, model in enumerate(lista_modelos):
+                if index > 0 and DELAY_BETWEEN_WORKERS > 0:
+                    time.sleep(DELAY_BETWEEN_WORKERS)
+                future = executor.submit(
+                    _consultar_modelo_llm, id_registro, model, prompt, lista_patologias, examen, diagnostico
+                )
+                futures[future] = model
+            
+            try:
+                while futures:
+                    iter_timeout = None
+                    if deadline is not None:
+                        iter_timeout = max(0.0, deadline - time.time())
+                        if iter_timeout <= 0:
+                            logger.warning("⏱️ [Race] Expiró el tiempo de espera tras la primera respuesta. Cancelando hilos lentos.")
+                            break
+
+                    done, not_done = concurrent.futures.wait(
+                        futures.keys(),
+                        timeout=iter_timeout,
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+
+                    if not done:
+                        logger.warning("⏱️ [Race] Expiró el tiempo de espera (timeout) para las respuestas restantes.")
                         break
 
-                done, not_done = concurrent.futures.wait(
-                    futures.keys(),
-                    timeout=iter_timeout,
-                    return_when=concurrent.futures.FIRST_COMPLETED
-                )
+                    for future in done:
+                        model = futures.pop(future)
+                        try:
+                            resultado, respondio_valido = future.result()
+                            if respondio_valido:
+                                respuestas_validas += 1
+                                if resultado:
+                                    respuestas_positivas[model] = resultado
+                                    # Corte temprano seguro si el modelo confirma patología superando filtro anatómico
+                                    if len(respuestas_positivas) >= 2 or model == lista_modelos[0]:
+                                        logger.info(f"🚀 CORTE TEMPRANO: [{model}] confirmó '{resultado}' superando el filtro anatómico.")
+                                        resultado_final = resultado
+                                        futures.clear()
+                                        break
+                                    else:
+                                        logger.info(f"🔍 Modelo secundario [{model}] detectó '{resultado}'.")
 
-                if not done:
-                    logger.warning("⏱️ [Race] Expiró el tiempo de espera (timeout) para las respuestas restantes.")
-                    break
+                                # Solo iniciar countdown de 15s si hubo una respuesta real y válida del modelo (no un error HTTP/timeout)
+                                if deadline is None:
+                                    logger.info(f"⏱️ [Race] Primera evaluación válida completada por [{model}]. Iniciando countdown de 15s...")
+                                    deadline = time.time() + 15.0
 
-                for future in done:
-                    model = futures.pop(future)
-                    try:
-                        resultado = future.result()
-                        if resultado:
-                            respuestas_positivas[model] = resultado
-                            # Si es el modelo primario (meta/llama-3.2-90b-vision-instruct), corte temprano seguro
-                            if model == modelos_a_usar[0]:
-                                logger.info(f"🚀 CORTE TEMPRANO: El modelo primario [{model}] confirmó '{resultado}' superando el filtro anatómico.")
-                                resultado_final = resultado
-                                futures.clear()
-                                break
-                            else:
-                                logger.info(f"🔍 Modelo secundario [{model}] detectó '{resultado}'.")
-                                # Si ya tenemos consenso (2 o más modelos) o el primario ya terminó
-                                if len(respuestas_positivas) >= 2 or not any(futures.get(f) == modelos_a_usar[0] for f in futures):
-                                    resultado_final = resultado
-                                    futures.clear()
-                                    break
+                        except Exception as exc:
+                            logger.error(f"[{model}] generó una excepción: {exc}")
 
-                        # Si el primer modelo respondió None, iniciamos countdown de 15s para el resto
-                        if deadline is None:
-                            logger.info(f"⏱️ [Race] Primera respuesta recibida de [{model}]. Iniciando countdown de 15s...")
-                            deadline = time.time() + 15.0
+            finally:
+                for f in list(futures.keys()):
+                    f.cancel()
 
-                    except Exception as exc:
-                        logger.error(f"[{model}] generó una excepción: {exc}")
+    # Ejecutar primer lote de modelos
+    _ejecutar_lote_modelos(modelos_a_usar)
 
-        finally:
-            for f in list(futures.keys()):
-                f.cancel()
+    # Si ningún modelo pudo responder por caída de red/APIs, usar el siguiente lote de respaldo
+    if not resultado_final and respuestas_validas == 0 and len(modelos_disponibles) > MODELS_TO_USE:
+        modelos_fallback = modelos_disponibles[MODELS_TO_USE:MODELS_TO_USE + 3]
+        if modelos_fallback:
+            logger.warning(f"⚠️ Todos los modelos del lote primario fallaron por red/API. Activando lote de respaldo: {modelos_fallback}")
+            deadline = None
+            _ejecutar_lote_modelos(modelos_fallback)
 
     if resultado_final:
         logger.info(f"🎯 PATOLOGÍA CRÍTICA FINAL DETECTADA: '{resultado_final}'")

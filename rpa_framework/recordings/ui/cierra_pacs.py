@@ -55,6 +55,7 @@ TITULOS_CARESTREAM = [
 # Procesos conocidos que deben cerrarse
 PROCESOS_CARESTREAM = [
     "mp.exe", 
+    "ckmvs.exe",
     "csps_win.exe", 
     "RISClient.exe", 
     "CarestreamRIS.exe",

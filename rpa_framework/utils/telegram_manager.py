@@ -114,10 +114,12 @@ def get_menu_principal_markup():
     }
 
 def get_menu_ejecucion_markup():
-    """Submenú Ejecución (sin 'Solo Pega')."""
+    """Submenú Ejecución y Workflows."""
     return {
         "inline_keyboard": [
             [{"text": "▶️ Iniciar Completo", "callback_data": "cmd_inicio"}],
+            [{"text": "📋 Solo Pega en Integra", "callback_data": "cmd_pega_integra"}],
+            [{"text": "🔄 Revalidar Último Registro", "callback_data": "cmd_revalidar"}],
             [{"text": "🔁 Configurar Loop", "callback_data": "cmd_loop_menu"}],
             [{"text": "⏹️ Detener Ejecución", "callback_data": "cmd_detener"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
@@ -167,6 +169,8 @@ def get_menu_sistema_markup():
     return {
         "inline_keyboard": [
             [{"text": "📸 Estado Actual + Captura", "callback_data": "cmd_estado_actual"}],
+            [{"text": "🩺 Validar PACS", "callback_data": "cmd_validar_pacs"}],
+            [{"text": "🏥 Estado PACS", "callback_data": "cmd_estado_pacs"}],
             [{"text": "🔴 Transmisión en Vivo (Desktop)", "callback_data": "cmd_stream_menu"}],
             [{"text": "🔋 Estado Batería", "callback_data": "cmd_bateria"}],
             [{"text": "📜 Ver Últimos Logs", "callback_data": "cmd_ver_log"}],

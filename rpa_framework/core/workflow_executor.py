@@ -32,6 +32,14 @@ except ImportError:
         def get_screen_resolution():
             return "1920x1080"
 
+try:
+    from utils.window_utils import maximize_ris_pacs
+except ImportError:
+    try:
+        from rpa_framework.utils.window_utils import maximize_ris_pacs
+    except ImportError:
+        maximize_ris_pacs = None
+
 def get_python_exe() -> str:
     """Retorna la ruta al ejecutable python."""
     if os.environ.get("RPA_SHOW_CONSOLE", "0") == "1":
@@ -50,17 +58,8 @@ def get_python_exe() -> str:
     return exe
 
 def _get_silent_process_flags():
-    """Retorna creationflags y startupinfo configurados para ocultar totalmente consolas de Windows a menos que RPA_SHOW_CONSOLE=1."""
-    if os.environ.get("RPA_SHOW_CONSOLE", "0") == "1":
-        return 0, None
-    creationflags = 0
-    startupinfo = None
-    if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NO_WINDOW
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0  # SW_HIDE
-    return creationflags, startupinfo
+    """Retorna creationflags y startupinfo. Por política de ejecución en primer plano, nunca oculta consolas en segundo plano."""
+    return 0, None
 
 
 class WorkflowExecutor:
@@ -492,6 +491,21 @@ class WorkflowExecutor:
                      if node.output_variable:
                         output_str = "\n".join(full_output).strip()
                         self.context[node.output_variable] = output_str
+                     
+                     cmd_str = str(node.command).lower() if node.command else ""
+                     label_str = str(node.label).lower() if node.label else ""
+                     es_cmd_excluido = any(k in cmd_str for k in ["mp.exe"]) or \
+                                       any(k in label_str for k in ["abre pacs", "abrir pacs", "ingresa user pacs"])
+                     if not es_cmd_excluido:
+                         if any(k in cmd_str for k in ["carestream ris"]) or \
+                            any(k in label_str for k in ["inicia ris", "iniciar ris"]):
+                              if maximize_ris_pacs:
+                                  try:
+                                      max_w = maximize_ris_pacs()
+                                      if max_w > 0:
+                                          self.logger.log(f"   🪟 Ventana(s) de RIS/PACS maximizada(s) ({max_w})")
+                                  except Exception as max_err:
+                                      self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
                 elif returncode == 2:
                      self.logger.log(f"ℹ️ Comando finalizado (código 2): Sin registros. Deteniendo flujo.")
                      self.should_stop = True
@@ -656,6 +670,23 @@ class WorkflowExecutor:
                             break
                     except json.JSONDecodeError:
                         continue
+                
+                # Auto-maximizar ventanas de RIS y PACS si el script o nodo abrió RIS/PACS
+                # (Deshabilitado para abre_pacs e ingresa_user_pacs)
+                script_str = str(node.script).lower() if node.script else ""
+                label_str = str(node.label).lower() if node.label else ""
+                es_excluido = any(k in script_str for k in ["abre_pacs", "ingresa_user_pacs"]) or \
+                              any(k in label_str for k in ["abre pacs", "abrir pacs", "ingresa user pacs"])
+                if not es_excluido:
+                    if any(k in script_str for k in ["inicio_ris"]) or \
+                       any(k in label_str for k in ["inicia ris", "iniciar ris"]):
+                        if maximize_ris_pacs:
+                            try:
+                                max_w = maximize_ris_pacs()
+                                if max_w > 0:
+                                    self.logger.log(f"   🪟 Ventana(s) de RIS/PACS maximizada(s) post-ejecución ({max_w})")
+                            except Exception as max_err:
+                                self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
             elif returncode == 2:
                 self.logger.log(f"ℹ️ Script finalizado (código 2): Sin registros para trabajar. Deteniendo flujo.")
                 self.should_stop = True
