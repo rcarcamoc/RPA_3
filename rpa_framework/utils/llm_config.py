@@ -70,7 +70,7 @@ BASE_LLM_MODELS = [
    "openai/gpt-oss-20b",                                     # Fallback 1 — Validado OK
    "nvidia/nemotron-parse-2.0",                              # Fallback 2 — Validado OK
    "meta/muse-glimmer-30b",                                  # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 4 — Validado OK
    "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 5 — Validado OK
    "cohere/north-mini-code:free",                            # Fallback 6 — Validado OK
    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 7 — Validado OK
@@ -83,6 +83,9 @@ OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
+    "google/gemma-4-31b-it",
+    "deepseek/deepseek-v4-flash-0731:free",
+    "inclusionai/ling-3.0-flash-vl:free",
     "nex-agi/nex-n2.5-pro:free",
 ]
 
