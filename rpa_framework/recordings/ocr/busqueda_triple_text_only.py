@@ -67,6 +67,15 @@ try:
 except ImportError:
     HAS_PREPROCESS_UTILS = False
 
+# Importar Auditor Clínico Pre-Clic
+try:
+    from recordings.ocr.auditor_clinico import AuditorClinico
+except ImportError:
+    try:
+        from rpa_framework.recordings.ocr.auditor_clinico import AuditorClinico
+    except ImportError:
+        AuditorClinico = None
+
 logger = logging.getLogger(__name__)
 
 # ===========================================================================
@@ -81,6 +90,9 @@ MIN_FUZZY_FOR_LLM = 30
 
 # Confianza mínima que el LLM debe reportar para aceptar un match.
 LLM_MIN_CONFIDENCE = 0.70
+
+# Circuit Breaker en memoria para modelos caídos ({model_id: timestamp_fallo})
+_CIRCUIT_BREAKER_DOWN_MODELS = {}
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
@@ -111,7 +123,7 @@ class BusquedaTextOnly:
         self.CROP_HEIGHT = 22  # Altura de recorte para cubrir fila (px en imagen original)
         self.OFFSET_X = 50
         self.OFFSET_Y = 180 # Offset para el submenú despues del click derecho
-        self.MAX_RETRIES = 1  # Número de reintentos si falla el proceso
+        self.MAX_RETRIES = 2  # Número de reintentos si falla el proceso (aumentado para resiliencia)
         
         # Init Visual Feedback
         try:
@@ -124,6 +136,14 @@ class BusquedaTextOnly:
         except Exception as e:
             logger.warning(f"Error inicializando VisualFeedback: {e}")
             self.vf = None
+
+        # Inicializar Auditor Clínico Pre-Clic
+        if AuditorClinico:
+            self.auditor = AuditorClinico()
+            logger.info("🛡️ Auditor Clínico Pre-Clic inicializado y activo.")
+        else:
+            self.auditor = None
+            logger.warning("⚠️ AuditorClinico no disponible; auditoría pre-clic desactivada.")
 
     def update_db_error(self, error_message):
         """Actualiza el estado a Error en la base de datos."""
@@ -184,55 +204,81 @@ class BusquedaTextOnly:
     def buscar_sinonimo(self, examen: str, ocr_text: str) -> str:
         """
         Busca en ris.sinonimos si existe alguna coincidencia para este examen/OCR.
-        Busca en cualquiera de las columnas (examen, OCR, Sugerencia).
-        También comprueba si el texto OCR CONTIENE alguno de los valores guardados.
-        Retorna la Sugerencia guardada si encuentra match, o '' (cadena vacía).
+        Protegido contra subcadenas cortas: no utiliza INSTR si el término tiene menos de 8 caracteres.
         """
-        if not HAS_MYSQL:
+        if not HAS_MYSQL or not examen:
             return ''
         try:
             conn = mysql.connector.connect(
                 host='localhost', user='root', password='', database='ris'
             )
             cursor = conn.cursor()
-            # Búsqueda amplia:
-            #  1. Coincidencia exacta de examen o Sugerencia con el nombre de BD
-            #  2. El texto OCR contiene el valor guardado en columna OCR (INSTR)
-            #  3. El nombre de BD contiene el valor guardado en columna examen (INSTR)
+            # 1. Coincidencia exacta directa (máxima prioridad)
             cursor.execute("""
                 SELECT Sugerencia FROM ris.sinonimos
-                WHERE examen = %s
-                   OR Sugerencia = %s
-                   OR (OCR   != '' AND INSTR(%s, OCR)   > 0)
-                   OR (examen != '' AND INSTR(%s, examen) > 0)
+                WHERE examen = %s OR Sugerencia = %s
                 LIMIT 1
-            """, (examen, examen, ocr_text or '', examen or ''))
+            """, (examen, examen))
             row = cursor.fetchone()
-            conn.close()
             if row and row[0]:
-                logger.info(f"✅ Sinónimo encontrado en BD: '{row[0]}' para examen='{examen}'")
+                conn.close()
+                logger.info(f"✅ Sinónimo exacto encontrado en BD: '{row[0]}' para examen='{examen}'")
                 return row[0]
+
+            # 2. Coincidencia en OCR solo si ocr_text tiene al menos 8 caracteres
+            if ocr_text and len(ocr_text.strip()) >= 8:
+                cursor.execute("""
+                    SELECT Sugerencia FROM ris.sinonimos
+                    WHERE OCR != '' AND LENGTH(OCR) >= 8 AND INSTR(%s, OCR) > 0
+                    LIMIT 1
+                """, (ocr_text,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    conn.close()
+                    logger.info(f"✅ Sinónimo por OCR encontrado en BD: '{row[0]}'")
+                    return row[0]
+
+            conn.close()
             return ''
         except Exception as e:
             logger.warning(f"No se pudo consultar ris.sinonimos: {e}")
             return ''
 
-    def guardar_sinonimo(self, examen: str, ocr_text: str, sugerencia: str) -> None:
-        """Guarda un nuevo registro en ris.sinonimos."""
-        if not HAS_MYSQL or not sugerencia:
+    def guardar_sinonimo(self, examen: str, ocr_text: str, sugerencia: str, confianza: float = 1.0) -> None:
+        """
+        Guarda un nuevo registro en ris.sinonimos bajo estrictas reglas de admisión:
+        1. Longitud mínima de OCR >= 12 caracteres (no abreviaturas breves como 'ECO').
+        2. No guardar si confianza < 0.90.
+        3. No guardar si falta examen o sugerencia.
+        """
+        if not HAS_MYSQL or not sugerencia or not ocr_text:
             return
+        clean_ocr = ocr_text.strip()
+        if len(clean_ocr) < 12:
+            logger.warning(f"🛡️ [GUARDAR SINÓNIMO] Rechazado por longitud insuficiente ({len(clean_ocr)} < 12): '{clean_ocr}'")
+            return
+        if confianza < 0.90:
+            logger.warning(f"🛡️ [GUARDAR SINÓNIMO] Rechazado por confianza insuficiente ({confianza:.2f} < 0.90)")
+            return
+
         try:
             conn = mysql.connector.connect(
                 host='localhost', user='root', password='', database='ris'
             )
             cursor = conn.cursor()
+            # Evitar duplicados
+            cursor.execute("SELECT id FROM ris.sinonimos WHERE examen = %s AND Sugerencia = %s LIMIT 1", (examen[:100], sugerencia[:100]))
+            if cursor.fetchone():
+                conn.close()
+                return
+
             cursor.execute("""
                 INSERT INTO ris.sinonimos (examen, OCR, Sugerencia)
                 VALUES (%s, %s, %s)
-            """, (examen[:100], (ocr_text or '')[:100], sugerencia[:100]))
+            """, (examen[:100], clean_ocr[:100], sugerencia[:100]))
             conn.commit()
             conn.close()
-            logger.info(f"💾 Sinónimo guardado: examen='{examen}' | OCR='{ocr_text}' | Sugerencia='{sugerencia}'")
+            logger.info(f"💾 Sinónimo guardado de forma segura: examen='{examen}' | OCR='{clean_ocr}' | Sugerencia='{sugerencia}'")
         except Exception as e:
             logger.error(f"Error guardando sinónimo en BD: {e}")
 
@@ -296,6 +342,60 @@ class BusquedaTextOnly:
         text = re.sub(r'[^a-z0-9\-]', ' ', text)
         text = ' '.join(text.split())
         return text
+
+    def verificar_lateralidad(self, text_target: str, text_ocr: str) -> bool:
+        """
+        Valida clínicamente que la lateralidad del examen buscado (target)
+        sea compatible con la detectada en el texto OCR.
+
+        Reglas clínicas:
+        - Si el target exige DERECHO y el OCR dice IZQUIERDO (y no menciona derecho), NO es match.
+        - Si el target exige IZQUIERDO y el OCR dice DERECHO (y no menciona izquierdo), NO es match.
+        - Si el target es BILATERAL / AMBAS y el OCR sólo menciona un lado unilateral sin indicador bilateral, NO es match.
+        - Si el target es unilateral y el OCR dice BILATERAL / AMBAS, NO es match.
+        - Si ninguno especifica lateralidad (ej. Abdomen, Tórax), es compatible (True).
+        """
+        target_norm = self.normalize_text(text_target)
+        ocr_norm = self.normalize_text(text_ocr)
+
+        der_tokens = {'derecho', 'derecha', 'der', 'dcha'}
+        izq_tokens = {'izquierdo', 'izquierda', 'izq'}
+        bilat_tokens = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat'}
+
+        target_words = set(target_norm.split())
+        ocr_words = set(ocr_norm.split())
+
+        target_has_der = bool(target_words & der_tokens)
+        target_has_izq = bool(target_words & izq_tokens)
+        target_has_bilat = bool(target_words & bilat_tokens)
+
+        ocr_has_der = bool(ocr_words & der_tokens)
+        ocr_has_izq = bool(ocr_words & izq_tokens)
+        ocr_has_bilat = bool(ocr_words & bilat_tokens)
+
+        # Caso Bilateral
+        if target_has_bilat:
+            if not ocr_has_bilat and not (ocr_has_der and ocr_has_izq):
+                logger.info("🚫 Lateralidad incompatible: Target es BILATERAL pero OCR es unilateral.")
+                return False
+        elif ocr_has_bilat:
+            if target_has_der or target_has_izq:
+                logger.info("🚫 Lateralidad incompatible: OCR es BILATERAL pero Target es unilateral.")
+                return False
+
+        # Caso Derecho estricto
+        if target_has_der and not target_has_izq:
+            if ocr_has_izq and not ocr_has_der:
+                logger.info("🚫 Lateralidad incompatible: Target pide DERECHO pero OCR tiene IZQUIERDO.")
+                return False
+
+        # Caso Izquierdo estricto
+        if target_has_izq and not target_has_der:
+            if ocr_has_der and not ocr_has_izq:
+                logger.info("🚫 Lateralidad incompatible: Target pide IZQUIERDO pero OCR tiene DERECHO.")
+                return False
+
+        return True
 
     # Removed similarity method as it was not appropriate for substring checks
 
@@ -449,13 +549,30 @@ class BusquedaTextOnly:
     # --- LLM FUNCTIONS ---
     def _pre_filter_llm(self, ocr_text: str, target_diag: str) -> bool:
         """
-        Pre-filtro anti-alucinación. Devuelve True (proceder con LLM) sólo si
-        el texto OCR tiene al menos MIN_FUZZY_FOR_LLM de similitud con el target.
-
-        Esto impide que el LLM "invente" una equivalencia cuando los textos son
-        tan distintos que ninguna corrección OCR real podría justificarla.
-        (ejemplo: 'Prortario' vs 'TAC Cerebro' → score ~10 → RECHAZADO sin LLM)
+        Pre-filtro anti-alucinación y seguridad clínica:
+        1. Valida concordancia clínica (lateralidad, modalidad, submodalidad y anatomía)
+           a través del Auditor Clínico en memoria (0 ms).
+        2. Devuelve True (proceder con LLM) sólo si el texto OCR tiene
+           al menos MIN_FUZZY_FOR_LLM de similitud con el target.
         """
+        # 1. Auditoría Clínica Determinista de Nivel 1
+        if self.auditor:
+            aprobado, razon, _ = self.auditor.auditar(target_diag, ocr_text, metodo='pre_filtro_llm', requiere_llm=False)
+            if not aprobado:
+                logger.warning(
+                    f"🚫 Pre-filtro RECHAZA llamar al LLM: {razon} "
+                    f"(target='{target_diag}' | ocr='{ocr_text[:60]}')."
+                )
+                return False
+        else:
+            # Fallback si auditor no estuviera instanciado
+            if not self.verificar_lateralidad(target_diag, ocr_text):
+                logger.warning(
+                    f"🚫 Pre-filtro RECHAZA llamar al LLM: Incompatibilidad de lateralidad anatómica "
+                    f"entre target='{target_diag}' y ocr='{ocr_text[:60]}'."
+                )
+                return False
+
         target_norm = self.normalize_text(target_diag)
         ocr_norm    = self.normalize_text(ocr_text)
 
@@ -484,7 +601,7 @@ class BusquedaTextOnly:
         
         Cada intento se registra en 'log_llm_ranking' para evaluar desempeño.
         """
-        # Pre-filtro: evitar alucinaciones por textos completamente disímiles
+        # Pre-filtro: evitar alucinaciones por textos completamente disímiles o lateralidad opuesta
         if not self._pre_filter_llm(ocr_text, target_diag):
             return False
 
@@ -513,11 +630,14 @@ ENCONTRADO (línea completa OCR): "{ocr_text}"
    - Letras adicionales o faltantes al inicio/fin por segmentación (ej: "TAC" → "TAC ").
    - Acento o ñ incorrectos (ej: "Ecotomografia" ≈ "Ecotomografía").
 
-3. **REGIÓN ANATÓMICA**: debe coincidir en la zona principal.
+3. **REGIÓN ANATÓMICA Y LATERALIDAD ESTRICTA**:
+   - La región anatómica debe coincidir.
+   - **LATERALIDAD OBLIGATORIA Y EXCLUYENTE**: Si el examen buscado especifica DERECHO/DERECHA o IZQUIERDO/IZQUIERDA o BILATERAL, el texto ENCONTRADO DEBE coincidir con dicha lateralidad. Un examen de 'Tobillo Izquierdo' NUNCA es equivalente a 'Tobillo Derecho'. Si la lateralidad es contraria o diferente, DEBES responder es_match: false.
 
 ---
 ## PROHIBICIONES ESTRICTAS (estas situaciones = es_match: false)
 
+- ❌ NO aceptar si la lateralidad anatómica difiere en absoluto (derecho vs izquierdo, der vs izq, bilateral vs unilateral).
 - ❌ NO aceptar si la corrección requiere cambiar MÁS DE 3 caracteres simultáneamente.
 - ❌ NO inventar palabras completas: si el OCR dice "Prortario" NO puede ser "TAC Cerebro".
 - ❌ NO aceptar si la modalidad (TAC, RM, RX, ECO) no tiene ninguna representación reconocible en el ENCONTRADO.
@@ -528,9 +648,10 @@ ENCONTRADO (línea completa OCR): "{ocr_text}"
 ## PROCESO DE RAZONAMIENTO
 
 1. Extrae del ENCONTRADO el segmento que parece el nombre del examen.
-2. Aplica corrección OCR MÍNIMA (≤3 caracteres). ¿Qué examen queda?
-3. ¿Ese examen equivale al BUSCADO?
-4. Si en algún paso necesitaste cambiar palabras enteras, responde es_match: false.
+2. Comprueba si la lateralidad coincide exactamente (derecho/izquierdo/bilateral). Si no coincide, es_match: false.
+3. Aplica corrección OCR MÍNIMA (≤3 caracteres). ¿Qué examen queda?
+4. ¿Ese examen equivale al BUSCADO?
+5. Si en algún paso necesitaste cambiar palabras enteras o cambiar de extremidad, responde es_match: false.
 
 RESPONDE SOLO EN FORMATO JSON:
 {{
@@ -541,157 +662,133 @@ RESPONDE SOLO EN FORMATO JSON:
 """
 
         if self.vf:
-            self.vf.show_persistent_message("PROCESANDO OpenRouter...", "llm", bg_color="#FFEB3B", fg_color="#000000")
+            self.vf.show_persistent_message("PROCESANDO LLM (Cascada)...", "llm", bg_color="#FFEB3B", fg_color="#000000")
 
-        # ── Estrategia Paralela "Race" ────────────────────────────────────────
-        # Enviamos la consulta a todos los modelos SIMULTÁNEAMENTE con un pool
-        # limitado a MAX_PARALLEL_LLM workers para no saturar los rate-limits de
-        # OpenRouter. El primero en responder con is_match=True y confianza
-        # suficiente se declara ganador; el resto se descarta (pero igual se
-        # loguea para el ranking).
+        # ── Estrategia de Cascada Resiliente Multi-Proveedor ─────────────────
+        # Evaluamos de forma secuencial y acotada, empezando por el modelo primario
+        # de alta velocidad y precisión. Si responde con alta certeza, terminamos en ~1.1s.
+        # Si el modelo está caído (429, 500, timeout), conmuta inmediatamente (<300ms)
+        # al respaldo de proveedor alterno (OpenRouter <-> Nvidia NIM).
         # ─────────────────────────────────────────────────────────────────────
-        MAX_PARALLEL_LLM = 3   # Máximo de peticiones simultáneas a OpenRouter
+        CASCADE_MODELS = [
+            "openai/gpt-oss-20b",                    # Tier 1: Nvidia NIM (ultra rápido ~1.1s)
+            "deepseek/deepseek-v4-flash-0731:free",  # Tier 2: OpenRouter (nube independiente ~2.0s)
+            "google/gemma-4-31b-it",                 # Tier 3: Nvidia NIM (alta precisión clínica ~1.5s)
+            "meta/llama-3.2-11b-vision-instruct",    # Tier 4: OpenRouter (respaldo secundario ~2.0s)
+        ]
+        LLM_OCR_MAX_TOKENS = 200
+        LLM_OCR_TIMEOUT = (2.5, 6.0)  # (connect_timeout, read_timeout)
+        CURRENT_TIME = time.time()
+        CIRCUIT_BREAKER_COOLDOWN = 300  # 5 minutos
 
-        import concurrent.futures
-        import threading
+        winner_found = False
 
-        winner_event = threading.Event()   # Se activa cuando algún hilo gana
-        results_lock = threading.Lock()
-        all_results  = []                  # Lista compartida para logging final
+        try:
+            for idx, model_id in enumerate(CASCADE_MODELS):
+                # 1. Verificar Circuit Breaker en memoria
+                if model_id in _CIRCUIT_BREAKER_DOWN_MODELS:
+                    down_time = _CIRCUIT_BREAKER_DOWN_MODELS[model_id]
+                    if CURRENT_TIME - down_time < CIRCUIT_BREAKER_COOLDOWN:
+                        logger.info(f"⚡ [Circuit Breaker] Saltando {model_id} (en enfriamiento por fallo reciente).")
+                        continue
+                    else:
+                        del _CIRCUIT_BREAKER_DOWN_MODELS[model_id]
 
-        def _query_model(model_id, model_idx):
-            """Ejecuta una consulta al LLM y retorna el resultado estructurado."""
-            start_time = time.time()
-            is_match   = False
-            confianza  = 0.0
-            razonamiento = ""
+                start_time = time.time()
+                logger.info(f"🧠 [Cascada LLM Tier {idx+1}] Consultando {model_id}...")
 
-            # Salida temprana si ya hay un ganador
-            if winner_event.is_set():
-                return None
+                try:
+                    base_url, target_key, provider = get_llm_request_params(model_id)
+                    if not target_key:
+                        target_key = OPENROUTER_API_KEY
+                    response = requests.post(
+                        f"{base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {target_key}",
+                            "Content-Type":  "application/json",
+                            "HTTP-Referer":  "https://rpa-framework.local",
+                        },
+                        json={
+                            "model":       model_id,
+                            "messages":    [{"role": "user", "content": prompt}],
+                            "temperature": LLM_DEFAULT_TEMPERATURE,
+                            "max_tokens":  LLM_OCR_MAX_TOKENS,
+                        },
+                        timeout=LLM_OCR_TIMEOUT,
+                    )
 
-            try:
-                base_url, target_key, provider = get_llm_request_params(model_id)
-                if not target_key:
-                    target_key = OPENROUTER_API_KEY
-                response = requests.post(
-                    f"{base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {target_key}",
-                        "Content-Type":  "application/json",
-                        "HTTP-Referer":  "https://rpa-framework.local",
-                    },
-                    json={
-                        "model":       model_id,
-                        "messages":    [{"role": "user", "content": prompt}],
-                        "temperature": LLM_DEFAULT_TEMPERATURE,
-                        "max_tokens":  LLM_DEFAULT_MAX_TOKENS,
-                    },
-                    timeout=LLM_DEFAULT_TIMEOUT,
-                )
+                    elapsed_ms = int((time.time() - start_time) * 1000)
 
-                if response.status_code == 429:
-                    logger.warning(f"⚠️ [Paralelo] {model_id} → 429 Rate Limit")
-                    razonamiento = "Rate limit 429"
-                elif response.status_code != 200:
-                    logger.warning(f"⚠️ [Paralelo] {model_id} → HTTP {response.status_code}")
-                    razonamiento = f"HTTP {response.status_code}"
-                else:
+                    if response.status_code == 429:
+                        logger.warning(f"⚠️ [Cascada] {model_id} → 429 Rate Limit. Activando Circuit Breaker y pasando a siguiente Tier.")
+                        _CIRCUIT_BREAKER_DOWN_MODELS[model_id] = time.time()
+                        continue
+                    elif response.status_code != 200:
+                        logger.warning(f"⚠️ [Cascada] {model_id} → HTTP {response.status_code}. Pasando a siguiente Tier.")
+                        _CIRCUIT_BREAKER_DOWN_MODELS[model_id] = time.time()
+                        continue
+
                     response.raise_for_status()
                     result = response.json()
 
                     if not result or "choices" not in result or not result["choices"]:
-                        razonamiento = "Respuesta vacía o sin choices"
-                    else:
-                        content = (result["choices"][0].get("message") or {}).get("content") or ""
-                        logger.info(f"[Paralelo] {model_id}: {content[:200]}...")
+                        logger.warning(f"⚠️ [Cascada] {model_id} → Respuesta vacía o sin choices.")
+                        continue
 
-                        json_match = re.search(r"\{.*?\}", content, re.DOTALL)
-                        if json_match:
-                            try:
-                                data         = json.loads(json_match.group(0))
-                                is_match     = data.get("es_match", False)
-                                confianza    = float(data.get("confianza", 0))
-                                razonamiento = data.get("razonamiento", "")
-                                logger.info(
-                                    f"[Paralelo] {model_id} → match={is_match} "
-                                    f"conf={confianza:.2f} | {razonamiento[:80]}"
-                                )
-                            except (json.JSONDecodeError, ValueError) as je:
-                                razonamiento = f"JSONDecodeError: {je}"
-                        else:
-                            razonamiento = "Sin JSON en respuesta"
+                    content = (result["choices"][0].get("message") or {}).get("content") or ""
+                    logger.info(f"[Cascada] {model_id}: {content[:160]}...")
 
-            except Exception as e:
-                logger.error(f"❌ [Paralelo] {model_id}: {e}")
-                razonamiento = f"Error API: {str(e)}"
+                    json_match = re.search(r"\{.*?\}", content, re.DOTALL)
+                    if not json_match:
+                        logger.warning(f"⚠️ [Cascada] {model_id} → Sin JSON estructurado en respuesta.")
+                        continue
 
-            elapsed_ms = int((time.time() - start_time) * 1000)
+                    data = json.loads(json_match.group(0))
+                    is_match = data.get("es_match", False)
+                    confianza = float(data.get("confianza", 0.0))
+                    razonamiento = data.get("razonamiento", "")
 
-            return {
-                "model_id":    model_id,
-                "model_idx":   model_idx,
-                "is_match":    is_match,
-                "confianza":   confianza,
-                "razonamiento": razonamiento,
-                "tiempo_ms":   elapsed_ms,
-            }
+                    logger.info(
+                        f"📊 [Cascada Tier {idx+1}] {model_id} ({elapsed_ms}ms) → "
+                        f"match={is_match} conf={confianza:.2f} | {razonamiento[:80]}"
+                    )
 
-        try:
-            winner_result = None
-
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=MAX_PARALLEL_LLM,
-                thread_name_prefix="LLM_race",
-            ) as executor:
-                futures = {
-                    executor.submit(_query_model, m, idx): m
-                    for idx, m in enumerate(models)
-                }
-
-                for future in concurrent.futures.as_completed(futures):
-                    res = future.result()
-                    if res is None:
-                        continue   # Hilo abortado antes de comenzar
-
-                    with results_lock:
-                        all_results.append(res)
-
-                    # ¿Ganador?
-                    if (
-                        res["is_match"]
-                        and res["confianza"] >= LLM_MIN_CONFIDENCE
-                        and not winner_event.is_set()
-                    ):
-                        winner_event.set()
-                        winner_result = res
-                        logger.info(
-                            f"🏆 [Race] Ganador: {res['model_id']} "
-                            f"(conf={res['confianza']:.2f}, {res['tiempo_ms']}ms)"
+                    # Log al ranking
+                    try:
+                        self.log_llm_ranking(
+                            id_registro=id_registro,
+                            modelo=model_id,
+                            target_buscado=target_diag,
+                            texto_ocr=ocr_text,
+                            es_match=is_match,
+                            razonamiento=razonamiento,
+                            confianza=confianza,
+                            tiempo_ms=elapsed_ms,
+                            es_primer_intento=(idx == 0)
                         )
-                        # No cancelamos el executor aquí: los hilos ya lanzados
-                        # terminarán solos; los pendientes ven winner_event y salen temprano.
+                    except Exception as log_err:
+                        logger.warning(f"No se pudo registrar log_llm_ranking: {log_err}")
 
-            # ── Logging de TODOS los resultados al ranking ────────────────
-            winner_id = winner_result["model_id"] if winner_result else None
-            for res in all_results:
-                self.log_llm_ranking(
-                    id_registro=id_registro,
-                    modelo=res["model_id"],
-                    target_buscado=target_diag,
-                    texto_ocr=ocr_text,
-                    es_match=res["is_match"],
-                    razonamiento=res["razonamiento"],
-                    confianza=res["confianza"],
-                    tiempo_ms=res["tiempo_ms"],
-                    # Solo el ganador se cuenta como "primer intento exitoso"
-                    es_primer_intento=(res["model_id"] == winner_id),
-                )
+                    # Decisión en Cascada
+                    if is_match and confianza >= LLM_MIN_CONFIDENCE:
+                        logger.info(f"🏆 [Cascada] Coincidencia positiva confirmada por {model_id} en {elapsed_ms}ms.")
+                        winner_found = True
+                        return True
+                    elif not is_match and confianza >= 0.85:
+                        logger.info(f"🛑 [Cascada] Descarte certero confirmado por {model_id} en {elapsed_ms}ms. Rechazando candidato.")
+                        return False
+                    else:
+                        # Confianza intermedia (dudoso): escalar al siguiente tier para segunda opinión
+                        logger.info(f"⚖️ [Cascada] Decisión dudosa ({confianza:.2f}) de {model_id}. Escalando a siguiente Tier...")
+                        continue
 
-            if winner_result:
-                return True
+                except Exception as e:
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+                    logger.warning(f"❌ [Cascada] {model_id} falló ({elapsed_ms}ms): {e}. Conmutando a siguiente Tier de inmediato...")
+                    _CIRCUIT_BREAKER_DOWN_MODELS[model_id] = time.time()
+                    continue
 
-            logger.warning("⚠️ [Race] Ningún modelo superó el umbral de confianza.")
+            logger.warning("⚠️ [Cascada] Ningún modelo de la cascada confirmó coincidencia positiva.")
             return False
 
         finally:
@@ -731,21 +828,14 @@ RESPONDE SOLO EN FORMATO JSON:
 
             row_digits = "".join(filter(str.isdigit, row_text))
 
-            # ── CHECK FECHA ──────────────────────────────────────────────
-            # Obtener representación de fecha con año de 2 dígitos (ej: "13-06-26")
-            target_fecha_short = target_fecha_str[:-4] + target_fecha_str[-2:] if len(target_fecha_str) == 10 else ""
-            target_fecha_short_digits = "".join(filter(str.isdigit, target_fecha_short))
-
-            has_date = (
-                (target_fecha_str in row_text)
-                or (target_fecha_str.replace("-", "/") in row_text)
-                or (target_fecha_digits in row_digits)
-                or (target_fecha_short in row_text)
-                or (target_fecha_short.replace("-", "/") in row_text)
-                or (target_fecha_short_digits in row_digits)
-                or (fuzz.partial_ratio(target_fecha_str, row_text) >= 70)
-                or (fuzz.partial_ratio(target_fecha_short, row_text) >= 70)
-            )
+            # ── CHECK FECHA (Blindado con Auditor Clínico) ────────────────
+            if self.auditor:
+                has_date, motivo_fecha, score_fecha = self.auditor.auditar_fecha(target_fecha_str, row_text)
+            else:
+                target_fecha_short = target_fecha_str[:-4] + target_fecha_str[-2:] if len(target_fecha_str) == 10 else ""
+                has_date = (target_fecha_str in row_text) or (target_fecha_short in row_text)
+                score_fecha = 100 if has_date else 0
+                motivo_fecha = "Fallback exacto sin auditor"
 
             # ── CHECK ESTADO ────────────────────────────────────────────
             # OBLIGATORIO: Se exige que la fila contenga explícitamente "Examen Hecho" (o "hecho").
@@ -756,7 +846,7 @@ RESPONDE SOLO EN FORMATO JSON:
 
             logger.debug(
                 f"Fila Y={int(row['y_center'])}: ex_hecho={score_examen_hecho} hecho={score_hecho} "
-                f"fecha={has_date} | {row_text[:80]}"
+                f"fecha={has_date} ({motivo_fecha}) | {row_text[:80]}"
             )
 
             if has_date and has_estado:
@@ -769,17 +859,19 @@ RESPONDE SOLO EN FORMATO JSON:
                 # Es más estable que (y_min + y_max)/2 porque los bounds de Tesseract
                 # sobre imagen 3x normalizada pueden incluir padding que desplaza el resultado.
                 row['y_click'] = row['y_center']
+                row['score_fecha'] = score_fecha
+                row['motivo_fecha'] = motivo_fecha
                 row['score_estado'] = max(score_examen_hecho, score_hecho)
                 candidates.append(row)
                 logger.info(
                     f"✅ Candidato (Y_center={int(row['y_center'])} | y_min={int(row['y_min'])} "
                     f"y_max={int(row['y_max'])} y_click={int(row['y_click'])}, "
-                    f"ex_hecho={score_examen_hecho} hecho={score_hecho}): "
+                    f"score_fecha={score_fecha} ex_hecho={score_examen_hecho} hecho={score_hecho}): "
                     f"{row_text[:120]}"
                 )
 
-        # Ordenar los candidatos por su score_estado de mayor a menor para priorizar los mejores matches
-        candidates = sorted(candidates, key=lambda c: c.get('score_estado', 0), reverse=True)
+        # Ordenar los candidatos priorizando fecha estricta y luego score de estado
+        candidates = sorted(candidates, key=lambda c: (c.get('score_fecha', 0), c.get('score_estado', 0)), reverse=True)
 
         return candidates, rows_data
 
@@ -833,6 +925,22 @@ RESPONDE SOLO EN FORMATO JSON:
             
         try:
             ocr_results = self.execute_ocr_data(img_bgr, use_preprocessing=True)
+            # Estabilización activa: Si la pantalla del PACS aún está cargando o en blanco (ej. ID 595 con 0 palabras)
+            if len(ocr_results) < 3:
+                for wait_attempt in range(1, 4):
+                    logger.warning(
+                        f"⏳ Pantalla PACS posiblemente no renderizada (solo {len(ocr_results)} palabras detectadas). "
+                        f"Esperando estabilización ({wait_attempt}/3)..."
+                    )
+                    time.sleep(2.0)
+                    screenshot = pyautogui.screenshot(region=self.region)
+                    img_np = np.array(screenshot)
+                    img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+                    ocr_results = self.execute_ocr_data(img_bgr, use_preprocessing=True)
+                    if len(ocr_results) >= 3:
+                        logger.info(f"✅ Pantalla PACS estabilizada: {len(ocr_results)} palabras detectadas.")
+                        break
+
             candidates, rows_data = self._analyze_candidates(ocr_results, target_fecha_str)
         finally:
             if self.vf:
@@ -908,40 +1016,27 @@ RESPONDE SOLO EN FORMATO JSON:
                 
         logger.info(f"Candidatos iniciales (Fecha + Estado): {len(candidates)}")
         
-        if not candidates:
-            logger.warning("No se encontraron filas con Fecha y Estado 'Hecho'.")
-            
-            # DEBUG: Imprimir qué está viendo para diagnóstico
-            logger.info("=== DEBUG: Contenido de filas detectadas ===")
-            for i, r in enumerate(rows_data):
-                row_items = sorted(r['items'], key=lambda x: x['center']['x'])
-                txt = " ".join([item['text'] for item in row_items])
-                logger.info(f"Fila {i} (Y={int(r['y_center'])}): {txt}")
-            logger.info("============================================")
-            
-            return False, ""
-
         # 4. Iterar Candidatos y Verificar Diagnóstico
+        # ─────────────────────────────────────────────────────────────────
+        # FASE 1: Verificación RÁPIDA (Sinónimos y Fuzzy Local) en TODOS
+        # los candidatos. Si alguno coincide de forma determinista, se
+        # hace clic de inmediato SIN tocar ningún LLM (evita demoras de +90s).
+        # ─────────────────────────────────────────────────────────────────
+        logger.info(f"=== FASE 1: Búsqueda Local Rápida ({len(candidates)} candidatos) ===")
         for idx, cand in enumerate(candidates):
             y_center = cand['y_center']
-            # Usar el centro REAL del bloque de texto (calculado desde bounds de Tesseract)
             y_click = cand.get('y_click', y_center)
-            logger.info(
-                f"--- Verificando Candidato #{idx+1} "
-                f"(Y_center={int(y_center)} | Y_click={int(y_click)}) ---"
-            )
-            
-            # USAR EL TEXTO YA DETECTADO (Más robusto que re-hacer OCR con recorte)
-            # El paso anterior ya demostró que este texto tiene buena calidad (encontró fecha y estado)
             ocr_text_candidate = cand.get('full_text', "")
-            logger.info(f"Texto OCR Candidato: '{ocr_text_candidate}'")
-            
+
+            # Verificación estricta de lateralidad clínica
+            if not self.verificar_lateralidad(target_diag, ocr_text_candidate):
+                logger.info(f"🚫 [Fase 1] Candidato #{idx+1} descartado por lateralidad anatómica incompatible: '{ocr_text_candidate[:60]}'")
+                continue
+
             ocr_norm = self.normalize_text(ocr_text_candidate)
             target_norm = self.normalize_text(target_diag)
 
             # ── NIVEL 0: Búsqueda en tabla de sinónimos ────────────────────────
-            # Se busca ANTES del LLM usando el texto OCR ya detectado.
-            # Evita llamadas al LLM para casos ya vistos por el usuario.
             sinonimo_bd = self.buscar_sinonimo(target_diag, ocr_text_candidate)
             if sinonimo_bd:
                 sinonimo_norm = self.normalize_text(sinonimo_bd)
@@ -949,23 +1044,97 @@ RESPONDE SOLO EN FORMATO JSON:
                 score_sin_token   = fuzz.token_set_ratio(sinonimo_norm, ocr_norm)
                 logger.info(f"📚 Sinónimo BD: '{sinonimo_bd}' | partial={score_sin_partial} token={score_sin_token}")
                 if score_sin_partial > 72 or score_sin_token > 72:
-                    logger.info("✅ MATCH POR SINÓNIMO BD CONFIRMADO")
+                    # 🛡️ AUDITORÍA PRE-CLIC (Sinónimos BD)
+                    if self.auditor:
+                        if self.vf: self.vf.show_persistent_message("🛡️ AUDITANDO SINÓNIMO...", "audit")
+                        aprobado, razon, _ = self.auditor.auditar(
+                            target_diag=target_diag,
+                            ocr_candidato=ocr_text_candidate,
+                            metodo="sinonimo_bd",
+                            score=max(score_sin_partial, score_sin_token),
+                            id_registro=id_registro
+                        )
+                        if self.vf: self.vf.hide_persistent_message("audit")
+                        if not aprobado:
+                            logger.warning(f"🛡️ [AUDITOR RECHAZA] Candidato por Sinónimo BD descartado: {razon}")
+                            continue
+
+                    logger.info(f"✅ MATCH POR SINÓNIMO BD CONFIRMADO Y AUDITADO (Fase 1) → clic en Y={int(y_click)}")
                     self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                     return True, ''
 
             # ── NIVEL 1: Verificación Local (Fuzzy) ─────────────────────────────
-            if fuzz.partial_ratio(target_norm, ocr_norm) > 85 or \
-               fuzz.token_set_ratio(target_norm, ocr_norm) > 85:
-                logger.info(f"✅ MATCH LOCAL CONFIRMADO → clic en Y={int(y_click)}")
+            score_partial = fuzz.partial_ratio(target_norm, ocr_norm)
+            score_token = fuzz.token_set_ratio(target_norm, ocr_norm)
+            if score_partial > 85 or score_token > 85:
+                # 🛡️ AUDITORÍA PRE-CLIC (Fuzzy Local)
+                if self.auditor:
+                    if self.vf: self.vf.show_persistent_message("🛡️ AUDITANDO OCR LOCAL...", "audit")
+                    aprobado, razon, _ = self.auditor.auditar(
+                        target_diag=target_diag,
+                        ocr_candidato=ocr_text_candidate,
+                        metodo="fuzzy_local",
+                        score=max(score_partial, score_token),
+                        id_registro=id_registro
+                    )
+                    if self.vf: self.vf.hide_persistent_message("audit")
+                    if not aprobado:
+                        logger.warning(f"🛡️ [AUDITOR RECHAZA] Match Fuzzy Local descartado: {razon}")
+                        continue
+
+                logger.info(f"✅ MATCH LOCAL CONFIRMADO Y AUDITADO (Fase 1, partial={score_partial}, token={score_token}) → clic en Y={int(y_click)}")
                 self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                 return True, ''
 
-            # ── NIVEL 2: Verificación LLM (todos los modelos) ───────────────────
-            logger.info("⚠️ No hubo match local. Consultando LLM (se probarán todos los modelos)...")
+        # ─────────────────────────────────────────────────────────────────
+        # FASE 2: Verificación con LLM (Solo si NINGÚN candidato coincidió localmente)
+        # ─────────────────────────────────────────────────────────────────
+        logger.info("=== FASE 2: Sin coincidencia local previa. Evaluando con LLM ===")
+        valid_llm_candidates = []
+        for cand in candidates:
+            ocr_text_cand = cand.get('full_text', "")
+            # Validar lateralidad clínica antes de considerar al LLM
+            if not self.verificar_lateralidad(target_diag, ocr_text_cand):
+                continue
+            # Pre-filtro fuzzy básico
+            if not self._pre_filter_llm(ocr_text_cand, target_diag):
+                continue
+            t_norm = self.normalize_text(target_diag)
+            o_norm = self.normalize_text(ocr_text_cand)
+            score = max(fuzz.partial_ratio(t_norm, o_norm), fuzz.token_set_ratio(t_norm, o_norm))
+            cand['_fuzzy_score'] = score
+            valid_llm_candidates.append(cand)
+
+        # Ordenar de mayor a menor similitud antes de llamar al LLM
+        valid_llm_candidates.sort(key=lambda c: c.get('_fuzzy_score', 0), reverse=True)
+
+        for idx, cand in enumerate(valid_llm_candidates):
+            y_center = cand['y_center']
+            y_click = cand.get('y_click', y_center)
+            ocr_text_candidate = cand.get('full_text', "")
+            logger.info(
+                f"--- [LLM] Verificando Candidato #{idx+1} (Score={cand.get('_fuzzy_score', 0)} | "
+                f"Y_center={int(y_center)} | Y_click={int(y_click)}) ---"
+            )
             is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
-            
             if is_match_llm:
-                logger.info(f"✅ MATCH LLM CONFIRMADO → clic en Y={int(y_click)}")
+                # 🛡️ AUDITORÍA PRE-CLIC (LLM Match)
+                if self.auditor:
+                    if self.vf: self.vf.show_persistent_message("🛡️ AUDITANDO MATCH LLM...", "audit")
+                    aprobado, razon, _ = self.auditor.auditar(
+                        target_diag=target_diag,
+                        ocr_candidato=ocr_text_candidate,
+                        metodo="llm",
+                        score=1.0,
+                        requiere_llm=False,
+                        id_registro=id_registro
+                    )
+                    if self.vf: self.vf.hide_persistent_message("audit")
+                    if not aprobado:
+                        logger.warning(f"🛡️ [AUDITOR RECHAZA] Match LLM descartado por auditoría clínica: {razon}")
+                        continue
+
+                logger.info(f"✅ MATCH LLM CONFIRMADO Y AUDITADO (Fase 2) → clic en Y={int(y_click)}")
                 self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                 return True, ''
             else:
@@ -1185,8 +1354,22 @@ def main():
         if target_diag_raw:
             sinonimo = search.buscar_sinonimo(target_diag_raw, "")
             if sinonimo:
-                logger.info(f"📚 Sinónimo hall ado en BD: '{sinonimo}'. Se usará en lugar de '{target_diag_raw}'.")
-                override_diag = sinonimo
+                # Blindaje Auditor Clínico sobre el sinónimo antes de aplicarlo
+                if search.auditor:
+                    aprobado, razon, _ = search.auditor.auditar(
+                        target_diag=target_diag_raw,
+                        ocr_candidato=sinonimo,
+                        metodo="sinonimo_bd",
+                        score=100
+                    )
+                    if aprobado:
+                        logger.info(f"📚 Sinónimo validado por Auditor Clínico: '{sinonimo}'. Se usará en lugar de '{target_diag_raw}'.")
+                        override_diag = sinonimo
+                    else:
+                        logger.warning(f"🚫 Sinónimo en BD '{sinonimo}' RECHAZADO por Auditor Clínico ({razon}). Se mantiene original: '{target_diag_raw}'.")
+                else:
+                    logger.info(f"📚 Sinónimo hallado en BD: '{sinonimo}'. Se usará en lugar de '{target_diag_raw}'.")
+                    override_diag = sinonimo
 
         # Intentar ejecutar con reintentos automáticos configurados
         found = False

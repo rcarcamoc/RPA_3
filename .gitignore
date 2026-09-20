@@ -34,3 +34,4 @@ rpa_framework/config/battery_state.json
 rpa_framework/config/llm_verification_log.json
 *.session
 *.session-journal
+*backup*.py
