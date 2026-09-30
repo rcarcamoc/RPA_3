@@ -205,7 +205,13 @@ def should_run_auto_verification(force=False) -> tuple[bool, str]:
         if elapsed >= timedelta(hours=24):
             return True, f"Han transcurrido {elapsed.total_seconds()/3600:.1f}h (>= 24h)"
         return False, f"Verificación reciente ({elapsed.total_seconds()/3600:.1f}h transcurridas)"
-    
+
+    elif freq in ["cada_6h", "6h", "cada_6_horas"]:
+        elapsed = now - last_run
+        if elapsed >= timedelta(hours=6):
+            return True, f"Han transcurrido {elapsed.total_seconds()/3600:.1f}h (>= 6h)"
+        return False, f"Verificación reciente ({elapsed.total_seconds()/3600:.1f}h transcurridas)"
+
     elif freq == "hora_fija":
         target_hour = cfg.get("scheduled_hour", 3)
         # Si hoy aún no ha corrido y ya pasó o estamos en la hora objetivo
@@ -214,6 +220,78 @@ def should_run_auto_verification(force=False) -> tuple[bool, str]:
         return False, f"Programado para las {target_hour}:00 (Última: {last_run.strftime('%Y-%m-%d %H:%M')})"
 
     return False, "Frecuencia no definida"
+
+
+def check_and_refresh_llm_cache(max_age_hours: float = 6.0, log_callback=None) -> dict:
+    """
+    Verifica cuándo fue la última validación de los modelos LLM.
+    Si transcurrió más de `max_age_hours` (por defecto 6 horas) o no hay registro previo,
+    ejecuta la re-validación completa y auto-reemplazo de modelos de forma síncrona.
+    Retorna un diccionario con el estado: {"status": "Vigente" | "Éxito" | "Error", ...}.
+    """
+    def _log(msg):
+        try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        except Exception:
+            try:
+                clean = msg.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {clean}", flush=True)
+            except Exception:
+                pass
+        if log_callback:
+            try:
+                log_callback(msg)
+            except Exception:
+                pass
+
+    last_run = None
+
+    # 1. Intentar leer desde TIMESTAMP_FILE
+    if TIMESTAMP_FILE.exists():
+        try:
+            with open(TIMESTAMP_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    if "T" in content:
+                        last_run = datetime.fromisoformat(content)
+                    else:
+                        last_run = datetime.strptime(content, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+    # 2. Si no se pudo obtener, consultar auto_config
+    if last_run is None:
+        cfg = load_auto_config()
+        last_ts_str = cfg.get("last_run_timestamp", "")
+        if last_ts_str:
+            try:
+                if "T" in last_ts_str:
+                    last_run = datetime.fromisoformat(last_ts_str)
+                else:
+                    last_run = datetime.strptime(last_ts_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+    now = datetime.now()
+    if last_run is None:
+        _log("⚠️ No se encontró registro previo de validación LLM. Ejecutando validación inicial obligatoria...")
+        return run_auto_verification_logic(force=True, log_callback=log_callback)
+
+    elapsed = now - last_run
+    elapsed_hours = elapsed.total_seconds() / 3600.0
+
+    if elapsed_hours >= max_age_hours:
+        _log(f"⏰ Última validación LLM fue hace {elapsed_hours:.1f}h (supera el límite de {max_age_hours:.1f}h). Ejecutando re-validación...")
+        return run_auto_verification_logic(force=True, log_callback=log_callback)
+    else:
+        elapsed_min = elapsed.total_seconds() / 60.0
+        _log(f"✅ Validación LLM vigente (realizada hace {elapsed_min:.1f} min, límite: {max_age_hours:.1f}h). No requiere re-validación.")
+        return {
+            "status": "Vigente",
+            "elapsed_seconds": elapsed.total_seconds(),
+            "elapsed_minutes": elapsed_min,
+            "last_run": last_run.isoformat()
+        }
 
 
 def get_llm_status_summary() -> str:
@@ -353,7 +431,14 @@ def run_auto_verification_logic(force=False, log_callback=None) -> dict:
     Puede llamarse desde un hilo secundario en GUI, Tray Icon o script CLI.
     """
     def _log(msg):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        except Exception:
+            try:
+                clean = msg.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {clean}", flush=True)
+            except Exception:
+                pass
         if log_callback:
             try:
                 log_callback(msg)

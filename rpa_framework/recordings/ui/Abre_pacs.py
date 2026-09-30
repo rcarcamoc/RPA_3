@@ -44,13 +44,24 @@ except ImportError:
         handle_error_and_exit = None
 
 try:
-    from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows
+    from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows, force_foreground_window
 except ImportError:
     try:
-        from utils.window_utils import maximize_hwnd, maximize_pacs_windows
+        from utils.window_utils import maximize_hwnd, maximize_pacs_windows, force_foreground_window
     except ImportError:
         maximize_hwnd = None
         maximize_pacs_windows = None
+        force_foreground_window = None
+
+try:
+    from rpa_framework.utils.screen_utils import attach_to_interactive_desktop
+    attach_to_interactive_desktop()
+except Exception:
+    try:
+        from utils.screen_utils import attach_to_interactive_desktop
+        attach_to_interactive_desktop()
+    except Exception:
+        pass
 
 def get_vf():
     return vf_instance
@@ -161,13 +172,61 @@ def cerrar_todos_carestream():
     
     logger.info("Limpieza completada.")
 
+def minimizar_navegadores():
+    """Minimiza ventanas de Chrome o navegadores para despejar la pantalla para el PACS."""
+    try:
+        import win32gui
+        import win32con
+        import win32process
+        import psutil
+
+        def cb(hwnd, _):
+            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd):
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    pname = psutil.Process(pid).name().lower()
+                    if "chrome" in pname or "msedge" in pname:
+                        win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                except Exception:
+                    pass
+            return True
+
+        win32gui.EnumWindows(cb, None)
+    except Exception as e:
+        logger.debug(f"Aviso minimizando navegadores: {e}")
+
 def abrir_vue_pacs():
     """Abre solo Vue PACS."""
-    logger.info("Abriendo Vue PACS...")
+    logger.info("Minimizando navegadores para despejar escritorio...")
+    minimizar_navegadores()
+
+    logger.info("Abriendo Vue PACS en escritorio interactivo (WinSta0\\Default)...")
     
-    app = Application(backend="win32").start(f'"{RUTA_EXE}"')
-    pid = app.process
-    logger.info(f"   PID: {pid}")
+    work_dir = os.path.dirname(RUTA_EXE)
+    try:
+        import win32process
+        import win32con
+        si = win32process.STARTUPINFO()
+        si.lpDesktop = "WinSta0\\Default"
+        si.dwFlags = win32process.STARTF_USESHOWWINDOW
+        si.wShowWindow = win32con.SW_SHOWNORMAL
+        hProcess, hThread, pid, tid = win32process.CreateProcess(
+            RUTA_EXE,
+            f'"{RUTA_EXE}"',
+            None,
+            None,
+            False,
+            0,
+            None,
+            work_dir,
+            si
+        )
+        app = Application(backend="win32").connect(process=pid)
+    except Exception as cp_err:
+        logger.warning(f"CreateProcess directo falló ({cp_err}), usando Application.start...")
+        app = Application(backend="win32").start(f'"{RUTA_EXE}"', work_dir=work_dir)
+        pid = app.process
+    logger.info(f"   PID: {pid} (work_dir: {work_dir})")
 
     # Esperar CPU (Reducido para reintento rápido si se cuelga)
     try:
@@ -183,63 +242,55 @@ def abrir_vue_pacs():
         time.sleep(3)
     debug_listar_ventanas()
 
-    # Tomar ventana PRINCIPAL (priorizando la que tenga título Carestream)
-    main_window = None
-    for titulo in TITULOS_CARESTREAM:
-        try:
-            cand = app.window(title_re=f".*{re.escape(titulo)}.*")
-            if cand.exists() and cand.is_visible():
-                main_window = cand
-                logger.info(f"   Ventana encontrada por coincidencia de título: '{cand.window_text()}' (hwnd: {cand.handle})")
-                break
-        except Exception:
-            pass
+    # 1. Esperar activamente y detectar ventanas de Carestream Vue PACS
+    logger.info("Esperando que las ventanas de Carestream Vue PACS se inicialicen...")
+    todas_pacs = []
+    start_wait = time.time()
+    while (time.time() - start_wait) < 20:
+        for titulo in TITULOS_CARESTREAM:
+            try:
+                ventanas = fw.find_windows(title_re=re.compile(f".*{re.escape(titulo)}.*", re.I))
+                for h in ventanas:
+                    if h not in todas_pacs:
+                        todas_pacs.append(h)
+            except Exception:
+                pass
+        if todas_pacs:
+            break
+        time.sleep(1)
 
-    if not main_window:
-        logger.info("top_window()...")
-        main_window = app.top_window()
-    
-    titulo_real = main_window.window_text()
-    logger.info(f"   '{titulo_real}' hwnd: {main_window.handle}")
-
-    # Esperas seguras - REINTENTO SI DEMORA
-    try:
-        main_window.wait("exists visible", timeout=10)
-        logger.info("   Visible")
-    except Exception as e:
-        logger.error(f"   PACS demoró demasiado en abrir (> 10s). Forzando reintento...")
+    if not todas_pacs:
+        logger.error("PACS demoró demasiado en abrir (> 20s). No se detectaron ventanas de Carestream.")
         raise Exception("Timeout apertura PACS")
 
-    try:
-        main_window.wait("enabled", timeout=20)
-        logger.info("   Habilitada")
-    except:
-        logger.info("   No enabled (normal)")
+    logger.info(f"   Detectadas {len(todas_pacs)} ventana(s) de Carestream: {todas_pacs}")
+
+    # 2. Forzar que TODAS las ventanas de Carestream pasen al primer plano visible (sin maximizar login)
+    logger.info("   Restaurando y trayendo ventana(s) de Vue PACS al primer plano (sin maximizar)...")
+    for hwnd in todas_pacs:
+        if force_foreground_window:
+            force_foreground_window(hwnd, maximize=False)
+        else:
+            try:
+                import win32gui
+                import win32con
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                else:
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+
+    # 3. Vincular ventana principal
+    main_window = Desktop(backend="win32").window(handle=todas_pacs[0])
+    titulo_real = main_window.window_text()
+    logger.info(f"   Ventana principal Carestream vinculada: '{titulo_real}' (hwnd: {main_window.handle})")
 
     if vf:
-        vf.wait(5, "Finalizando apertura Vue PACS...")
+        vf.wait(3, "Finalizando apertura Vue PACS...")
     else:
-        time.sleep(5)
-    # Maximización deshabilitada
-    # logger.info("   Maximizando ventana de Vue PACS...")
-    # maximized = False
-    # if maximize_hwnd and main_window.handle:
-    #     maximized = maximize_hwnd(main_window.handle)
-    # if not maximized:
-    #     try:
-    #         import win32gui
-    #         import win32con
-    #         win32gui.ShowWindow(main_window.handle, win32con.SW_MAXIMIZE)
-    #         win32gui.SetForegroundWindow(main_window.handle)
-    #         maximized = True
-    #     except Exception:
-    #         try:
-    #             main_window.maximize()
-    #             maximized = True
-    #         except Exception:
-    #             pass
-    # if maximize_pacs_windows:
-    #     maximize_pacs_windows()
+        time.sleep(3)
 
     logger.info(f"LISTA: '{titulo_real}'")
     print(f"\nVue PACS listo!\nhwnd: {main_window.handle}")

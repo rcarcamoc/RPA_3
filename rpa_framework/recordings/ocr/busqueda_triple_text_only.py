@@ -16,6 +16,7 @@ import logging
 import json
 import cv2
 import pyautogui
+pyautogui.FAILSAFE = False
 import numpy as np
 import requests
 import re
@@ -397,8 +398,62 @@ class BusquedaTextOnly:
 
         return True
 
-    # Removed similarity method as it was not appropriate for substring checks
+    @staticmethod
+    def normalizar_terminologia_medica(texto: str) -> str:
+        """
+        Normaliza abreviaturas radiológicas y médicas frecuentes para permitir
+        coincidencias léxicas exactas o fuzzy locales sin depender de LLMs.
+        """
+        if not texto:
+            return ""
+        import unicodedata
+        t = texto.lower()
+        t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+        reemplazos = [
+            (r'\br\s*x\b', 'radiografia'),
+            (r'\bradiografias\b', 'radiografia'),
+            (r'\bap\s*-\s*lat\b', 'ap lateral'),
+            (r'\bap\s*lat\b', 'ap lateral'),
+            (r'\bpa\s*-\s*lat\b', 'ap lateral'),
+            (r'\bpa\s*lat\b', 'ap lateral'),
+            (r'\bap-lat\b', 'ap lateral'),
+            (r'\bpa-lat\b', 'ap lateral'),
+            (r'\br\s*m\b', 'resonancia magnetica'),
+            (r'\brmn\b', 'resonancia magnetica'),
+            (r'\brnm\b', 'resonancia magnetica'),
+            (r'\brim\b', 'resonancia magnetica'),
+            (r'\bt\s*c\b', 'tomografia computada'),
+            (r'\btac\b', 'tomografia computada'),
+            (r'\beco\b', 'ecotomografia'),
+            (r'\becografia\b', 'ecotomografia'),
+            (r'\bee\s*ii\b', 'extremidades inferiores'),
+            (r'\beeii\b', 'extremidades inferiores'),
+            (r'\bee\s*ss\b', 'extremidades superiores'),
+            (r'\beess\b', 'extremidades superiores'),
+            (r'\brot\b', 'rotula'),
+        ]
+        for patron, reemplazo in reemplazos:
+            t = re.sub(patron, reemplazo, t)
+        t = re.sub(r'[^a-z0-9\s]', ' ', t)
+        return re.sub(r'\s+', ' ', t).strip()
 
+    @staticmethod
+    def extraer_fragmento_estudio(ocr_text: str) -> str:
+        """
+        Extrae el nombre del estudio de la fila OCR, habitualmente ubicado
+        entre 'Examen Hecho'/'Hecho'/'Realizado' y la fecha del examen.
+        """
+        if not ocr_text:
+            return ""
+        m = re.search(r'(?:examen\s*hecho|hecho|realizado)\s*(.*?)\s*\d{2}[-/]\d{2}[-/]\d{2,4}', ocr_text, re.IGNORECASE)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+        m_fecha = re.search(r'^(.*?)\s*\d{2}[-/]\d{2}[-/]\d{2,4}', ocr_text)
+        if m_fecha and m_fecha.group(1).strip():
+            fragmento = m_fecha.group(1).strip()
+            fragmento = re.sub(r'^(?:examen\s*hecho|hecho|realizado)\s*', '', fragmento, flags=re.IGNORECASE)
+            return fragmento.strip()
+        return ocr_text
 
     def agrupar_por_filas(self, results):
         if not results:
@@ -669,22 +724,22 @@ RESPONDE SOLO EN FORMATO JSON:
         # de alta velocidad y precisión. Si responde con alta certeza, terminamos en ~1.1s.
         # Si el modelo está caído (429, 500, timeout), conmuta inmediatamente (<300ms)
         # al respaldo de proveedor alterno (OpenRouter <-> Nvidia NIM).
+        # ── Estrategia de Cascada Dinámica Multi-Proveedor ──────────────────
+        # Evaluamos de forma secuencial según el ranking dinámico
+        # obtenido desde ris.catalogo_modelos_llm y ordenado por ris.log_llm_ranking.
+        # Si un modelo está caído (429, 500, timeout), conmuta inmediatamente (<300ms)
+        # al siguiente modelo del catálogo dinámico.
         # ─────────────────────────────────────────────────────────────────────
-        CASCADE_MODELS = [
-            "openai/gpt-oss-20b",                    # Tier 1: Nvidia NIM (ultra rápido ~1.1s)
-            "deepseek/deepseek-v4-flash-0731:free",  # Tier 2: OpenRouter (nube independiente ~2.0s)
-            "google/gemma-4-31b-it",                 # Tier 3: Nvidia NIM (alta precisión clínica ~1.5s)
-            "meta/llama-3.2-11b-vision-instruct",    # Tier 4: OpenRouter (respaldo secundario ~2.0s)
-        ]
-        LLM_OCR_MAX_TOKENS = 200
-        LLM_OCR_TIMEOUT = (2.5, 6.0)  # (connect_timeout, read_timeout)
+        models_to_evaluate = models if models else get_ranked_models(contexto='busqueda_ocr')
+        LLM_OCR_MAX_TOKENS = 600
+        LLM_OCR_TIMEOUT = (3.0, 12.0)  # (connect_timeout, read_timeout)
         CURRENT_TIME = time.time()
-        CIRCUIT_BREAKER_COOLDOWN = 300  # 5 minutos
+        CIRCUIT_BREAKER_COOLDOWN = 60  # 1 minuto (en vez de 5 min para no bloquear ciclos consecutivos)
 
         winner_found = False
 
         try:
-            for idx, model_id in enumerate(CASCADE_MODELS):
+            for idx, model_id in enumerate(models_to_evaluate):
                 # 1. Verificar Circuit Breaker en memoria
                 if model_id in _CIRCUIT_BREAKER_DOWN_MODELS:
                     down_time = _CIRCUIT_BREAKER_DOWN_MODELS[model_id]
@@ -819,16 +874,28 @@ RESPONDE SOLO EN FORMATO JSON:
             row_text   = row['full_text']
             row_norm   = self.normalize_text(row_text)
 
-            # ── CHECK CANCELADO ───────────────────────────────────────────
-            # Si la fila contiene la palabra "cancelado" o "cancelada", se descarta inmediatamente.
-            # Esto evita confusiones cuando un examen fue re-agendado o anulado.
-            if "cancelado" in row_norm or "cancelada" in row_norm:
-                logger.info(f"🚫 Fila descartada por estado 'CANCELADO' (Y={int(row['y_center'])}): {row_text[:80]}")
+            # ── CHECK 1: LISTA NEGRA DE ESTADOS (Anti-Falsos Positivos) ────────
+            # Descartar de inmediato cualquier fila en estados no realizados, cancelados o agendados:
+            # - Cancelados / Anulados (evita exámenes suspendidos)
+            # - Agendados / Citados / En Espera (evita exámenes sin imágenes DICOM)
+            # - Ordenados / Solicitados (órdenes administrativas pendientes)
+            ESTADOS_EXCLUIDOS = [
+                'cancelado', 'cancelada', 'anulado', 'anulada',
+                'agendado', 'agendada', 'citado', 'citada',
+                'ordenado', 'ordenada', 'en espera', 'solicitado', 'solicitada'
+            ]
+            es_excluido = False
+            for est in ESTADOS_EXCLUIDOS:
+                if re.search(r'\b' + re.escape(est) + r'\b', row_norm):
+                    logger.info(f"🚫 Fila descartada por estado excluido '{est.upper()}' (Y={int(row['y_center'])}): {row_text[:80]}")
+                    es_excluido = True
+                    break
+            if es_excluido:
                 continue
 
             row_digits = "".join(filter(str.isdigit, row_text))
 
-            # ── CHECK FECHA (Blindado con Auditor Clínico) ────────────────
+            # ── CHECK 2: FECHA (Blindado con Auditor Clínico) ────────────────
             if self.auditor:
                 has_date, motivo_fecha, score_fecha = self.auditor.auditar_fecha(target_fecha_str, row_text)
             else:
@@ -837,16 +904,30 @@ RESPONDE SOLO EN FORMATO JSON:
                 score_fecha = 100 if has_date else 0
                 motivo_fecha = "Fallback exacto sin auditor"
 
-            # ── CHECK ESTADO ────────────────────────────────────────────
-            # OBLIGATORIO: Se exige que la fila contenga explícitamente "Examen Hecho" (o "hecho").
-            # OCR en esta imagen en particular reconoció "ExamenHedo", lo cual baja el score a 75.0 exactos
+            # ── CHECK 3: ESTADO TÉCNICO (Examen Hecho / Realizado / Variantes OCR) ───
+            # Se exige que la fila contenga "Examen Hecho", "Realizado" o una variante tipográfica
+            # conocida de Tesseract sobre la fuente del visor PACS (ej: Eamaltata, Exmaltata, ExamenHedo).
             score_examen_hecho = fuzz.partial_ratio("examen hecho", row_norm)
             score_hecho        = fuzz.partial_ratio("hecho",        row_norm)
-            has_estado = (score_examen_hecho >= 70) or (score_hecho >= 70)
+            score_realizado    = fuzz.partial_ratio("realizado",    row_norm)
+
+            # Variantes típicas por compresión de caracteres OCR en columna de estado
+            REGEX_HECHO_VARIANTES = re.compile(
+                r'\b(?:examen\s*he[cd]h?o|realizado|hecho|e[a-z]*m[a-z]*t[ao]t[ao]|ex[a-z]*t[ao]t[ao])\b',
+                re.IGNORECASE
+            )
+            has_variante_regex = bool(REGEX_HECHO_VARIANTES.search(row_norm))
+
+            has_estado = (
+                (score_examen_hecho >= 70) or 
+                (score_hecho >= 70) or 
+                (score_realizado >= 75) or 
+                has_variante_regex
+            )
 
             logger.debug(
                 f"Fila Y={int(row['y_center'])}: ex_hecho={score_examen_hecho} hecho={score_hecho} "
-                f"fecha={has_date} ({motivo_fecha}) | {row_text[:80]}"
+                f"variante={has_variante_regex} fecha={has_date} ({motivo_fecha}) | {row_text[:80]}"
             )
 
             if has_date and has_estado:
@@ -861,13 +942,13 @@ RESPONDE SOLO EN FORMATO JSON:
                 row['y_click'] = row['y_center']
                 row['score_fecha'] = score_fecha
                 row['motivo_fecha'] = motivo_fecha
-                row['score_estado'] = max(score_examen_hecho, score_hecho)
+                row['score_estado'] = max(score_examen_hecho, score_hecho, 100 if has_variante_regex else 0)
                 candidates.append(row)
                 logger.info(
                     f"✅ Candidato (Y_center={int(row['y_center'])} | y_min={int(row['y_min'])} "
                     f"y_max={int(row['y_max'])} y_click={int(row['y_click'])}, "
-                    f"score_fecha={score_fecha} ex_hecho={score_examen_hecho} hecho={score_hecho}): "
-                    f"{row_text[:120]}"
+                    f"score_fecha={score_fecha} ex_hecho={score_examen_hecho} hecho={score_hecho} "
+                    f"variante={has_variante_regex}): {row_text[:120]}"
                 )
 
         # Ordenar los candidatos priorizando fecha estricta y luego score de estado
@@ -1059,30 +1140,73 @@ RESPONDE SOLO EN FORMATO JSON:
                             logger.warning(f"🛡️ [AUDITOR RECHAZA] Candidato por Sinónimo BD descartado: {razon}")
                             continue
 
-                    logger.info(f"✅ MATCH POR SINÓNIMO BD CONFIRMADO Y AUDITADO (Fase 1) → clic en Y={int(y_click)}")
+                    # 🤖 CHECK OBLIGATORIO DE SEGURIDAD CON LLM ANTES DE CLIC
+                    logger.info("🤖 [CHECK FINAL LLM] Ejecutando validación semántica obligatoria con LLM antes de hacer clic (Sinónimo BD)...")
+                    if self.vf:
+                        self.vf.show_persistent_message("🤖 VALIDACIÓN FINAL LLM ANTES DE CLIC...", "llm", bg_color="#2196F3", fg_color="#FFFFFF")
+                    is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
+                    if not is_match_llm:
+                        logger.warning(f"🚫 [CHECK FINAL LLM RECHAZADO] LLM rechazó el candidato de Sinónimo BD '{ocr_text_candidate[:50]}'. Descartando fila...")
+                        continue
+
+                    logger.info(f"✅ MATCH POR SINÓNIMO BD + AUDITOR + LLM CONFIRMADO (Fase 1) → clic en Y={int(y_click)}")
                     self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                     return True, ''
 
-            # ── NIVEL 1: Verificación Local (Fuzzy) ─────────────────────────────
+            # ── NIVEL 1: Verificación Local (Acrónimos Médicos y Fuzzy) ─────────
+            # 1.1 Comparación directa con normalización canónica de acrónimos médicos
+            frag_estudio = self.extraer_fragmento_estudio(ocr_text_candidate)
+            frag_med_norm = self.normalizar_terminologia_medica(frag_estudio)
+            target_med_norm = self.normalizar_terminologia_medica(target_diag)
+
+            score_frag_ratio = fuzz.ratio(target_med_norm, frag_med_norm) if frag_med_norm else 0
+            score_frag_token = fuzz.token_set_ratio(target_med_norm, frag_med_norm) if frag_med_norm else 0
+            score_frag_partial = fuzz.partial_ratio(target_med_norm, frag_med_norm) if frag_med_norm else 0
+            best_frag_score = max(score_frag_ratio, score_frag_token, score_frag_partial)
+
+            # 1.2 Comparación estándar sobre fila completa
             score_partial = fuzz.partial_ratio(target_norm, ocr_norm)
             score_token = fuzz.token_set_ratio(target_norm, ocr_norm)
-            if score_partial > 85 or score_token > 85:
-                # 🛡️ AUDITORÍA PRE-CLIC (Fuzzy Local)
+
+            es_match_local = False
+            metodo_match = "fuzzy_local"
+            score_utilizado = max(score_partial, score_token)
+
+            if best_frag_score >= 75:
+                es_match_local = True
+                metodo_match = "acronimo_medico_local"
+                score_utilizado = best_frag_score
+                logger.info(f"🩺 Match local por normalización médica ({best_frag_score}%): target='{target_med_norm}' vs frag='{frag_med_norm}'")
+            elif score_partial > 85 or score_token > 85:
+                es_match_local = True
+                score_utilizado = max(score_partial, score_token)
+
+            if es_match_local:
+                # 🛡️ AUDITORÍA PRE-CLIC (Fuzzy / Acrónimo Local)
                 if self.auditor:
                     if self.vf: self.vf.show_persistent_message("🛡️ AUDITANDO OCR LOCAL...", "audit")
                     aprobado, razon, _ = self.auditor.auditar(
                         target_diag=target_diag,
                         ocr_candidato=ocr_text_candidate,
-                        metodo="fuzzy_local",
-                        score=max(score_partial, score_token),
+                        metodo=metodo_match,
+                        score=score_utilizado,
                         id_registro=id_registro
                     )
                     if self.vf: self.vf.hide_persistent_message("audit")
                     if not aprobado:
-                        logger.warning(f"🛡️ [AUDITOR RECHAZA] Match Fuzzy Local descartado: {razon}")
+                        logger.warning(f"🛡️ [AUDITOR RECHAZA] Match {metodo_match} descartado: {razon}")
                         continue
 
-                logger.info(f"✅ MATCH LOCAL CONFIRMADO Y AUDITADO (Fase 1, partial={score_partial}, token={score_token}) → clic en Y={int(y_click)}")
+                # 🤖 CHECK OBLIGATORIO DE SEGURIDAD CON LLM ANTES DE CLIC
+                logger.info(f"🤖 [CHECK FINAL LLM] Ejecutando validación semántica obligatoria con LLM antes de hacer clic ({metodo_match}={score_utilizado})...")
+                if self.vf:
+                    self.vf.show_persistent_message("🤖 VALIDACIÓN FINAL LLM ANTES DE CLIC...", "llm", bg_color="#2196F3", fg_color="#FFFFFF")
+                is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
+                if not is_match_llm:
+                    logger.warning(f"🚫 [CHECK FINAL LLM RECHAZADO] LLM rechazó el candidato local ({metodo_match}) '{ocr_text_candidate[:50]}'. Descartando fila...")
+                    continue
+
+                logger.info(f"✅ MATCH LOCAL + AUDITOR + LLM CONFIRMADO (Fase 1, {metodo_match}={score_utilizado}) → clic en Y={int(y_click)}")
                 self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                 return True, ''
 

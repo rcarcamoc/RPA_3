@@ -1,6 +1,7 @@
 # rpa_framework/ocr/actions.py
 
 import pyautogui
+pyautogui.FAILSAFE = False
 import time
 import logging
 from typing import Dict, List, Optional, Tuple

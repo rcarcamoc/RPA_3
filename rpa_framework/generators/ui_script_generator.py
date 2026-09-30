@@ -72,6 +72,7 @@ import logging
 import threading
 import tkinter as tk
 import pyautogui
+pyautogui.FAILSAFE = False
 from pathlib import Path
 from datetime import datetime
 

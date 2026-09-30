@@ -59,7 +59,8 @@ from utils.telegram_manager import (
     cargar_usuarios, guardar_usuarios, enviar_foto, enviar_documento, telegram_request,
     get_menu_principal_markup, get_menu_ejecucion_markup, get_menu_loop_markup,
     get_menu_reportes_markup, get_menu_periodo_excel_markup, get_menu_sistema_markup,
-    get_menu_notificaciones_markup, get_live_status_markup, get_menu_stream_markup
+    get_menu_notificaciones_markup, get_live_status_markup, get_menu_stream_markup,
+    get_menu_revalidar_markup, get_menu_post_revalidar_markup
 )
 from utils.excel_generator import generar_excel_reporte
 from utils.notificador_resumen import (
@@ -454,6 +455,151 @@ def rehabilitar_ultimo_registro():
         print(f"Error rehabilitando registro: {e}")
         return False
 
+def obtener_ultimos_errores(limite=5):
+    """
+    Obtiene los últimos N registros de ris.registro_acciones clasificados como 'Error'
+    o 'error', con los campos mínimos requeridos y formateados de manera segura.
+    """
+    try:
+        import mysql.connector
+        config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': 'ris'
+        }
+        conn = mysql.connector.connect(**config, connect_timeout=5)
+        cursor = conn.cursor(dictionary=True)
+        query = """
+        SELECT id, inicio, doctor_detectado, User, numero_documento, examen, estado, ultimo_nodo, observacion
+        FROM ris.registro_acciones
+        WHERE LOWER(estado) = 'error'
+        ORDER BY id DESC
+        LIMIT %s
+        """
+        cursor.execute(query, (limite,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        registros = []
+        for r in rows:
+            f_dt = r.get("inicio")
+            fecha_str = f_dt.strftime("%d/%m/%Y %H:%M:%S") if hasattr(f_dt, "strftime") else (str(f_dt) if f_dt else "--")
+            doc = r.get("numero_documento") or "--"
+            examen = r.get("examen") or "--"
+            medico = r.get("doctor_detectado") or r.get("User") or "--"
+            registros.append({
+                "id": r.get("id"),
+                "inicio": fecha_str,
+                "doctor": medico,
+                "numero_documento": doc,
+                "examen": examen,
+                "ultimo_nodo": r.get("ultimo_nodo") or "--",
+                "observacion": r.get("observacion") or ""
+            })
+        return registros
+    except Exception as e:
+        print(f"Error obteniendo últimos errores: {e}")
+        return []
+
+def marcar_registro_en_proceso(registro_id):
+    """
+    Marca el registro especificado con estado 'En Proceso' y actualiza fecha `update`.
+    Si existía algún otro registro en 'En Proceso', lo pasa a 'Error' para evitar colisiones.
+    Retorna (True, datos_registro) o (False, None).
+    """
+    try:
+        import mysql.connector
+        config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': 'ris'
+        }
+        conn = mysql.connector.connect(**config, connect_timeout=5)
+        cursor = conn.cursor(dictionary=True)
+        
+        # 1. Desmarcar cualquier registro previo 'En Proceso'
+        cursor.execute("""
+            UPDATE ris.registro_acciones 
+            SET estado = 'Error', observacion = 'Reemplazado por revalidación manual' 
+            WHERE estado = 'En Proceso' AND id != %s
+        """, (registro_id,))
+        
+        # 2. Actualizar el registro seleccionado a 'En Proceso'
+        cursor.execute("""
+            UPDATE ris.registro_acciones 
+            SET estado = 'En Proceso', `update` = NOW() 
+            WHERE id = %s
+        """, (registro_id,))
+        filas = cursor.rowcount
+        conn.commit()
+        
+        # 3. Obtener los datos del registro actualizado
+        cursor.execute("""
+            SELECT id, inicio, doctor_detectado, User, numero_documento, examen, estado 
+            FROM ris.registro_acciones 
+            WHERE id = %s
+        """, (registro_id,))
+        reg = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if filas > 0 and reg:
+            f_dt = reg.get("inicio")
+            fecha_str = f_dt.strftime("%d/%m/%Y %H:%M:%S") if hasattr(f_dt, "strftime") else (str(f_dt) if f_dt else "--")
+            return True, {
+                "id": reg.get("id"),
+                "inicio": fecha_str,
+                "doctor": reg.get("doctor_detectado") or reg.get("User") or "--",
+                "numero_documento": reg.get("numero_documento") or "--",
+                "examen": reg.get("examen") or "--"
+            }
+        return False, None
+    except Exception as e:
+        print(f"Error marcando registro en proceso: {e}")
+        return False, None
+
+def mostrar_menu_revalidar(chat_id, msg_id=None):
+    """
+    Presenta la lista de los últimos 5 registros con estado Error
+    y el menú inline para seleccionar cuál debe quedar En Proceso.
+    """
+    errores = obtener_ultimos_errores(5)
+    if not errores:
+        texto = (
+            "🔄 <b>Revalidar Registros</b>\n\n"
+            "ℹ️ No se encontraron registros con estado <b>Error</b> en la base de datos."
+        )
+        if msg_id:
+            editar_mensaje(chat_id, msg_id, texto, reply_markup=get_menu_ejecucion_markup())
+        else:
+            enviar_mensaje(chat_id, texto, reply_markup=get_menu_ejecucion_markup())
+        return
+
+    lineas = [
+        "🔄 <b>Revalidar Registros con Error</b>\n",
+        "Selecciona el registro que deseas poner <b>En Proceso</b> para que se ejecute en la próxima interacción:\n"
+    ]
+
+    for idx, reg in enumerate(errores, 1):
+        lineas.append(
+            f"<b>{idx}. Registro #{reg['id']}</b>\n"
+            f"  🗓️ <b>Fecha/Hora Inicio:</b> <code>{html.escape(reg['inicio'])}</code>\n"
+            f"  👨‍⚕️ <b>Doctor:</b> {html.escape(reg['doctor'])}\n"
+            f"  📄 <b>N° Documento:</b> <code>{html.escape(reg['numero_documento'])}</code>\n"
+            f"  🧪 <b>Examen:</b> {html.escape(reg['examen'])}\n"
+        )
+
+    mensaje_final = "\n".join(lineas)
+    markup = get_menu_revalidar_markup(errores)
+
+    if msg_id:
+        editar_mensaje(chat_id, msg_id, mensaje_final, reply_markup=markup)
+    else:
+        enviar_mensaje(chat_id, mensaje_final, reply_markup=markup)
+
 def get_pacs_daily_status():
     """
     Consulta la base de datos para ver el estado de las validaciones de PACS hoy:
@@ -540,17 +686,22 @@ def trigger_pacs_validation_process(manual=False, chat_id=None):
                     cmd.append("--manual")
                 
                 # Cargar configuración para ver si se ejecuta con consola visible
-                cfg_visible = True
+                cfg_visible = False
                 try:
                     cfg_p = Path(__file__).resolve().parent / "config" / "pacs_validation_config.json"
                     if cfg_p.exists():
                         with open(cfg_p, 'r', encoding='utf-8') as f:
-                            cfg_visible = json.load(f).get("consola_visible", True)
+                            cfg_visible = json.load(f).get("consola_visible", False)
                 except Exception:
                     pass
 
-                # Siempre ejecutar en ventana de consola visible en primer plano (nunca en segundo plano)
-                creation_flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+                if cfg_visible and sys.platform == "win32":
+                    creation_flags = subprocess.CREATE_NEW_CONSOLE
+                elif sys.platform == "win32":
+                    creation_flags = subprocess.CREATE_NO_WINDOW
+                else:
+                    creation_flags = 0
+
                 base_cwd = str(Path(__file__).resolve().parent)
                 
                 proc = subprocess.Popen(
@@ -976,6 +1127,23 @@ def obtener_datos_diagnostico():
         "bat_txt": bat_txt
     }
 
+def enviar_resumen_estado_texto(chat_id):
+    """Genera y envía ficha de estado en vivo en texto formateado (rápido, sin screenshot ni fotos)."""
+    diag_data = obtener_datos_diagnostico()
+    is_streaming = stream_manager.esta_activo()
+    stream_txt = f"🔴 Transmitiendo ({stream_manager.tiempo_transcurrido_str()})" if is_streaming else "⚪ Inactivo"
+
+    txt = (
+        "🔴 <b>ESTADO ACTUAL EN VIVO - ATRYS RPA</b>\n\n"
+        f"🤖 <b>Estado Proceso:</b>\n{diag_data['estado_proc_title']}\n\n"
+        f"📋 <b>Último Caso Procesado:</b>\n{diag_data['detalle_bd_texto']}\n\n"
+        f"🏥 <b>PACS:</b> {diag_data['pacs_txt']}\n"
+        f"🔋 <b>Batería:</b> {diag_data['bat_txt']}\n"
+        f"📡 <b>Live Stream:</b> {stream_txt}\n"
+        f"⏰ <b>Hora:</b> <code>{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</code>"
+    )
+    enviar_mensaje(chat_id, txt)
+
 def enviar_estado_actual(chat_id):
     """Genera captura de pantalla real del escritorio en vivo y envía reporte con la foto adjunta y botón de Live Stream."""
     enviar_mensaje(chat_id, "📸 Generando diagnóstico y captura de pantalla en vivo...")
@@ -1253,23 +1421,23 @@ def telegram_polling_loop():
                         
                         if callback_data == "menu_principal":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "🎛️ <b>Panel de Control Atrys RPA</b>\n\nSelecciona una categoría para ver las opciones disponibles:", reply_markup=get_menu_principal_markup())
+                            editar_mensaje(chat_id, msg_id, "🎛️ <b>Panel de Control Atrys RPA</b>\n\nSelecciona una opción para continuar:", reply_markup=get_menu_principal_markup())
                             
                         elif callback_data == "sec_ejecucion":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "🚀 <b>Módulo de Ejecución y Workflows</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
+                            editar_mensaje(chat_id, msg_id, "🚀 <b>Iniciar ejecuciones</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
                             
                         elif callback_data == "sec_reportes":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "📊 <b>Reportes y Consultas</b>\n\nSelecciona el reporte a generar:", reply_markup=get_menu_reportes_markup())
+                            editar_mensaje(chat_id, msg_id, "📊 <b>Reportes y consultas</b>\n\nSelecciona el reporte que deseas generar o consultar:", reply_markup=get_menu_reportes_markup())
                             
                         elif callback_data == "sec_sistema":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "🛠️ <b>Diagnóstico y Mantenimiento</b>\n\nHerramientas y estado del sistema host:", reply_markup=get_menu_sistema_markup())
+                            editar_mensaje(chat_id, msg_id, "🛠️ <b>Herramientas del sistema</b>\n\nDiagnóstico, pruebas de conexión y mantenimiento:", reply_markup=get_menu_sistema_markup())
                             
                         elif callback_data == "sec_notificaciones":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "🔔 <b>Control de Notificaciones y Alertas</b>\n\nAdministra los reportes automáticos:", reply_markup=get_menu_notificaciones_markup())
+                            editar_mensaje(chat_id, msg_id, "🔔 <b>Pausar o activar alertas</b>\n\nAdministra las notificaciones automáticas:", reply_markup=get_menu_notificaciones_markup())
                             
                         elif callback_data == "cmd_estado_actual":
                             responder_callback(cb_id, text="Generando captura en vivo...")
@@ -1305,13 +1473,13 @@ def telegram_polling_loop():
                                 pedir_confirmacion_interrupcion(chat_id, "pega", "Solo Pega en Integra")
                             else:
                                 if start_workflow_async("pacs.json"):
-                                    enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Pega en Integra'</b> iniciado correctamente.")
+                                    enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Carga en Integra'</b> iniciado correctamente.")
                                 else:
                                     enviar_mensaje(chat_id, "❌ Workflow 'pacs.json' no encontrado.")
                                     
                         elif callback_data == "cmd_loop_menu":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "🔁 <b>Configuración de Loop Continuo</b>\n\nSelecciona el modo de repetición:", reply_markup=get_menu_loop_markup())
+                            editar_mensaje(chat_id, msg_id, "🔁 <b>Ejecución con repeticiones</b>\n\nSelecciona cuántas veces o por cuánto tiempo deseas repetir:", reply_markup=get_menu_loop_markup())
                             
                         elif callback_data == "cmd_detener":
                             responder_callback(cb_id)
@@ -1348,7 +1516,7 @@ def telegram_polling_loop():
 
                         elif callback_data == "cmd_menu_excel":
                             responder_callback(cb_id)
-                            editar_mensaje(chat_id, msg_id, "📥 <b>Exportación de Reportes a Excel</b>\n\nSelecciona el periodo que deseas exportar a formato Excel (.xlsx):", reply_markup=get_menu_periodo_excel_markup())
+                            editar_mensaje(chat_id, msg_id, "📥 <b>Descargar reporte Excel</b>\n\nSelecciona el periodo que deseas exportar a formato Excel (.xlsx):", reply_markup=get_menu_periodo_excel_markup())
 
                         elif callback_data == "rep_excel_hoy":
                             responder_callback(cb_id, text="Generando Excel de Hoy...")
@@ -1392,13 +1560,30 @@ def telegram_polling_loop():
                                 tail = "..." + tail[-3800:]
                             enviar_mensaje(chat_id, f"📜 <b>Últimas 15 líneas del log:</b>\n<code>{tail}</code>")
                             
-                        elif callback_data in ["cmd_rehabilitar", "cmd_revalidar", "cmd_revalidar_registro"]:
+                        elif callback_data in ["cmd_rehabilitar", "cmd_revalidar", "cmd_revalidar_registro", "cmd_menu_revalidar"]:
                             responder_callback(cb_id)
-                            enviar_mensaje(chat_id, "🔄 Revalidando el último registro...")
-                            if rehabilitar_ultimo_registro():
-                                enviar_mensaje(chat_id, "✅ Último registro revalidado ('En Proceso').")
-                            else:
-                                enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o ya estaba en proceso.")
+                            mostrar_menu_revalidar(chat_id, msg_id)
+                            
+                        elif callback_data and callback_data.startswith("reval_set_"):
+                            responder_callback(cb_id, text="Actualizando estado en base de datos...")
+                            try:
+                                reg_id = int(callback_data.split("_")[2])
+                                ok, datos = marcar_registro_en_proceso(reg_id)
+                                if ok and datos:
+                                    txt_exito = (
+                                        f"✅ <b>Registro #{datos['id']} marcado 'En Proceso'</b>\n\n"
+                                        f"El registro quedó preparado para ejecutarse en la próxima interacción.\n\n"
+                                        f"🗓️ <b>Fecha/Hora Inicio:</b> <code>{html.escape(datos['inicio'])}</code>\n"
+                                        f"👨‍⚕️ <b>Doctor:</b> {html.escape(datos['doctor'])}\n"
+                                        f"📄 <b>N° Documento:</b> <code>{html.escape(datos['numero_documento'])}</code>\n"
+                                        f"🧪 <b>Examen:</b> {html.escape(datos['examen'])}\n\n"
+                                        f"¿Deseas iniciar la ejecución ahora?"
+                                    )
+                                    editar_mensaje(chat_id, msg_id, txt_exito, reply_markup=get_menu_post_revalidar_markup(reg_id))
+                                else:
+                                    editar_mensaje(chat_id, msg_id, f"❌ No se pudo actualizar el registro #{reg_id}.", reply_markup=get_menu_ejecucion_markup())
+                            except Exception as e:
+                                editar_mensaje(chat_id, msg_id, f"❌ Error al revalidar registro: {e}", reply_markup=get_menu_ejecucion_markup())
                                 
                         elif callback_data == "cmd_deten_notif":
                             responder_callback(cb_id)
@@ -1429,22 +1614,24 @@ def telegram_polling_loop():
                             editar_mensaje(
                                 chat_id,
                                 msg_id,
-                                f"🔴 <b>Control de Transmisión en Vivo (Live Stream)</b>\n\n"
+                                f"🔴 <b>Transmisión de pantalla en vivo</b>\n\n"
                                 f"Estado actual: {st_txt}\n\n"
-                                "Selecciona una acción:",
+                                "Selecciona una opción:",
                                 reply_markup=get_menu_stream_markup(st_activo, stream_manager.tiempo_transcurrido_str())
                             )
 
                         elif callback_data in ["cmd_iniciar_stream", "cmd_iniciar_stream_600", "cmd_iniciar_stream_120", "cmd_iniciar_stream_300"]:
-                            responder_callback(cb_id, text="Iniciando Live Stream (10 min)...")
+                            responder_callback(cb_id, text="Enviando estado e iniciando transmisión...")
+                            enviar_resumen_estado_texto(chat_id)
                             iniciar_live_stream_telegram(chat_id, duracion=600, stop_on_workflow=True)
 
                         elif callback_data == "cmd_iniciar_stream_inf":
-                            responder_callback(cb_id, text="Iniciando Live Stream continuo...")
+                            responder_callback(cb_id, text="Enviando estado e iniciando transmisión continua...")
+                            enviar_resumen_estado_texto(chat_id)
                             iniciar_live_stream_telegram(chat_id, duracion=None, stop_on_workflow=False)
 
                         elif callback_data == "cmd_detener_stream":
-                            responder_callback(cb_id, text="Deteniendo Live Stream...")
+                            responder_callback(cb_id, text="Deteniendo transmisión...")
                             detener_live_stream_telegram(chat_id)
                                 
                         elif callback_data and callback_data.startswith("gestionado_"):
@@ -1499,28 +1686,29 @@ def telegram_polling_loop():
                             usuarios.append(chat_id)
                             guardar_usuarios(usuarios)
                             enviar_mensaje(chat_id, f"Te has suscrito a las alertas de Atrys RPA en {chat_title}.")
-                        enviar_mensaje(chat_id, "🎛️ <b>Panel de Control Atrys RPA</b>\n\nSelecciona una categoría para ver las opciones disponibles:", reply_markup=get_menu_principal_markup())
+                        enviar_mensaje(chat_id, "🎛️ <b>Panel de Control Atrys RPA</b>\n\nSelecciona una opción para continuar:", reply_markup=get_menu_principal_markup())
                             
                     elif comando in ["/estado", "/status", "/captura"]:
                         enviar_estado_actual(chat_id)
                         
                     elif comando in ["/stream", "/live", "/transmision", "/videochat"]:
+                        enviar_resumen_estado_texto(chat_id)
                         iniciar_live_stream_telegram(chat_id, duracion=600, stop_on_workflow=True)
 
                     elif comando in ["/stream_stop", "/stop_stream", "/detener_stream", "/stream_detener"]:
                         detener_live_stream_telegram(chat_id)
                         
                     elif comando == "/ejecucion":
-                        enviar_mensaje(chat_id, "🚀 <b>Módulo de Ejecución y Workflows</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
+                        enviar_mensaje(chat_id, "🚀 <b>Iniciar ejecuciones</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
                         
                     elif comando == "/reportes":
-                        enviar_mensaje(chat_id, "📊 <b>Reportes y Consultas</b>\n\nSelecciona el reporte a generar:", reply_markup=get_menu_reportes_markup())
+                        enviar_mensaje(chat_id, "📊 <b>Reportes y consultas</b>\n\nSelecciona el reporte que deseas generar o consultar:", reply_markup=get_menu_reportes_markup())
                         
                     elif comando == "/sistema":
-                        enviar_mensaje(chat_id, "🛠️ <b>Diagnóstico y Mantenimiento</b>\n\nHerramientas y estado del sistema host:", reply_markup=get_menu_sistema_markup())
+                        enviar_mensaje(chat_id, "🛠️ <b>Herramientas del sistema</b>\n\nDiagnóstico, pruebas de conexión y mantenimiento:", reply_markup=get_menu_sistema_markup())
                         
                     elif comando == "/notificaciones":
-                        enviar_mensaje(chat_id, "🔔 <b>Control de Notificaciones y Alertas</b>\n\nAdministra los reportes automáticos:", reply_markup=get_menu_notificaciones_markup())
+                        enviar_mensaje(chat_id, "🔔 <b>Pausar o activar alertas</b>\n\nAdministra las notificaciones automáticas:", reply_markup=get_menu_notificaciones_markup())
 
                     elif comando == "/stop":
                         if chat_id in usuarios:
@@ -1546,11 +1734,11 @@ def telegram_polling_loop():
                             pedir_confirmacion_interrupcion(chat_id, "pega", "Solo Pega en Integra")
                         else:
                             if start_workflow_async("pacs.json"):
-                                enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Pega en Integra'</b> iniciado correctamente.")
+                                enviar_mensaje(chat_id, "✅ Workflow <b>'Solo Carga en Integra'</b> iniciado correctamente.")
                             else:
                                 enviar_mensaje(chat_id, "❌ Workflow 'pacs.json' no encontrado.")
 
-                    elif comando in ["/cuenta_casos_pendientes", "/casos_pendientes", "/cuenta_casos", "/cuentacasos"]:
+                    elif comando in ["/casos", "/contar_casos", "/cuenta_casos_pendientes", "/casos_pendientes", "/cuenta_casos", "/cuentacasos"]:
                         if active_executor or is_any_workflow_running() or _pacs_validating_now:
                             pedir_confirmacion_interrupcion(chat_id, "casos", "Conteo de Casos Pendientes en RIS")
                         else:
@@ -1570,11 +1758,7 @@ def telegram_polling_loop():
                                 enviar_mensaje(chat_id, "❌ No se pudo iniciar el workflow 'ris_casos pendientes.json'. Verifique si ya hay otro proceso activo.")
                                 
                     elif comando in ["/rehabilitar", "/revalidar", "/revalidar_registro", "/revalidar_ultimo_registro"]:
-                        enviar_mensaje(chat_id, "🔄 Revalidando el último registro...")
-                        if rehabilitar_ultimo_registro():
-                            enviar_mensaje(chat_id, "✅ Último registro revalidado ('En Proceso').")
-                        else:
-                            enviar_mensaje(chat_id, "⚠️ No se encontró registro para actualizar o ya estaba en proceso.")
+                        mostrar_menu_revalidar(chat_id)
                             
                     elif comando == "/detener":
                         detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
@@ -1588,7 +1772,7 @@ def telegram_polling_loop():
                             enviar_mensaje(chat_id, f"❌ Error generando resumen: {e}")
 
                     elif comando in ["/excel", "/reporte_excel", "/exportar_excel"]:
-                        enviar_mensaje(chat_id, "📥 <b>Exportación de Reportes a Excel</b>\n\nSelecciona el periodo que deseas exportar a formato Excel (.xlsx):", reply_markup=get_menu_periodo_excel_markup())
+                        enviar_mensaje(chat_id, "📥 <b>Descargar reporte Excel</b>\n\nSelecciona el periodo que deseas exportar a formato Excel (.xlsx):", reply_markup=get_menu_periodo_excel_markup())
 
                     elif comando == "/deten_notificaciones":
                         if notificaciones_pausadas():
@@ -1637,7 +1821,7 @@ def telegram_polling_loop():
                                 enviar_mensaje(chat_id, "❌ No se pudo iniciar la validación de PACS.")
 
                     elif comando == "/loop":
-                        enviar_mensaje(chat_id, "🔁 <b>Configuración de Loop Continuo</b>\n\nSelecciona el modo de repetición:", reply_markup=get_menu_loop_markup())
+                        enviar_mensaje(chat_id, "🔁 <b>Ejecución con repeticiones</b>\n\nSelecciona cuántas veces o por cuánto tiempo deseas repetir:", reply_markup=get_menu_loop_markup())
             
             time.sleep(1)
         except requests.exceptions.RequestException as re:

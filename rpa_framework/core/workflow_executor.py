@@ -139,6 +139,74 @@ class WorkflowExecutor:
             conn.close()
         except Exception as e:
             pass
+
+    def _save_and_send_error_video(self, error_desc: str, custom_prefix: Optional[str] = None) -> Optional[str]:
+        """Detiene la grabación activa, guarda el video de error y lo envía a Telegram."""
+        recorder = self.screen_recorder
+        if not recorder:
+            return None
+
+        saved_video_path = None
+        try:
+            try:
+                from utils.paths import get_error_recording_path
+            except ImportError:
+                from rpa_framework.utils.paths import get_error_recording_path
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            raw_name = custom_prefix if custom_prefix else self.workflow.name
+            safe_name = "".join([c for c in raw_name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
+            video_filename = f"error_{safe_name}_{timestamp}.mp4"
+            dest_path = get_error_recording_path(video_filename)
+
+            saved_video_path = recorder.save(str(dest_path))
+            self.screen_recorder = None
+            if saved_video_path:
+                self.logger.log(f"💾 Grabación de pantalla de error guardada en: {saved_video_path}")
+                try:
+                    try:
+                        from utils.telegram_manager import enviar_video_todos
+                    except ImportError:
+                        from rpa_framework.utils.telegram_manager import enviar_video_todos
+
+                    screen_res = self.context.get("screen_resolution") or get_screen_resolution()
+                    caption = f"❌ <b>Error en Workflow: {raw_name}</b>\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(error_desc)[:250]}"
+                    enviar_video_todos(saved_video_path, caption=caption)
+                    self.logger.log("📱 Grabación de video del error enviada a Telegram")
+                except Exception as tel_e:
+                    self.logger.log(f"⚠️ Error al enviar video por Telegram: {tel_e}")
+        except Exception as rec_err:
+            self.logger.log(f"⚠️ Error guardando grabación de pantalla: {rec_err}")
+
+        return saved_video_path
+
+    def _restart_screen_recorder(self) -> None:
+        """Reinicia el grabador de pantalla si está habilitado y no es sub-workflow."""
+        if not self.enable_recording or self.is_sub_workflow:
+            return
+
+        if self.screen_recorder:
+            try:
+                self.screen_recorder.discard()
+            except Exception:
+                pass
+            self.screen_recorder = None
+
+        try:
+            try:
+                from utils.screen_recorder import ScreenRecorder
+            except ImportError:
+                from rpa_framework.utils.screen_recorder import ScreenRecorder
+
+            recorder = ScreenRecorder(fps=6, max_width=1280, format="mp4")
+            if recorder.start():
+                self.screen_recorder = recorder
+                self.logger.log("🎥 Grabación de pantalla reiniciada en segundo plano")
+            else:
+                self.screen_recorder = None
+        except Exception as rec_e:
+            self.screen_recorder = None
+            self.logger.log(f"⚠️ No se pudo reiniciar el grabador de pantalla: {rec_e}")
     
     def execute(self) -> Dict[str, Any]:
         """
@@ -182,6 +250,23 @@ class WorkflowExecutor:
             self.logger.log("=" * 60)
             self.logger.log(f"▶️ Iniciando ejecución: {self.workflow.name}")
             self.logger.log("=" * 60)
+
+            # Verificar vigencia de validación de modelos LLM (< 6 horas)
+            if not self.is_sub_workflow:
+                try:
+                    try:
+                        from utils.llm_auto_manager import check_and_refresh_llm_cache
+                    except ImportError:
+                        from rpa_framework.utils.llm_auto_manager import check_and_refresh_llm_cache
+                    
+                    self.logger.log("🤖 Verificando vigencia de validación LLM (< 6h)...")
+                    llm_res = check_and_refresh_llm_cache(max_age_hours=6.0, log_callback=self.logger.log)
+                    if llm_res.get("status") == "Vigente":
+                        self.logger.log(f"✅ Modelos LLM validados recientemente ({llm_res.get('elapsed_minutes', 0):.1f} min atrás < 6h).")
+                    else:
+                        self.logger.log(f"🔄 Validación/reemplazo de modelos LLM finalizada: {llm_res.get('status')}")
+                except Exception as llm_err:
+                    self.logger.log(f"⚠️ Error durante verificación de vigencia LLM: {llm_err}")
             
             # Verificar y desactivar Bloq Mayús si está activo
             try:
@@ -236,8 +321,8 @@ class WorkflowExecutor:
             self.logger.log("=" * 60)
             
             # Si terminó correctamente o fue detenido, descartar grabación
-            if recorder:
-                recorder.discard()
+            if self.screen_recorder:
+                self.screen_recorder.discard()
                 self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso/detenido)")
                 self.screen_recorder = None
 
@@ -251,8 +336,8 @@ class WorkflowExecutor:
         except Exception as e:
             if self.should_stop:
                 self.logger.log("⏹️ Workflow interrumpido por solicitud de parada del usuario.")
-                if recorder:
-                    recorder.discard()
+                if self.screen_recorder:
+                    self.screen_recorder.discard()
                     self.screen_recorder = None
                 return {
                     "status": "stopped",
@@ -264,30 +349,7 @@ class WorkflowExecutor:
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
             
-            saved_video_path = None
-            if recorder:
-                try:
-                    from utils.paths import get_error_recording_path
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    safe_name = "".join([c for c in self.workflow.name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
-                    video_filename = f"error_{safe_name}_{timestamp}.mp4"
-                    dest_path = get_error_recording_path(video_filename)
-                    
-                    saved_video_path = recorder.save(str(dest_path))
-                    self.screen_recorder = None
-                    if saved_video_path:
-                        self.logger.log(f"💾 Grabación de pantalla de error guardada en: {saved_video_path}")
-                        
-                        try:
-                            from utils.telegram_manager import enviar_video_todos
-                            screen_res = self.context.get("screen_resolution") or get_screen_resolution()
-                            caption = f"❌ <b>Error en Workflow: {self.workflow.name}</b>\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(e)[:250]}"
-                            enviar_video_todos(saved_video_path, caption=caption)
-                            self.logger.log("📱 Grabación de video del error enviada a Telegram")
-                        except Exception as tel_e:
-                            self.logger.log(f"⚠️ Error al enviar video por Telegram: {tel_e}")
-                except Exception as rec_err:
-                    self.logger.log(f"⚠️ Error guardando grabación de pantalla: {rec_err}")
+            saved_video_path = self._save_and_send_error_video(str(e))
 
             return {
                 "status": "error",
@@ -716,6 +778,11 @@ class WorkflowExecutor:
                 
                 if getattr(node, 'on_error', 'stop') == 'stop':
                     raise RuntimeError(f"El asistente no pudo completar la tarea en la fase '{node.label}'.")
+                else:
+                    prefix = f"{self.workflow.name}_{node.label}"
+                    self._save_and_send_error_video(f"Script falló con código {returncode}", custom_prefix=prefix)
+                    if not self.should_stop:
+                        self._restart_screen_recorder()
             
         except Exception as e:
             self.logger.log(f"❌ Error: {str(e)}")
@@ -725,6 +792,11 @@ class WorkflowExecutor:
                 
             if getattr(node, 'on_error', 'stop') == 'stop':
                 raise RuntimeError(f"Falla inesperada en la fase '{node.label}': {str(e)}")
+            else:
+                prefix = f"{self.workflow.name}_{node.label}"
+                self._save_and_send_error_video(f"Excepción en nodo {node.label}: {str(e)}", custom_prefix=prefix)
+                if not self.should_stop:
+                    self._restart_screen_recorder()
         
         return self.workflow.get_next_node(node.id)
     
@@ -853,6 +925,10 @@ class WorkflowExecutor:
 
             self.logger.log(f"   🔄 Iteración {idx + 1}")
 
+            # Asegurar que la grabación esté activa para esta iteración
+            if self.enable_recording and not self.is_sub_workflow and not self.screen_recorder:
+                self._restart_screen_recorder()
+
             # Actualizar variables de contexto del loop
             self.context["_loop_index"] = idx
             self.context[node.loop_var] = current_item
@@ -866,11 +942,31 @@ class WorkflowExecutor:
                 elif node.script:
                     self._run_script_internal(node)
 
+                # Iteración exitosa: descartar video de esta iteración y reiniciar limpio para la siguiente
+                if self.enable_recording and not self.is_sub_workflow and not self.should_stop:
+                    if self.screen_recorder:
+                        self.screen_recorder.discard()
+                        self.screen_recorder = None
+                    self._restart_screen_recorder()
+
             except Exception as e:
                 if self.should_stop:
                     self.logger.log("⏹️ Iteración de loop interrumpida por detención externa.")
+                    if self.screen_recorder:
+                        self.screen_recorder.discard()
+                        self.screen_recorder = None
                     break
                 self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
+
+                # Guardar y enviar video del error de esta iteración
+                wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
+                prefix = f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}"
+                self._save_and_send_error_video(f"Iteración {idx + 1} ({wf_sub_name}): {str(e)}", custom_prefix=prefix)
+
+                # Reiniciar grabador limpio para la siguiente iteración
+                if not self.should_stop:
+                    self._restart_screen_recorder()
+
                 delay = getattr(node, 'error_delay', 0)
                 if delay > 0:
                     self.logger.log(f"   ⏳ Esperando {delay}s antes de reintentar...")
@@ -1258,6 +1354,11 @@ class WorkflowExecutor:
                 self.logger.log(f"❌ Error en sub-workflow: {result.get('error')}")
                 if getattr(node, 'on_error', 'stop') == 'stop':
                      raise RuntimeError(f"Fallo en sub-workflow: {result.get('error')}")
+                else:
+                     prefix = f"{self.workflow.name}_{nested_wf.name}"
+                     self._save_and_send_error_video(f"Sub-workflow {nested_wf.name}: {result.get('error')}", custom_prefix=prefix)
+                     if not self.should_stop:
+                         self._restart_screen_recorder()
             else:
                 self.logger.log(f"✅ Sub-workflow finalizado correctamente")
                 # Actualizar contexto padre con resultados del hijo
@@ -1267,5 +1368,10 @@ class WorkflowExecutor:
             self.logger.log(f"❌ Error ejecutando nodo workflow: {e}")
             if getattr(node, 'on_error', 'stop') == 'stop':
                 raise e
+            else:
+                prefix = f"{self.workflow.name}_{node.label}"
+                self._save_and_send_error_video(f"Excepción en sub-workflow {node.label}: {e}", custom_prefix=prefix)
+                if not self.should_stop:
+                    self._restart_screen_recorder()
                 
         return self.workflow.get_next_node(node.id)

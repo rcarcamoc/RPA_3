@@ -23,25 +23,44 @@ from typing import Tuple, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Cargar variables de entorno si están disponibles
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent.parent.parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
+    else:
+        load_dotenv()
+except Exception:
+    pass
+
 # Importar configuración de LLMs si está disponible
 try:
     from rpa_framework.utils.llm_config import (
         get_llm_request_params,
-        LLM_DEFAULT_TEMPERATURE,
-        OPENROUTER_API_KEY
+        get_ranked_models,
+        get_models_for_context,
+        LLM_DEFAULT_TEMPERATURE
     )
     HAS_LLM_CONFIG = True
 except ImportError:
     try:
         from utils.llm_config import (
             get_llm_request_params,
-            LLM_DEFAULT_TEMPERATURE,
-            OPENROUTER_API_KEY
+            get_ranked_models,
+            get_models_for_context,
+            LLM_DEFAULT_TEMPERATURE
         )
         HAS_LLM_CONFIG = True
     except ImportError:
         HAS_LLM_CONFIG = False
-        OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        get_ranked_models = None
+        get_models_for_context = None
+        LLM_DEFAULT_TEMPERATURE = 0.0
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 
 class AuditorClinico:
@@ -52,17 +71,27 @@ class AuditorClinico:
     """
 
     def __init__(self):
-        # Tokens de Lateralidad
-        self.TOKENS_DER = {'derecho', 'derecha', 'der', 'dcha', 'dcho', 'd'}
-        self.TOKENS_IZQ = {'izquierdo', 'izquierda', 'izq', 'izda', 'i'}
-        self.TOKENS_BILAT = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat', 'b'}
+        # Tokens de Lateralidad (sin letras individuales para evitar falsos positivos con códigos o columnas como 'Normal B')
+        self.TOKENS_DER = {'derecho', 'derecha', 'der', 'dcha', 'dcho'}
+        self.TOKENS_IZQ = {'izquierdo', 'izquierda', 'izq', 'izda'}
+        self.TOKENS_BILAT = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat'}
 
-        # Modelos designados para auditoría asistida por IA (Nivel 2)
-        self.MODELOS_AUDITOR = [
-            "google/gemma-4-31b-it",
-            "openai/gpt-oss-20b",
-            "deepseek/deepseek-v4-flash-0731:free",
-            "nvidia/nemotron-3-super-120b-a12b"
+    def obtener_modelos_auditor(self) -> list:
+        """
+        Obtiene dinámicamente los modelos activos desde la tabla ris.catalogo_modelos_llm
+        y los ordena por rendimiento histórico en ris.log_llm_ranking.
+        """
+        if HAS_LLM_CONFIG and get_ranked_models:
+            try:
+                modelos = get_ranked_models(contexto='busqueda_ocr')
+                if modelos:
+                    return modelos
+            except Exception as e:
+                logger.warning(f"Error consultando catálogo de modelos dinámicos: {e}")
+        return [
+            "cohere/north-mini-code:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "openrouter/free"
         ]
 
     # =========================================================================
@@ -113,19 +142,28 @@ class AuditorClinico:
                 if a_str != t_anio_short:
                     continue
 
-                # El mes DEBE coincidir obligatoriamente
-                if m_str != t_mes:
-                    continue
+                # Caso 1: Mes exacto
+                if m_str == t_mes:
+                    # Si día coincide exacto
+                    if d_str == t_dia:
+                        return True, f"Fecha coincidente por regex: {d_str}-{m_str}-{a_str}", 100
 
-                # Si día coincide exacto
-                if d_str == t_dia:
-                    return True, f"Fecha coincidente por regex: {d_str}-{m_str}-{a_str}", 100
+                    # Tolerancia OCR leve solo en el DÍA si año y mes son idénticos
+                    # (ej. confusión 1↔7, 0↔8, 3↔8 o diferencia de 1 dígito)
+                    day_diff_chars = sum(1 for c1, c2 in zip(d_str, t_dia) if c1 != c2)
+                    if day_diff_chars == 1:
+                        return True, f"Fecha coincidente con tolerancia OCR en día: {d_str} vs {t_dia} (Mes/Año OK)", 80
 
-                # Tolerancia OCR leve solo en el DÍA si año y mes son idénticos
-                # (ej. confusión 1↔7, 0↔8, 3↔8 o diferencia de 1 dígito)
-                day_diff_chars = sum(1 for c1, c2 in zip(d_str, t_dia) if c1 != c2)
-                if day_diff_chars == 1:
-                    return True, f"Fecha coincidente con tolerancia OCR en día: {d_str} vs {t_dia} (Mes/Año OK)", 80
+                # Caso 2: Tolerancia OCR en el MES solo si DÍA y AÑO son IDÉNTICOS
+                # (ej. '09' leído como '99' u '89' por binarizado de alto contraste).
+                # SEGURIDAD CLÍNICA: Solo se tolera si el mes leído es inválido en calendario
+                # (ej. 99, 89, 00) y difiere en 1 dígito del mes objetivo. Si es un mes válido (1 a 12),
+                # se rechaza para no confundir meses clínicos reales distintos (ej. Junio vs Septiembre).
+                elif d_str == t_dia:
+                    if m_str.isdigit() and not (1 <= int(m_str) <= 12):
+                        month_diff_chars = sum(1 for c1, c2 in zip(m_str, t_mes) if c1 != c2)
+                        if month_diff_chars <= 1:
+                            return True, f"Fecha coincidente con tolerancia OCR en mes: {d_str}-{m_str}-{a_str} vs target {target_fecha_str} (Día/Año exactos)", 85
 
             # Si se detectaron fechas pero ninguna coincidió en año/mes
             return False, "Fechas detectadas en fila pertenecen a otro año o mes", 0
@@ -217,15 +255,20 @@ class AuditorClinico:
         if bool(words & rm_tokens) or re.search(r'\bcolangio\s*rm\b', t) or re.search(r'\bangio\s*rm\b', t):
             return 'RM'
 
+        # RX / Radiografía (Evaluado con prioridad ante indicadores claros de radiografía)
+        rx_tokens = {'rx', 'radiografia', 'proyecciones', 'proy', 'exp', 'fluoroscopia', 'panoramica'}
+        has_rx = bool(words & rx_tokens) or bool(re.search(r'\br\s*x\b', t))
+        if has_rx:
+            return 'RX'
+
         # ECO / Ecotomografía
-        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'us', 'doppler'}
+        # 'us' solo se considera si no hay indicadores de RX para evitar falsos positivos
+        # con columnas/estados del PACS (ej: 'CRISM US N')
+        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'doppler'}
         if bool(words & eco_tokens):
             return 'ECO'
-
-        # RX / Radiografía
-        rx_tokens = {'rx', 'radiografia', 'proyecciones', 'proy', 'exp', 'fluoroscopia', 'panoramica'}
-        if bool(words & rx_tokens) or re.search(r'\br\s*x\b', t):
-            return 'RX'
+        if 'us' in words and not has_rx:
+            return 'ECO'
 
         return 'DESCONOCIDA'
 
@@ -499,7 +542,8 @@ RESPONDE EXCLUSIVAMENTE EN JSON:
   "confianza": 0.0 a 1.0
 }}
 """
-        for modelo in self.MODELOS_AUDITOR:
+        modelos_auditor = self.obtener_modelos_auditor()
+        for modelo in modelos_auditor:
             try:
                 base_url, target_key, _ = get_llm_request_params(modelo) if HAS_LLM_CONFIG else ("https://openrouter.ai/api/v1", OPENROUTER_API_KEY, "openrouter")
                 if not target_key:
@@ -516,9 +560,9 @@ RESPONDE EXCLUSIVAMENTE EN JSON:
                         "model": modelo,
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.0,
-                        "max_tokens": 150,
+                        "max_tokens": 500,
                     },
-                    timeout=(3.0, 7.0),
+                    timeout=(3.0, 10.0),
                 )
 
                 if resp.status_code == 200:

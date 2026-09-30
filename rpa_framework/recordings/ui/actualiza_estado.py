@@ -17,6 +17,7 @@ import re
 import numpy as np
 import cv2
 import pyautogui
+pyautogui.FAILSAFE = False
 from PIL import Image
 from difflib import SequenceMatcher
 

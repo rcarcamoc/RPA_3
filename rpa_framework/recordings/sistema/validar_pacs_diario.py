@@ -26,9 +26,18 @@ if sys.platform.startswith('win'):
         sys.stderr.reconfigure(encoding='utf-8')
     except Exception:
         pass
+    try:
+        import ctypes
+        hwnd_console = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd_console:
+            import win32con
+            import win32gui
+            win32gui.ShowWindow(hwnd_console, win32con.SW_MINIMIZE)
+    except Exception:
+        pass
 
-# Asegurar que los scripts ejecutados por el workflow muestren sus ventanas y consola
-os.environ["RPA_SHOW_CONSOLE"] = "1"
+# Ejecutar scripts secundarios de forma limpia sin consolas que obstruyan la pantalla
+os.environ["RPA_SHOW_CONSOLE"] = "0"
 
 try:
     import mysql.connector
