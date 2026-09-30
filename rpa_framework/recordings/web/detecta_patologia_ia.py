@@ -233,7 +233,11 @@ FORMATO DE RESPUESTA:
 
             response.raise_for_status()
             result = response.json()
-            content = result['choices'][0]['message'].get('content', '')
+            if not isinstance(result, dict) or 'choices' not in result or not result['choices']:
+                logger.warning(f"⚠️ [{current_model}] Respuesta inválida o sin 'choices': {str(result)[:120]}")
+                continue
+
+            content = (result['choices'][0].get('message') or {}).get('content', '')
 
             # Extraer JSON de la respuesta
             match = re.search(r'\{.*\}', content, re.DOTALL)

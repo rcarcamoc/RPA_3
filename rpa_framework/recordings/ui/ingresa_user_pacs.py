@@ -14,17 +14,30 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from pywinauto import Application, findwindows
 import pyautogui
+pyautogui.FAILSAFE = False
 from core.executor import ActionExecutor
 from core.action import Action, ActionType
 from utils.logging_setup import setup_logging
 from utils.telegram_manager import enviar_alerta_todos
 try:
-    from rpa_framework.utils.window_utils import maximize_pacs_windows
+    from rpa_framework.utils.window_utils import maximize_pacs_windows, force_foreground_window, maximize_hwnd
 except ImportError:
     try:
-        from utils.window_utils import maximize_pacs_windows
+        from utils.window_utils import maximize_pacs_windows, force_foreground_window, maximize_hwnd
     except ImportError:
         maximize_pacs_windows = None
+        force_foreground_window = None
+        maximize_hwnd = None
+
+try:
+    from rpa_framework.utils.screen_utils import attach_to_interactive_desktop
+    attach_to_interactive_desktop()
+except Exception:
+    try:
+        from utils.screen_utils import attach_to_interactive_desktop
+        attach_to_interactive_desktop()
+    except Exception:
+        pass
 
 # Configuración de MySQL (opcional)
 try:
@@ -125,9 +138,49 @@ class IngresaUserPacsAutomation:
                 self.app = Application(backend='uia').connect(path=proceso_pacs, timeout=10)
                 logger.info("Conectado por nombre de proceso")
             
-            # Traer la ventana al frente
+            # Minimizar navegadores si quedaron en pantalla completa
+            try:
+                import win32gui
+                import win32con
+                import win32process
+                import psutil
+                def min_cb(h, _):
+                    if win32gui.IsWindow(h) and win32gui.IsWindowVisible(h) and not win32gui.IsIconic(h):
+                        try:
+                            _, pid = win32process.GetWindowThreadProcessId(h)
+                            if "chrome" in psutil.Process(pid).name().lower():
+                                win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
+                        except Exception:
+                            pass
+                    return True
+                win32gui.EnumWindows(min_cb, None)
+            except Exception:
+                pass
+
+            # Traer la ventana al frente de forma robusta (sin maximizar login)
             main_window = self.app.window(title=titulo_pacs)
-            main_window.set_focus()
+            try:
+                hwnd = main_window.handle
+                if force_foreground_window:
+                    force_foreground_window(hwnd, maximize=False)
+                else:
+                    try:
+                        import win32gui
+                        import win32con
+                        if win32gui.IsIconic(hwnd):
+                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        else:
+                            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Aviso trayendo ventana al frente: {e}")
+
+            try:
+                main_window.set_focus()
+            except Exception:
+                pass
             
             self.executor = ActionExecutor(self.app, {})
             logger.info("Conexion establecida y ventana enfocada")
@@ -221,27 +274,38 @@ class IngresaUserPacsAutomation:
                 pyautogui.write(db_pass, interval=0.1)
                 results["completed"] += 1
                 logger.info("[4/6] password escrito con pyautogui")
+                time.sleep(0.5)
+
+                # Incluir ENTER después de ingresar el password
+                logger.info("Enviando ENTER tras ingresar password...")
+                pyautogui.press('enter')
                 time.sleep(1)
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 3, "type": "input_pass", "reason": str(e)})
                 logger.error(f"[3-4] Error ingresando password: {e}")
 
-            # Acción 5: CLICK Login Robusto
+            # Acción 5: CLICK Login Robusto (respaldo si la ventana de login sigue presente)
             try:
-                base_x, base_y = 980, 572
-                logger.info(f"Ejecutando clic robusto en ({base_x}, {base_y})")
-                
-                # Asegurar foco moviendo el mouse primero (humanizado)
-                pyautogui.moveTo(base_x, base_y, duration=0.5)
-                
-                # Simular clic humano: Presionar, esperar 150ms, soltar
-                pyautogui.mouseDown(base_x, base_y, button='left')
-                time.sleep(0.15) 
-                pyautogui.mouseUp(base_x, base_y, button='left')
+                login_aun_activo = False
+                try:
+                    if self.app and self.app.window(title=titulo_pacs).exists(timeout=0.5):
+                        login_aun_activo = True
+                except Exception:
+                    pass
+
+                if login_aun_activo:
+                    base_x, base_y = 980, 572
+                    logger.info(f"Ventana de login aún detectada. Ejecutando clic robusto de respaldo en ({base_x}, {base_y})")
+                    pyautogui.moveTo(base_x, base_y, duration=0.3)
+                    pyautogui.mouseDown(base_x, base_y, button='left')
+                    time.sleep(0.15) 
+                    pyautogui.mouseUp(base_x, base_y, button='left')
+                    logger.info("[5/6] clic robusto de respaldo completado")
+                else:
+                    logger.info("[5/6] Login procesado mediante ENTER (diálogo cerrado exitosamente)")
                 
                 results["completed"] += 1
-                logger.info("[5/6] clic robusto completado")
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 5, "type": "click", "reason": str(e)})

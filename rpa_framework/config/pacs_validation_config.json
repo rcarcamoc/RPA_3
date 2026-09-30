@@ -15,7 +15,7 @@
     "delay_entre_reintentos_seg": 120,
     "max_intentos_diarios_scheduler": 2,
     "cooldown_fallo_minutos": 60,
-    "consola_visible": true,
+    "consola_visible": false,
     "doctor_validacion": "Cristian Navarro",
     "user_validacion": "CNAVARROGA",
     "pass_validacion": "cristian",

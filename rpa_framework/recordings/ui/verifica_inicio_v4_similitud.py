@@ -14,6 +14,7 @@ import os
 import cv2
 import numpy as np
 import pyautogui
+pyautogui.FAILSAFE = False
 from pathlib import Path
 from datetime import datetime
 import psutil
@@ -29,13 +30,24 @@ from utils.logging_setup import setup_logging
 from utils.telegram_manager import enviar_alerta_todos
 from utils.visual_feedback import VisualFeedback
 try:
-    from utils.window_utils import maximize_hwnd, maximize_pacs_windows
+    from utils.window_utils import maximize_hwnd, maximize_pacs_windows, force_foreground_window
 except ImportError:
     try:
-        from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows
+        from rpa_framework.utils.window_utils import maximize_hwnd, maximize_pacs_windows, force_foreground_window
     except ImportError:
         maximize_hwnd = None
         maximize_pacs_windows = None
+        force_foreground_window = None
+
+try:
+    from utils.screen_utils import safe_screenshot, attach_to_interactive_desktop
+    attach_to_interactive_desktop()
+except ImportError:
+    try:
+        from rpa_framework.utils.screen_utils import safe_screenshot, attach_to_interactive_desktop
+        attach_to_interactive_desktop()
+    except ImportError:
+        safe_screenshot = None
 
 # Configuración de MySQL
 try:
@@ -49,7 +61,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
-SIMILARITY_THRESHOLD = 0.90  # 90% de similitud (Ajustar según necesidad)
+SIMILARITY_THRESHOLD = 0.80  # 80% de similitud (Ajustado para detección inmediata del PACS)
 WAIT_TIMEOUT = 180            # Tiempo máximo de espera en segundos
 # ============================================================================
 
@@ -110,7 +122,9 @@ class VerificaInicioSimilitud:
                 windows = fw.find_windows(title_re=re.compile(f".*{re.escape(title)}.*", re.I))
                 if windows:
                     hwnd = windows[0]
-                    if maximize_hwnd:
+                    if force_foreground_window:
+                        force_foreground_window(hwnd)
+                    elif maximize_hwnd:
                         maximize_hwnd(hwnd)
                     else:
                         try:
@@ -131,11 +145,15 @@ class VerificaInicioSimilitud:
         return False
 
     def check_process_running(self):
-        """Verifica si el proceso está en ejecución."""
+        """Verifica si el proceso de Carestream Vue PACS o RIS está en ejecución."""
+        pacs_ris_exes = [
+            'mp.exe', 'ckmvs.exe', 'carestream ris.exe', 'vue ris.exe',
+            'risclient.exe', 'carestreamris.exe', 'vv_client.exe', 'csps_win.exe'
+        ]
         for p in psutil.process_iter(['name']):
             try:
                 name = p.info['name'].lower()
-                if 'carestream ris.exe' in name or 'vue ris.exe' in name:
+                if any(exe in name for exe in pacs_ris_exes):
                     return True
             except: pass
         return False
@@ -155,8 +173,16 @@ class VerificaInicioSimilitud:
                 self.vf.highlight_region(*self.region, duration=0.8)
                 time.sleep(0.1)
 
-            # 1. Capturar región actual
-            screenshot = pyautogui.screenshot(region=self.region)
+            # 1. Capturar región actual de manera resiliente (mss con fallback a pyautogui)
+            if safe_screenshot:
+                screenshot = safe_screenshot(region=self.region)
+            else:
+                screenshot = pyautogui.screenshot(region=self.region)
+
+            if screenshot is None:
+                logger.warning("No se pudo obtener captura de pantalla para comparar.")
+                return False
+
             screenshot_np = np.array(screenshot)
             
             # 2. Convertir a escala de grises
@@ -169,6 +195,7 @@ class VerificaInicioSimilitud:
             kp_cur, des_cur = orb.detectAndCompute(current_gray, None)
             
             similarity_pct = 0.0
+            num_matches = 0
             
             if des_ref is not None and des_cur is not None:
                 bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)

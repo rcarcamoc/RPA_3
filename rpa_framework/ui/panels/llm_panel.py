@@ -699,6 +699,7 @@ class LLMPanel(QWidget):
         self.combo_auto_freq = QComboBox()
         self.combo_auto_freq.addItems([
             "Cada 24 horas desfasadas (diario_24h)",
+            "Cada 6 horas (cada_6h)",
             "A una hora fija del día (hora_fija)"
         ])
         self.combo_auto_freq.setStyleSheet("""
@@ -1244,7 +1245,12 @@ class LLMPanel(QWidget):
             cfg = load_auto_config()
             self.chk_auto_enabled.setChecked(cfg.get("enabled", True))
             freq = cfg.get("frequency", "diario_24h")
-            idx = 0 if freq == "diario_24h" else 1
+            if freq == "diario_24h":
+                idx = 0
+            elif freq in ["cada_6h", "6h", "cada_6_horas"]:
+                idx = 1
+            else:
+                idx = 2
             self.combo_auto_freq.setCurrentIndex(idx)
             self.spin_auto_hour.setValue(cfg.get("scheduled_hour", 3))
             self.chk_auto_apply.setChecked(cfg.get("auto_apply", True))
@@ -1260,7 +1266,13 @@ class LLMPanel(QWidget):
             from utils.llm_auto_manager import load_auto_config, save_auto_config
             cfg = load_auto_config()
             cfg["enabled"] = self.chk_auto_enabled.isChecked()
-            cfg["frequency"] = "diario_24h" if self.combo_auto_freq.currentIndex() == 0 else "hora_fija"
+            sel_idx = self.combo_auto_freq.currentIndex()
+            if sel_idx == 0:
+                cfg["frequency"] = "diario_24h"
+            elif sel_idx == 1:
+                cfg["frequency"] = "cada_6h"
+            else:
+                cfg["frequency"] = "hora_fija"
             cfg["scheduled_hour"] = self.spin_auto_hour.value()
             cfg["auto_apply"] = self.chk_auto_apply.isChecked()
             

@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 import re
 import pyautogui
+pyautogui.FAILSAFE = False
 import cv2
 import numpy as np
 import random

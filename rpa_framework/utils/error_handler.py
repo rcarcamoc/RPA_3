@@ -52,14 +52,31 @@ def _get_telegram():
 
 
 def _tomar_screenshot():
-    """Toma captura de pantalla completa. Devuelve la ruta del archivo o None."""
+    """Toma captura de pantalla completa de forma resiliente. Devuelve la ruta del archivo o None."""
     try:
-        import pyautogui
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ruta = str(ROOT_DIR / "log" / f"error_{ts}.png")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        
+        # 1. Intentar con safe_screenshot (mss)
+        try:
+            from utils.screen_utils import safe_screenshot
+        except ImportError:
+            try:
+                from rpa_framework.utils.screen_utils import safe_screenshot
+            except ImportError:
+                safe_screenshot = None
+                
+        if safe_screenshot:
+            img = safe_screenshot(filepath=ruta)
+            if img:
+                logger.info(f"Screenshot guardado con safe_screenshot en: {ruta}")
+                return ruta
+
+        # 2. Fallback con pyautogui
+        import pyautogui
         pyautogui.screenshot(ruta)
-        logger.info(f"Screenshot guardado en: {ruta}")
+        logger.info(f"Screenshot guardado con pyautogui en: {ruta}")
         return ruta
     except Exception as e:
         logger.error(f"No se pudo tomar screenshot: {e}")

@@ -66,16 +66,16 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "meta/llama-3.2-11b-vision-instruct",                     # Primario — Validado OK
-   "openai/gpt-oss-20b",                                     # Fallback 1 — Validado OK
-   "nvidia/nemotron-parse-2.0",                              # Fallback 2 — Validado OK
-   "meta/muse-glimmer-30b",                                  # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 4 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 5 — Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 6 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 7 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 8 — Validado OK
-   "inclusionai/ling-3.0-flash-vl:free",                     # Fallback 9 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b",                      # Primario - Validado OK
+   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 1 - Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 2 - Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 3 - Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 4 - Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 5 - Validado OK
+   "stealth/space-bunny-alpha",                              # Fallback 6 - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 7 - Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 8 - Validado OK
+   "qwen/qwen3.8-27b:free",                                  # Fallback 9 - Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
@@ -83,10 +83,9 @@ OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "google/gemma-4-31b-it",
-    "deepseek/deepseek-v4-flash-0731:free",
-    "inclusionai/ling-3.0-flash-vl:free",
-    "nex-agi/nex-n2.5-pro:free",
+    "stealth/space-bunny-alpha",
+    "dots-studio/dots-3-note-preview:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

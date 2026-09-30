@@ -39,9 +39,106 @@ PROCESOS_PACS_RIS = [
     "vv_client.exe"
 ]
 
+def is_pacs_login_window(hwnd: int) -> bool:
+    """
+    Detecta si una ventana corresponde al diálogo modal de login de Carestream Vue PACS
+    (que nunca debe ser maximizado para no distorsionar su UI ni romper coordenadas).
+    """
+    if not hwnd:
+        return False
+    try:
+        import win32gui
+        # Si la ventana es pequeña, como el diálogo de login (~500x350)
+        rect = win32gui.GetWindowRect(hwnd)
+        w = rect[2] - rect[0]
+        h = rect[3] - rect[1]
+        if 0 < w < 850 and 0 < h < 700:
+            title = win32gui.GetWindowText(hwnd).strip()
+            if any(t.lower() in title.lower() for t in ["carestream", "vue pacs", "pacs"]):
+                return True
+    except Exception:
+        pass
+    try:
+        from pywinauto import Desktop
+        win = Desktop(backend="uia").window(handle=hwnd)
+        if win.child_window(auto_id="txtPassword").exists(timeout=0.1) or \
+           win.child_window(auto_id="txtUsername").exists(timeout=0.1):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def force_foreground_window(hwnd: int, maximize: bool = False) -> bool:
+    """
+    Fuerza a una ventana a pasar al primer plano (foreground) absoluto,
+    superando las restricciones de UIPI y bloqueo de foco de Windows 10/11.
+    
+    Args:
+        hwnd: Handle numérico de la ventana.
+        maximize: Si es True, maximiza la ventana (a menos que sea el diálogo de login).
+                  Si es False (por defecto), solo la muestra/restaura a su tamaño normal.
+    """
+    if not hwnd:
+        return False
+    try:
+        import win32gui
+        import win32con
+        import ctypes
+        
+        # 1. Asegurar desktop interactivo
+        try:
+            from utils.screen_utils import attach_to_interactive_desktop
+            attach_to_interactive_desktop()
+        except Exception:
+            try:
+                from rpa_framework.utils.screen_utils import attach_to_interactive_desktop
+                attach_to_interactive_desktop()
+            except Exception:
+                pass
+
+        if not win32gui.IsWindow(hwnd):
+            return False
+
+        # Si está minimizada, restaurar
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            time.sleep(0.1)
+
+        # Si es el diálogo de login de PACS, nunca maximizar
+        if maximize and not is_pacs_login_window(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+        else:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+        # 2. Simulación de Alt-Key para reiniciar timer de bloqueo de foco en Windows
+        user32 = ctypes.windll.user32
+        user32.keybd_event(0x12, 0, 0, 0)  # ALT down
+        user32.keybd_event(0x12, 0, 2, 0)  # ALT up
+
+        # 3. Z-order toggle: HWND_TOPMOST -> HWND_NOTOPMOST
+        # Obliga al DWM de Windows a colocar la ventana físicamente al frente de las demás
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                             win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                             win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+
+        # 4. Traer al frente y enfocar
+        try:
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.debug(f"Error en force_foreground_window (hwnd {hwnd}): {e}")
+        return False
+
+
 def maximize_hwnd(hwnd: int) -> bool:
     """
-    Restaura y maximiza una ventana por su HWND, y la trae al frente.
+    Restaura y maximiza una ventana por su HWND, y la trae al frente de forma forzada.
+    Si la ventana corresponde al diálogo de login de PACS, la enfoca pero omite la maximización.
     
     Args:
         hwnd: Handle numérico de la ventana de Windows
@@ -52,33 +149,13 @@ def maximize_hwnd(hwnd: int) -> bool:
     if not hwnd:
         return False
         
-    success = False
-    try:
-        import win32gui
-        import win32con
+    if is_pacs_login_window(hwnd):
+        logger.info(f"⏭️ Omitiendo maximización de diálogo de Login PACS (hwnd: {hwnd})")
+        return force_foreground_window(hwnd, maximize=False)
+
+    success = force_foreground_window(hwnd, maximize=True)
         
-        if win32gui.IsWindow(hwnd):
-            # Si está minimizada (icono), restaurarla primero
-            if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                time.sleep(0.1)
-                
-            # Maximizar
-            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-            
-            # Traer al frente
-            try:
-                win32gui.SetForegroundWindow(hwnd)
-            except Exception:
-                try:
-                    win32gui.BringWindowToTop(hwnd)
-                except Exception:
-                    pass
-            success = True
-    except Exception as e:
-        logger.debug(f"Error maximizando con win32gui (hwnd: {hwnd}): {e}")
-        
-    # Fallback con pywinauto si win32gui no logró el foco completo
+    # Fallback complementario con pywinauto si win32gui no logró el foco completo
     try:
         from pywinauto import Desktop
         win = Desktop(backend="win32").window(handle=hwnd)
@@ -179,6 +256,9 @@ def maximize_pacs_windows() -> int:
         
     count = 0
     for hwnd in hwnds_to_maximize:
+        if is_pacs_login_window(hwnd):
+            logger.info(f"⏭️ Omitiendo maximización de diálogo de Login PACS (hwnd: {hwnd})")
+            continue
         if maximize_hwnd(hwnd):
             count += 1
             try:

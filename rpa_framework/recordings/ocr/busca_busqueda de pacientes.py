@@ -195,6 +195,7 @@ def execute_ocr_click_0():
             
             # Simular clic robusto (mouseDown + wait + mouseUp)
             import pyautogui
+            pyautogui.FAILSAFE = False
             pyautogui.moveTo(click_x, click_y, duration=0.2)
             time.sleep(0.5) # Pausa solicitada sobre la coordenada
             pyautogui.mouseDown(click_x, click_y, button='left')

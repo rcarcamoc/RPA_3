@@ -71,17 +71,14 @@ def guardar_usuarios(usuarios):
         json.dump(usuarios, f, indent=4)
 
 def configurar_menu_comandos():
-    """Configura el menú nativo de comandos en Telegram (organizado por categorías)."""
+    """Configura el menú nativo de comandos en Telegram (organizado con accesos esenciales)."""
     commands = [
-        {"command": "menu", "description": "🎛️ Panel de control general"},
-        {"command": "estado", "description": "📸 Estado actual y captura en vivo"},
-        {"command": "stream", "description": "🔴 Transmisión de pantalla en vivo"},
-        {"command": "ejecucion", "description": "🚀 Workflows y automatización"},
-        {"command": "reportes", "description": "📊 Casos pendientes y métricas"},
-        {"command": "excel", "description": "📥 Exportar reporte a Excel (.xlsx)"},
-        {"command": "sistema", "description": "🛠️ Diagnóstico y mantenimiento"},
-        {"command": "notificaciones", "description": "🔔 Gestión de alertas"},
-        {"command": "detener", "description": "⏹️ Parada de emergencia"}
+        {"command": "menu", "description": "🎛️ Panel de control principal"},
+        {"command": "ejecucion", "description": "🚀 Iniciar ejecuciones"},
+        {"command": "stream", "description": "🔴 Estado actual y transmitir pantalla"},
+        {"command": "revalidar", "description": "🔄 Reintentar casos con error"},
+        {"command": "casos", "description": "🔍 Contar casos directo en RIS"},
+        {"command": "detener", "description": "🛑 Detener cualquier proceso"}
     ]
     try:
         res = telegram_request("POST", "setMyCommands", json={"commands": commands}, timeout=10)
@@ -97,42 +94,75 @@ def configurar_menu_comandos():
 # =========================================================================
 
 def get_menu_principal_markup():
-    """Menú Maestro con accesos a las secciones y estado actual."""
+    """Panel Principal con accesos rápidos directos y categorías operativas."""
     return {
         "inline_keyboard": [
-            [{"text": "📸 Estado Actual (En vivo)", "callback_data": "cmd_estado_actual"}],
-            [
-                {"text": "🚀 Ejecución", "callback_data": "sec_ejecucion"},
-                {"text": "📊 Reportes", "callback_data": "sec_reportes"}
-            ],
-            [
-                {"text": "🛠️ Sistema", "callback_data": "sec_sistema"},
-                {"text": "🔔 Notificaciones", "callback_data": "sec_notificaciones"}
-            ],
-            [{"text": "⏹️ Detener Todo", "callback_data": "cmd_detener"}]
+            [{"text": "🔴 Transmitir pantalla (Stream)", "callback_data": "cmd_stream_menu"}],
+            [{"text": "🚀 Iniciar ejecuciones", "callback_data": "sec_ejecucion"}],
+            [{"text": "📊 Reportes y consultas", "callback_data": "sec_reportes"}],
+            [{"text": "🛠️ Herramientas del sistema", "callback_data": "sec_sistema"}],
+            [{"text": "🔍 Contar casos directo en RIS", "callback_data": "cmd_casos"}],
+            [{"text": "🛑 Detener todo (Emergencia)", "callback_data": "cmd_detener"}]
         ]
     }
 
 def get_menu_ejecucion_markup():
-    """Submenú Ejecución y Workflows."""
+    """Submenú Iniciar ejecuciones."""
     return {
         "inline_keyboard": [
-            [{"text": "▶️ Iniciar Completo", "callback_data": "cmd_inicio"}],
-            [{"text": "📋 Solo Pega en Integra", "callback_data": "cmd_pega_integra"}],
-            [{"text": "🔄 Revalidar Último Registro", "callback_data": "cmd_revalidar"}],
-            [{"text": "🔁 Configurar Loop", "callback_data": "cmd_loop_menu"}],
-            [{"text": "⏹️ Detener Ejecución", "callback_data": "cmd_detener"}],
+            [{"text": "▶️ Ejecutar 1 vez (Flujo completo)", "callback_data": "cmd_inicio"}],
+            [{"text": "📋 Ejecutar solo carga (Integra)", "callback_data": "cmd_pega_integra"}],
+            [{"text": "🔄 Reintentar un caso con error", "callback_data": "cmd_revalidar"}],
+            [{"text": "🔁 Ejecución con repeticiones", "callback_data": "cmd_loop_menu"}],
+            [{"text": "🛑 Detener proceso actual", "callback_data": "cmd_detener"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
         ]
     }
 
-def get_menu_loop_markup():
-    """Submenú de selección de Loop."""
+def get_menu_revalidar_markup(registros):
+    """
+    Genera el teclado inline para seleccionar cuál de los registros en error
+    debe quedar en estado 'En Proceso'.
+    """
+    keyboard = []
+    for reg in registros:
+        r_id = reg.get("id")
+        doc = str(reg.get("numero_documento") or "--").strip()
+        btn_text = f"🔄 #{r_id} • Doc: {doc}"
+        keyboard.append([{"text": btn_text, "callback_data": f"reval_set_{r_id}"}])
+    
+    keyboard.append([
+        {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},
+        {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+    ])
+    return {"inline_keyboard": keyboard}
+
+def get_menu_post_revalidar_markup(registro_id):
+    """Submenú ofrecido tras marcar un registro como 'En Proceso'."""
     return {
         "inline_keyboard": [
-            [{"text": "⚡ 5 Iteraciones", "callback_data": "loop_count_5"}, {"text": "⏱️ 1 Hora", "callback_data": "loop_timed_1.0"}],
-            [{"text": "⏱️ 2 Horas", "callback_data": "loop_timed_2.0"}, {"text": "🔄 Infinito", "callback_data": "loop_infinite"}],
-            [{"text": "⬅️ Volver a Ejecución", "callback_data": "sec_ejecucion"}]
+            [
+                {"text": "▶️ Ejecutar 1 vez (Flujo completo)", "callback_data": "cmd_inicio"},
+                {"text": "📋 Ejecutar solo carga (Integra)", "callback_data": "cmd_pega_integra"}
+            ],
+            [{"text": "🔄 Ver otros errores", "callback_data": "cmd_revalidar"}],
+            [
+                {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
+        ]
+    }
+
+def get_menu_loop_markup():
+    """Submenú Ejecución con repeticiones."""
+    return {
+        "inline_keyboard": [
+            [{"text": "⚡ 5 veces", "callback_data": "loop_count_5"}, {"text": "⏱️ Durante 1 hora", "callback_data": "loop_timed_1.0"}],
+            [{"text": "⏱️ Durante 2 horas", "callback_data": "loop_timed_2.0"}, {"text": "🔄 Continuo (Sin parar)", "callback_data": "loop_infinite"}],
+            [
+                {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
         ]
     }
 
@@ -141,14 +171,13 @@ def get_menu_reportes_markup():
     return {
         "inline_keyboard": [
             [
-                {"text": "📊 Ver Casos (BD)", "callback_data": "cmd_ver_casos_bd"},
-                {"text": "📈 Contar en RIS (RPA)", "callback_data": "cmd_casos"}
+                {"text": "📑 Resumen del día", "callback_data": "cmd_resumen"},
+                {"text": "📥 Descargar reporte Excel", "callback_data": "cmd_menu_excel"}
             ],
             [
-                {"text": "📑 Resumen del Día", "callback_data": "cmd_resumen"},
-                {"text": "📥 Exportar Excel", "callback_data": "cmd_menu_excel"}
+                {"text": "🔍 Contar casos directo en RIS", "callback_data": "cmd_casos"},
+                {"text": "🏥 Ver estado de PACS", "callback_data": "cmd_estado_pacs"}
             ],
-            [{"text": "🏥 Estado PACS", "callback_data": "cmd_estado_pacs"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
         ]
     }
@@ -157,73 +186,83 @@ def get_menu_periodo_excel_markup():
     """Submenú de Selección de Periodo para Reporte Excel."""
     return {
         "inline_keyboard": [
-            [{"text": "📅 Día en curso", "callback_data": "rep_excel_hoy"}],
+            [{"text": "📅 Día de hoy", "callback_data": "rep_excel_hoy"}],
             [{"text": "🗓️ Últimos 7 días", "callback_data": "rep_excel_7d"}],
             [{"text": "📆 Mes actual", "callback_data": "rep_excel_mes"}],
-            [{"text": "⬅️ Volver a Reportes", "callback_data": "sec_reportes"}]
+            [
+                {"text": "⬅️ Volver a Reportes", "callback_data": "sec_reportes"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
         ]
     }
 
 def get_menu_sistema_markup():
-    """Submenú Diagnóstico y Mantenimiento."""
+    """Submenú Herramientas del sistema."""
     return {
         "inline_keyboard": [
-            [{"text": "📸 Estado Actual + Captura", "callback_data": "cmd_estado_actual"}],
-            [{"text": "🩺 Validar PACS", "callback_data": "cmd_validar_pacs"}],
-            [{"text": "🏥 Estado PACS", "callback_data": "cmd_estado_pacs"}],
-            [{"text": "🔴 Transmisión en Vivo (Desktop)", "callback_data": "cmd_stream_menu"}],
-            [{"text": "🔋 Estado Batería", "callback_data": "cmd_bateria"}],
-            [{"text": "📜 Ver Últimos Logs", "callback_data": "cmd_ver_log"}],
-            [{"text": "🔄 Rehabilitar Registro", "callback_data": "cmd_rehabilitar"}],
+            [{"text": "📸 Foto de pantalla actual", "callback_data": "cmd_estado_actual"}],
+            [{"text": "🩺 Probar conexión PACS ahora", "callback_data": "cmd_validar_pacs"}],
+            [{"text": "📜 Ver últimas actividades (Logs)", "callback_data": "cmd_ver_log"}],
+            [{"text": "🔋 Nivel de batería y energía", "callback_data": "cmd_bateria"}],
+            [{"text": "🔔 Pausar o activar alertas", "callback_data": "sec_notificaciones"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
         ]
     }
 
 def get_live_status_markup(stream_activo=False):
-    """Teclado inline adjunto al diagnóstico /estado actual."""
+    """Teclado inline adjunto a la foto o diagnóstico en vivo."""
     if stream_activo:
-        stream_btn = {"text": "⏹️ Detener Transmisión", "callback_data": "cmd_detener_stream"}
+        stream_btn = {"text": "🛑 Detener Transmisión", "callback_data": "cmd_detener_stream"}
     else:
-        stream_btn = {"text": "🔴 Transmitir Pantalla en Vivo", "callback_data": "cmd_iniciar_stream"}
+        stream_btn = {"text": "🔴 Transmitir pantalla (Stream)", "callback_data": "cmd_iniciar_stream"}
     
     return {
         "inline_keyboard": [
             [stream_btn],
             [
-                {"text": "🔄 Actualizar", "callback_data": "cmd_estado_actual"},
+                {"text": "🔄 Actualizar foto", "callback_data": "cmd_estado_actual"},
                 {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
             ]
         ]
     }
 
 def get_menu_stream_markup(stream_activo=False, tiempo_str="00:00"):
-    """Submenú de control de Live Stream."""
+    """Submenú de control de Transmisión de Pantalla (Live Stream)."""
     if stream_activo:
         return {
             "inline_keyboard": [
-                [{"text": "⏹️ Detener Transmisión en Vivo", "callback_data": "cmd_detener_stream"}],
-                [{"text": "📸 Captura Rápida", "callback_data": "cmd_estado_actual"}],
-                [{"text": "⬅️ Volver a Sistema", "callback_data": "sec_sistema"}]
+                [{"text": "🛑 Detener Transmisión de Pantalla", "callback_data": "cmd_detener_stream"}],
+                [{"text": "📸 Foto de pantalla actual", "callback_data": "cmd_estado_actual"}],
+                [
+                    {"text": "⬅️ Volver a Herramientas", "callback_data": "sec_sistema"},
+                    {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+                ]
             ]
         }
     else:
         return {
             "inline_keyboard": [
-                [{"text": "🔴 Iniciar Stream (10 min / Fin de flujo)", "callback_data": "cmd_iniciar_stream_600"}],
-                [{"text": "🔴 Iniciar Stream Continuo", "callback_data": "cmd_iniciar_stream_inf"}],
-                [{"text": "⬅️ Volver a Sistema", "callback_data": "sec_sistema"}]
+                [{"text": "🔴 Iniciar transmisión (10 min / Fin de flujo)", "callback_data": "cmd_iniciar_stream_600"}],
+                [{"text": "🔴 Iniciar transmisión continua", "callback_data": "cmd_iniciar_stream_inf"}],
+                [
+                    {"text": "⬅️ Volver a Herramientas", "callback_data": "sec_sistema"},
+                    {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+                ]
             ]
         }
 
 def get_menu_notificaciones_markup():
-    """Submenú Notificaciones y Alertas."""
+    """Submenú Pausar o activar alertas."""
     return {
         "inline_keyboard": [
             [
-                {"text": "🔕 Pausar Alertas", "callback_data": "cmd_deten_notif"},
-                {"text": "🔔 Reanudar Alertas", "callback_data": "cmd_reanudar_notif"}
+                {"text": "🔕 Pausar alertas automáticas", "callback_data": "cmd_deten_notif"},
+                {"text": "🔔 Activar alertas automáticas", "callback_data": "cmd_reanudar_notif"}
             ],
-            [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
+            [
+                {"text": "⬅️ Volver a Herramientas", "callback_data": "sec_sistema"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
         ]
     }
 

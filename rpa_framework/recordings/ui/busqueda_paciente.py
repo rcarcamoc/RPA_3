@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """
 Script autogenerado: busqueda_paciente
 Generado: 2026-01-02 07:37:17
@@ -12,6 +13,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 import pyautogui
+pyautogui.FAILSAFE = False
 
 # Agregar raíz del proyecto al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -161,26 +163,20 @@ class BusquedaPacienteAutomation:
         logger.info(f"🚀 Iniciando ejecución: {results['total_actions']} acciones")
         
         try:
-            # Acción 2: CLICK en PatientId (Robusto)
-            try:
-                base_x, base_y = 368, 194
-                logger.info(f"Ejecutando clic robusto en PatientId ({base_x}, {base_y})")
-                
-                if self.vf: self.vf.highlight_click(base_x, base_y)
-                
-                pyautogui.moveTo(base_x, base_y, duration=0.2)
-                time.sleep(0.5) # Pausa sobre la coordenada
-                
-                pyautogui.mouseDown(base_x, base_y, button='left')
-                time.sleep(0.15)
-                pyautogui.mouseUp(base_x, base_y, button='left')
+            # Acción 2: 6 Tabulaciones para posicionarse en Patient ID
+            try:                                                
+                logger.info("Enviando 5 tabulaciones para posicionarse en el campo Patient ID...")
+                for _ in range(5):
+                    pyautogui.press('tab')
+                    time.sleep(0.15)
+                time.sleep(0.3)
                 
                 results["completed"] += 1
-                logger.info(f"[2/5] ✅ click en PatientId")
+                logger.info("[2/5] ✅ 6 tabulaciones enviadas")
             except Exception as e:
-                self.fatal_error(f"No se pudo hacer clic en PatientId: {e}")
+                self.fatal_error(f"No se pudo enviar las tabulaciones: {e}")
 
-            # Acción 3: TYPE_TEXT (Estrategia Directa con pyautogui + Fallback)
+            # Acción 3: TYPE_TEXT (Ingresar ID de paciente en el campo enfocado)
             try:
                 patient_id = self.get_patient_id()
                 if not patient_id:
@@ -188,30 +184,9 @@ class BusquedaPacienteAutomation:
                 
                 logger.info(f"Ingresando ID de paciente: {patient_id}")
                 
-                try:
-                    # Buscamos y aseguramos foco con pywinauto
-                    element = self.executor.selector_helper.find_element(
-                        {'automation_id': 'mtbPatientId1'},
-                        timeout=5.0
-                    )
-                    element.set_focus()
-                    element.click_input()
-                    logger.info("Foco establecido por selector")
-                except Exception as e:
-                    logger.warning(f"No se pudo encontrar mtbPatientId1 por selector, usando fallback a coordenadas (368, 194): {e}")
-                    if self.vf: self.vf.highlight_click(368, 194)
-                    
-                    pyautogui.moveTo(368, 194, duration=0.2)
-                    time.sleep(0.5)
-                    pyautogui.mouseDown(368, 194, button='left')
-                    time.sleep(0.15)
-                    pyautogui.mouseUp(368, 194, button='left')
-                
-                time.sleep(1) 
-                
-                # Escribir usando pyautogui
+                # Escribir usando pyautogui en el campo enfocado
                 pyautogui.write(patient_id, interval=0.1)
-                time.sleep(1)
+                time.sleep(0.5)
 
                 results["completed"] += 1
                 logger.info(f"[3/5] ✅ type_text ({patient_id}) con pyautogui")

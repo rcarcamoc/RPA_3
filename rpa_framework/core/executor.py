@@ -4,6 +4,8 @@ import time
 from typing import Callable
 from functools import wraps
 from pywinauto import Application
+import pyautogui
+pyautogui.FAILSAFE = False
 from .action import Action, ActionType
 from .selector import WindowsSelector
 
