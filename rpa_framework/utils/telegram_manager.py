@@ -75,6 +75,7 @@ def configurar_menu_comandos():
     commands = [
         {"command": "menu", "description": "🎛️ Panel de control principal"},
         {"command": "ejecucion", "description": "🚀 Iniciar ejecuciones"},
+        {"command": "v2", "description": "⚡ Flujo optimizado V2 (Pipeline)"},
         {"command": "stream", "description": "🔴 Estado actual y transmitir pantalla"},
         {"command": "revalidar", "description": "🔄 Reintentar casos con error"},
         {"command": "casos", "description": "🔍 Contar casos directo en RIS"},
@@ -110,12 +111,40 @@ def get_menu_ejecucion_markup():
     """Submenú Iniciar ejecuciones."""
     return {
         "inline_keyboard": [
-            [{"text": "▶️ Ejecutar 1 vez (Flujo completo)", "callback_data": "cmd_inicio"}],
+            [{"text": "⚡ Flujo Optimizado V2 (Pipeline Rápido)", "callback_data": "sec_v2"}],
+            [{"text": "▶️ Ejecutar 1 vez (Flujo completo V1)", "callback_data": "cmd_inicio"}],
             [{"text": "📋 Ejecutar solo carga (Integra)", "callback_data": "cmd_pega_integra"}],
             [{"text": "🔄 Reintentar un caso con error", "callback_data": "cmd_revalidar"}],
-            [{"text": "🔁 Ejecución con repeticiones", "callback_data": "cmd_loop_menu"}],
+            [{"text": "🔁 Ejecución con repeticiones (V1)", "callback_data": "cmd_loop_menu"}],
             [{"text": "🛑 Detener proceso actual", "callback_data": "cmd_detener"}],
             [{"text": "🏠 Menú Principal", "callback_data": "menu_principal"}]
+        ]
+    }
+
+def get_menu_v2_markup():
+    """Submenú Flujo Optimizado V2."""
+    return {
+        "inline_keyboard": [
+            [{"text": "▶️ Ejecutar 1 vez (Sub_work V2)", "callback_data": "cmd_inicio_v2"}],
+            [{"text": "🔁 Bucle Continuo V2 (loop_v2)", "callback_data": "cmd_loop_v2_menu"}],
+            [{"text": "📋 Solo PACS V2", "callback_data": "cmd_pacs_v2"}],
+            [
+                {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
+        ]
+    }
+
+def get_menu_loop_v2_markup():
+    """Submenú Bucle Continuo V2 con repeticiones."""
+    return {
+        "inline_keyboard": [
+            [{"text": "⚡ 5 veces", "callback_data": "loop_v2_count_5"}, {"text": "⏱️ Durante 1 hora", "callback_data": "loop_v2_timed_1.0"}],
+            [{"text": "⏱️ Durante 2 horas", "callback_data": "loop_v2_timed_2.0"}, {"text": "🔄 Continuo (Sin parar)", "callback_data": "loop_v2_infinite"}],
+            [
+                {"text": "⬅️ Volver a Flujo V2", "callback_data": "sec_v2"},
+                {"text": "🏠 Menú Principal", "callback_data": "menu_principal"}
+            ]
         ]
     }
 
@@ -142,9 +171,10 @@ def get_menu_post_revalidar_markup(registro_id):
     return {
         "inline_keyboard": [
             [
-                {"text": "▶️ Ejecutar 1 vez (Flujo completo)", "callback_data": "cmd_inicio"},
-                {"text": "📋 Ejecutar solo carga (Integra)", "callback_data": "cmd_pega_integra"}
+                {"text": "⚡ Ejecutar con V2 (Rápido)", "callback_data": "cmd_inicio_v2"},
+                {"text": "▶️ Ejecutar con V1", "callback_data": "cmd_inicio"}
             ],
+            [{"text": "📋 Ejecutar solo carga (Integra)", "callback_data": "cmd_pega_integra"}],
             [{"text": "🔄 Ver otros errores", "callback_data": "cmd_revalidar"}],
             [
                 {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},

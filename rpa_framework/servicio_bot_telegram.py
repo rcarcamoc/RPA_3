@@ -58,6 +58,7 @@ from utils.telegram_manager import (
     enviar_mensaje, editar_mensaje, responder_callback, configurar_menu_comandos,
     cargar_usuarios, guardar_usuarios, enviar_foto, enviar_documento, telegram_request,
     get_menu_principal_markup, get_menu_ejecucion_markup, get_menu_loop_markup,
+    get_menu_v2_markup, get_menu_loop_v2_markup,
     get_menu_reportes_markup, get_menu_periodo_excel_markup, get_menu_sistema_markup,
     get_menu_notificaciones_markup, get_live_status_markup, get_menu_stream_markup,
     get_menu_revalidar_markup, get_menu_post_revalidar_markup
@@ -381,7 +382,28 @@ def forzar_ejecucion_workflow(chat_id, msg_id, action_key):
         time.sleep(0.5)
         
         # Ejecutar la acción correspondiente
-        if action_key == "inicio":
+        if action_key == "inicio_v2":
+            if start_workflow_async("Sub_work_v2.json"):
+                enviar_mensaje(chat_id, "✅ Proceso anterior detenido.\n⚡ Workflow <b>'Sub_work V2 (Optimizado)'</b> iniciado correctamente.")
+            else:
+                enviar_mensaje(chat_id, "❌ No se encontró el workflow 'Sub_work_v2.json'.")
+                
+        elif action_key == "pacs_v2":
+            if start_workflow_async("pacs_v2.json"):
+                enviar_mensaje(chat_id, "✅ Proceso anterior detenido.\n📋 Workflow <b>'Solo PACS V2'</b> iniciado correctamente.")
+            else:
+                enviar_mensaje(chat_id, "❌ No se encontró el workflow 'pacs_v2.json'.")
+
+        elif action_key.startswith("loop_v2_"):
+            params = action_key.replace("loop_v2_", "").split("_")
+            tipo = params[0]
+            valor = params[1] if len(params) > 1 else None
+            if start_workflow_async("loop_v2.json", {"tipo": tipo, "valor": valor}):
+                enviar_mensaje(chat_id, f"✅ Proceso anterior detenido.\n🔁 <b>Loop V2 iniciado</b> en modo: <code>{tipo}</code> ({valor or ''})")
+            else:
+                enviar_mensaje(chat_id, "❌ No se pudo iniciar el Loop V2.")
+
+        elif action_key == "inicio":
             if start_workflow_async("Sub_work.json"):
                 enviar_mensaje(chat_id, "✅ Proceso anterior detenido.\n🚀 Workflow <b>'Inicio Completo'</b> iniciado correctamente.")
             else:
@@ -1461,6 +1483,46 @@ def telegram_polling_loop():
                             actual = get_current_running_name()
                             editar_mensaje(chat_id, msg_id, f"ℹ️ <b>Solicitud cancelada.</b>\nEl proceso <code>{actual}</code> continúa en ejecución.")
                             
+                        elif callback_data == "sec_v2":
+                            responder_callback(cb_id)
+                            editar_mensaje(
+                                chat_id, msg_id,
+                                "⚡ <b>Flujo Optimizado V2 (Pipeline Rápido)</b>\n\n"
+                                "• <b>Precarga paralela:</b> RIS extrae el siguiente examen en background mientras PACS procesa.\n"
+                                "• <b>Tiempo estimado:</b> ~1.5 - 2 minutos por caso (vs 8 minutos en V1).\n\n"
+                                "Selecciona la modalidad:",
+                                reply_markup=get_menu_v2_markup()
+                            )
+
+                        elif callback_data == "cmd_inicio_v2":
+                            responder_callback(cb_id)
+                            if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                                pedir_confirmacion_interrupcion(chat_id, "inicio_v2", "Sub_work V2 (Optimizado)")
+                            else:
+                                if start_workflow_async("Sub_work_v2.json"):
+                                    enviar_mensaje(chat_id, "⚡ Workflow <b>'Sub_work V2 (Optimizado)'</b> iniciado correctamente.")
+                                else:
+                                    enviar_mensaje(chat_id, "❌ Workflow 'Sub_work_v2.json' no encontrado.")
+
+                        elif callback_data == "cmd_pacs_v2":
+                            responder_callback(cb_id)
+                            if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                                pedir_confirmacion_interrupcion(chat_id, "pacs_v2", "Solo PACS V2")
+                            else:
+                                if start_workflow_async("pacs_v2.json"):
+                                    enviar_mensaje(chat_id, "✅ Workflow <b>'Solo PACS V2'</b> iniciado correctamente.")
+                                else:
+                                    enviar_mensaje(chat_id, "❌ Workflow 'pacs_v2.json' no encontrado.")
+
+                        elif callback_data == "cmd_loop_v2_menu":
+                            responder_callback(cb_id)
+                            editar_mensaje(
+                                chat_id, msg_id,
+                                "🔁 <b>Bucle Continuo V2 (Pipeline Rápido)</b>\n\n"
+                                "Selecciona cuántas repeticiones o por cuánto tiempo deseas procesar exámenes con precarga en paralelo:",
+                                reply_markup=get_menu_loop_v2_markup()
+                            )
+
                         elif callback_data == "cmd_inicio":
                             responder_callback(cb_id)
                             if active_executor or is_any_workflow_running() or _pacs_validating_now:
@@ -1670,6 +1732,21 @@ def telegram_polling_loop():
                         elif callback_data == "ya_gestionado":
                             responder_callback(cb_id, text="Este incidente ya fue marcado como gestionado ✅", show_alert=False)
                             
+                        elif callback_data and callback_data.startswith("loop_v2_"):
+                            responder_callback(cb_id, text="Procesando...")
+                            params = callback_data.replace("loop_v2_", "").split("_")
+                            tipo = params[0]
+                            valor = params[1] if len(params) > 1 else None
+                            
+                            if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                                pedir_confirmacion_interrupcion(chat_id, callback_data, f"Loop V2 ({tipo} {valor or ''})")
+                            else:
+                                if start_workflow_async("loop_v2.json", {"tipo": tipo, "valor": valor}):
+                                    enviar_mensaje(chat_id, f"⚡ <b>Loop V2 iniciado</b> en modo: <code>{tipo}</code> ({valor or ''})")
+                                else:
+                                    enviar_mensaje(chat_id, "❌ No se pudo iniciar el Loop V2.")
+                            continue
+
                         elif callback_data and callback_data.startswith("loop_"):
                             responder_callback(cb_id, text="Procesando...")
                             params = callback_data.replace("loop_", "").split("_")
@@ -1718,6 +1795,16 @@ def telegram_polling_loop():
                     elif comando == "/ejecucion":
                         enviar_mensaje(chat_id, "🚀 <b>Iniciar ejecuciones</b>\n\nSelecciona el flujo que deseas iniciar:", reply_markup=get_menu_ejecucion_markup())
                         
+                    elif comando in ["/v2", "/subwork_v2", "/ejecucion_v2"]:
+                        enviar_mensaje(
+                            chat_id,
+                            "⚡ <b>Flujo Optimizado V2 (Pipeline Rápido)</b>\n\n"
+                            "• <b>Precarga paralela:</b> RIS extrae el siguiente examen en background mientras PACS procesa.\n"
+                            "• <b>Tiempo estimado:</b> ~1.5 - 2 minutos por caso (vs 8 minutos en V1).\n\n"
+                            "Selecciona la opción que deseas ejecutar:",
+                            reply_markup=get_menu_v2_markup()
+                        )
+                        
                     elif comando == "/reportes":
                         enviar_mensaje(chat_id, "📊 <b>Reportes y consultas</b>\n\nSelecciona el reporte que deseas generar o consultar:", reply_markup=get_menu_reportes_markup())
                         
@@ -1737,6 +1824,15 @@ def telegram_polling_loop():
                     elif comando in ["/ver_casos", "/casos_bd", "/ultimos_casos", "/consultar_casos"]:
                         enviar_mensaje(chat_id, obtener_ultimo_registro_casos_pendientes())
                         
+                    elif comando in ["/inicio_v2", "/run_v2"]:
+                        if active_executor or is_any_workflow_running() or _pacs_validating_now:
+                            pedir_confirmacion_interrupcion(chat_id, "inicio_v2", "Sub_work V2 (Optimizado)")
+                        else:
+                            if start_workflow_async("Sub_work_v2.json"):
+                                enviar_mensaje(chat_id, "⚡ Workflow <b>'Sub_work V2 (Optimizado)'</b> iniciado correctamente.")
+                            else:
+                                enviar_mensaje(chat_id, "❌ Workflow 'Sub_work_v2.json' no encontrado.")
+
                     elif comando == "/inicio":
                         if active_executor or is_any_workflow_running() or _pacs_validating_now:
                             pedir_confirmacion_interrupcion(chat_id, "inicio", "Inicio Completo")
