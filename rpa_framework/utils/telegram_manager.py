@@ -308,6 +308,18 @@ def responder_callback(callback_id, text=None, show_alert=False):
     except Exception:
         pass
 
+def enviar_mensaje_todos(texto, reply_markup=None):
+    """Envía un mensaje formateado a todos los usuarios registrados."""
+    usuarios = cargar_usuarios()
+    if not usuarios:
+        print("Error: No hay usuarios registrados en usuarios.json.")
+        return False
+    exito = True
+    for chat_id in usuarios:
+        if not enviar_mensaje(chat_id, texto, reply_markup):
+            exito = False
+    return exito
+
 def enviar_alerta_todos(mensaje, record_id=None):
     """Envía un mensaje a todos los usuarios registrados, opcionalmente con un botón para gestionarlo."""
     usuarios = cargar_usuarios()
@@ -332,6 +344,9 @@ def enviar_alerta_todos(mensaje, record_id=None):
 
     reply_markup = None
     if record_id:
+        if not any(tag in mensaje for tag in ["ID Fila", "ID BD", "ID de la fila", "ID Registro", f"#{record_id}"]):
+            mensaje = f"{mensaje}\n\n🆔 <b>ID Fila BD:</b> <code>{record_id}</code>"
+
         reply_markup = {
             "inline_keyboard": [
                 [{"text": "⚠️ Pendiente ⚠️", "callback_data": f"gestionado_{record_id}"}]
@@ -353,6 +368,48 @@ def enviar_alerta_todos(mensaje, record_id=None):
             print(f"  [OK] Enviado a {chat_id}")
         else:
             print(f"  [Error] No se pudo enviar a {chat_id}")
+
+def notificar_loop_pausado(ultimo_error: str = "", workflow_name: str = "Loop", iteracion: int = 0, record_id: int = None):
+    """Envía alerta de pausa por 2 errores consecutivos en loop con botones para Reanudar o Detener."""
+    usuarios = cargar_usuarios()
+    if not usuarios:
+        print("Error: No hay usuarios registrados en usuarios.json.")
+        return False
+
+    lineas = [
+        "⏸️ <b>ALERTA: LOOP PAUSADO POR SEGURIDAD</b>",
+        "",
+        "⚠️ Se han detectado <b>2 errores consecutivos</b> en la ejecución del ciclo.",
+        f"🔄 <b>Workflow:</b> <code>{workflow_name}</code> (Iteración #{iteracion})",
+    ]
+    if record_id:
+        lineas.append(f"🆔 <b>ID Fila BD:</b> <code>{record_id}</code>")
+    if ultimo_error:
+        lineas.extend([
+            "",
+            "📋 <b>Último error registrado:</b>",
+            f"<code>{ultimo_error[:300]}</code>",
+        ])
+    lineas.extend([
+        "",
+        "¿Qué deseas hacer a continuación?"
+    ])
+    mensaje = "\n".join(lineas)
+
+    markup = {
+        "inline_keyboard": [
+            [
+                {"text": "▶️ Reanudar Loop", "callback_data": "loop_reanudar"},
+                {"text": "⏹️ Detener definitivamente", "callback_data": "loop_detener"}
+            ]
+        ]
+    }
+
+    print(f"Enviando alerta de Loop Pausado a {len(usuarios)} usuarios...")
+    for chat_id in usuarios:
+        enviar_mensaje(chat_id, mensaje, markup)
+    return True
+
 
 def enviar_foto(chat_id, ruta_imagen, caption="", reply_markup=None):
     """Envía una foto a un chat. Si el archivo es muy grande, la comprime antes."""

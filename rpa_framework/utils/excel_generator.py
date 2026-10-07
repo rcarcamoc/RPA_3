@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -77,6 +77,7 @@ def consultar_datos_periodo(fecha_inicio, fecha_fin):
         examen,
         doctor_detectado,
         COALESCE(patologia_critica_detectada, patologia_critica) AS patologia_critica,
+        estado_notificacion,
         fecha_actualizacion_notificacion,
         URL,
         diagnostico
@@ -151,6 +152,15 @@ def generar_excel_reporte(periodo: str = "hoy"):
         fill_proceso = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
         font_proceso = Font(name=FONT_FAMILY, size=9, bold=True, color="806000")
 
+        fill_pendiente = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+        font_pendiente = Font(name=FONT_FAMILY, size=9, bold=True, color="B25E00")
+
+        fill_gestionado = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+        font_gestionado = Font(name=FONT_FAMILY, size=9, bold=True, color="276A3C")
+
+        fill_notif_pendiente = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+        font_notif_pendiente = Font(name=FONT_FAMILY, size=9, bold=True, color="B25E00")
+
         fill_patologia = PatternFill(start_color="FFD8D8", end_color="FFD8D8", fill_type="solid")
         font_patologia = Font(name=FONT_FAMILY, size=9, bold=True, color="9C0006")
 
@@ -170,8 +180,8 @@ def generar_excel_reporte(periodo: str = "hoy"):
         # -------------------------------------------------------------
         # 1. Banner Principal (Filas 1 y 2)
         # -------------------------------------------------------------
-        ws.merge_cells("A1:K1")
-        ws.merge_cells("A2:K2")
+        ws.merge_cells("A1:L1")
+        ws.merge_cells("A2:L2")
 
         c1 = ws["A1"]
         c1.value = "  📊 REPORTE DE GESTIÓN RPA - ATRYS HEALTH"
@@ -187,7 +197,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
         c2.alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[2].height = 20
 
-        for row in ws["A1:K2"]:
+        for row in ws["A1:L2"]:
             for cell in row:
                 cell.fill = fill_title
 
@@ -198,14 +208,32 @@ def generar_excel_reporte(periodo: str = "hoy"):
         exitosos = 0
         errores = 0
         en_proceso = 0
+        pendientes = 0
         patologias = 0
+
+        errores_gestionados = 0
+        errores_pendientes = 0
+        pendientes_gestionados = 0
+        pendientes_pendientes = 0
 
         for r in datos:
             st = str(r.get("estado") or "").lower()
-            if any(k in st for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
+            notif = str(r.get("estado_notificacion") or "").strip().lower()
+
+            if any(k in st for k in ['pending', 'aprobacion_pendiente', 'pendiente']):
+                pendientes += 1
+                if notif == 'gestionado':
+                    pendientes_gestionados += 1
+                elif notif == 'pendiente':
+                    pendientes_pendientes += 1
+            elif any(k in st for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
                 exitosos += 1
             elif any(k in st for k in ['error', 'fallo', 'falla']):
                 errores += 1
+                if notif == 'gestionado':
+                    errores_gestionados += 1
+                elif notif == 'pendiente':
+                    errores_pendientes += 1
             elif 'proceso' in st:
                 en_proceso += 1
             else:
@@ -214,14 +242,26 @@ def generar_excel_reporte(periodo: str = "hoy"):
             if r.get("patologia_critica") and str(r.get("patologia_critica")).strip():
                 patologias += 1
 
-        tasa_exito = f"{(exitosos / total_casos * 100):.1f}%" if total_casos > 0 else "0.0%"
+        completados = exitosos + pendientes
+        base_tasa = completados + errores
+        tasa_exito = f"{(completados / base_tasa * 100):.1f}%" if base_tasa > 0 else "100.0%"
+
+        if errores > 0:
+            incidencias_label = f"{errores} (Gest: {errores_gestionados} | Pend: {errores_pendientes})"
+        else:
+            incidencias_label = "0"
+
+        if pendientes > 0:
+            proc_label = f"{en_proceso} (Gest: {pendientes_gestionados} | Pend: {pendientes_pendientes})"
+        else:
+            proc_label = str(en_proceso)
 
         kpis = [
             ("TOTAL CASOS", str(total_casos), "B4:C4", "B5:C5", "1F4E79"),
-            ("EXITOSOS", f"{exitosos} ({tasa_exito})", "D4:E4", "D5:E5", "276A3C"),
-            ("CON INCIDENCIAS", str(errores), "F4:G4", "F5:G5", "C00000"),
-            ("EN PROCESO", str(en_proceso), "H4:I4", "H5:I5", "806000"),
-            ("PATOLOGÍAS CRÍTICAS", str(patologias), "J4:K4", "J5:K5", "9C0006")
+            ("EXITOSOS / COMPL.", f"{completados} ({tasa_exito})", "D4:E4", "D5:E5", "276A3C"),
+            ("CON INCIDENCIAS", incidencias_label, "F4:G4", "F5:G5", "C00000"),
+            ("EN PROCESO / PEND.", proc_label, "H4:I4", "H5:I5", "806000"),
+            ("PATOLOGÍAS CRÍTICAS", str(patologias), "J4:L4", "J5:L5", "9C0006")
         ]
 
         ws.row_dimensions[4].height = 16
@@ -238,7 +278,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
 
             bot_cell = ws[bot_range.split(":")[0]]
             bot_cell.value = val
-            bot_cell.font = Font(name=FONT_FAMILY, size=12, bold=True, color=col_hex)
+            bot_cell.font = Font(name=FONT_FAMILY, size=11, bold=True, color=col_hex)
             bot_cell.alignment = align_center
 
             for cell_ref in [top_range, bot_range]:
@@ -254,12 +294,13 @@ def generar_excel_reporte(periodo: str = "hoy"):
             ("ID", 8, align_center),
             ("Inicio", 19, align_center),
             ("Fin / Update", 19, align_center),
-            ("Estado", 14, align_center),
+            ("Estado", 15, align_center),
+            ("Gestión Telegram", 18, align_center),
+            ("Fecha Gestión", 19, align_center),
             ("N° Documento", 16, align_center),
             ("Examen", 32, align_left),
             ("Médico / Radiólogo", 28, align_left),
             ("Patología Crítica", 26, align_left),
-            ("Fecha Gestión", 19, align_center),
             ("Enlace Informe", 35, align_left),
             ("Diagnóstico / Resumen", 45, align_wrap_left)
         ]
@@ -297,6 +338,9 @@ def generar_excel_reporte(periodo: str = "hoy"):
             url_val = item.get("URL") or "--"
             diag_val = item.get("diagnostico") or "--"
 
+            notif_raw = item.get("estado_notificacion")
+            notif_val = str(notif_raw).strip() if (notif_raw and str(notif_raw).strip()) else "--"
+
             if diag_val != "--":
                 diag_val = "\n".join([line.strip() for line in str(diag_val).splitlines() if line.strip()])
 
@@ -305,11 +349,12 @@ def generar_excel_reporte(periodo: str = "hoy"):
                 (ini_str, align_center, None, None),
                 (fin_str, align_center, None, None),
                 (estado_val, align_center, None, None),
+                (notif_val, align_center, None, None),
+                (gest_str, align_center, None, None),
                 (item.get("numero_documento") or "--", align_center, None, None),
                 (item.get("examen") or "--", align_left, None, None),
                 (item.get("doctor_detectado") or "--", align_left, None, None),
                 (patologia_val, align_left, None, None),
-                (gest_str, align_center, None, None),
                 (url_val, align_left, None, None),
                 (diag_val, align_wrap_left, None, None)
             ]
@@ -323,7 +368,10 @@ def generar_excel_reporte(periodo: str = "hoy"):
 
                 if col_idx == 4:  # Estado
                     st_low = estado_val.lower()
-                    if any(k in st_low for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
+                    if any(k in st_low for k in ['pending', 'aprobacion_pendiente', 'pendiente']):
+                        cell.fill = fill_pendiente
+                        cell.font = font_pendiente
+                    elif any(k in st_low for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
                         cell.fill = fill_exitoso
                         cell.font = font_exitoso
                     elif any(k in st_low for k in ['error', 'fallo', 'falla']):
@@ -333,12 +381,21 @@ def generar_excel_reporte(periodo: str = "hoy"):
                         cell.fill = fill_proceso
                         cell.font = font_proceso
 
-                elif col_idx == 8:  # Patología Crítica
+                elif col_idx == 5:  # Gestión Telegram
+                    notif_low = notif_val.lower()
+                    if notif_low == 'gestionado':
+                        cell.fill = fill_gestionado
+                        cell.font = font_gestionado
+                    elif notif_low == 'pendiente':
+                        cell.fill = fill_notif_pendiente
+                        cell.font = font_notif_pendiente
+
+                elif col_idx == 10:  # Patología Crítica
                     if patologia_val != "--" and patologia_val.strip():
                         cell.fill = fill_patologia
                         cell.font = font_patologia
 
-                elif col_idx == 10:  # URL
+                elif col_idx == 11:  # URL
                     if str(val).startswith("http"):
                         cell.font = font_link
 
@@ -351,7 +408,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
             empty_cell.font = Font(name=FONT_FAMILY, size=10, italic=True, color="7F7F7F")
             empty_cell.alignment = align_center
             empty_cell.fill = fill_white
-            for c in ws[f"A{current_row}:K{current_row}"][0]:
+            for c in ws[f"A{current_row}:L{current_row}"][0]:
                 c.border = border_all
             current_row += 1
 
@@ -363,7 +420,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
             ws.column_dimensions[col_letter].width = max(min_w, len(h_title) + 4)
 
         last_data_row = max(current_row - 1, HEADER_ROW)
-        ws.auto_filter.ref = f"A{HEADER_ROW}:K{last_data_row}"
+        ws.auto_filter.ref = f"A{HEADER_ROW}:L{last_data_row}"
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"Reporte_RPA_{sufijo}_{timestamp}.xlsx"
@@ -378,7 +435,12 @@ def generar_excel_reporte(periodo: str = "hoy"):
             "total_casos": total_casos,
             "exitosos": exitosos,
             "errores": errores,
+            "errores_gestionados": errores_gestionados,
+            "errores_pendientes": errores_pendientes,
             "en_proceso": en_proceso,
+            "pendientes_aprobacion": pendientes,
+            "pendientes_gestionados": pendientes_gestionados,
+            "pendientes_pendientes": pendientes_pendientes,
             "patologias_criticas": patologias,
             "tasa_exito": tasa_exito
         }

@@ -898,17 +898,21 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
             total = res["total_casos"]
             exitos = res["exitosos"]
             errores = res["errores"]
+            errores_gest = res.get("errores_gestionados", 0)
+            errores_pend = res.get("errores_pendientes", 0)
             proceso = res["en_proceso"]
             patologias = res["patologias_criticas"]
             tasa = res["tasa_exito"]
+
+            err_detail = f" (Gestionados: {errores_gest} | Pendientes: {errores_pend})" if errores > 0 else ""
 
             caption = (
                 f"📊 <b>REPORTE EXCEL - ATRYS RPA</b>\n\n"
                 f"📅 <b>Periodo:</b> {nombre_periodo}\n"
                 f"🔢 <b>Total casos:</b> <b>{total}</b>\n"
                 f"✅ <b>Exitosos:</b> {exitos} ({tasa})\n"
-                f"❌ <b>Con Incidencias:</b> {errores}\n"
-                f"⏳ <b>En Proceso:</b> {proceso}\n"
+                f"❌ <b>Con Incidencias:</b> {errores}{err_detail}\n"
+                f"⏳ <b>En Proceso / Pendientes:</b> {proceso}\n"
                 f"🚨 <b>Patologías Críticas:</b> {patologias}\n\n"
                 f"📁 <i>Archivo adjunto listo para consultar.</i>"
             )
@@ -1484,6 +1488,19 @@ def telegram_polling_loop():
                         elif callback_data == "cmd_detener":
                             responder_callback(cb_id)
                             detener_ejecucion_actual(chat_id=chat_id, source="Telegram Botón")
+
+                        elif callback_data == "loop_reanudar":
+                            responder_callback(cb_id, text="Reanudando loop...")
+                            if active_executor and getattr(active_executor, "is_paused", False):
+                                active_executor.resume()
+                                editar_mensaje(chat_id, msg_id, "▶️ <b>Loop reanudado por el usuario.</b> Continuando con el ciclo...")
+                            else:
+                                editar_mensaje(chat_id, msg_id, "ℹ️ El loop ya no se encuentra en estado de pausa o no está activo.")
+
+                        elif callback_data == "loop_detener":
+                            responder_callback(cb_id, text="Deteniendo proceso...")
+                            detener_ejecucion_actual(chat_id=chat_id, source="Telegram (Detener desde pausa)")
+                            editar_mensaje(chat_id, msg_id, "⏹️ <b>Loop detenido definitivamente por el usuario.</b>")
                                 
                         elif callback_data == "cmd_casos":
                             responder_callback(cb_id)
@@ -1762,6 +1779,13 @@ def telegram_polling_loop():
                             
                     elif comando == "/detener":
                         detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
+
+                    elif comando in ["/reanudar", "/reanudar_loop", "/continuar"]:
+                        if active_executor and getattr(active_executor, "is_paused", False):
+                            active_executor.resume()
+                            enviar_mensaje(chat_id, "▶️ <b>Loop reanudado.</b> Continuando con el ciclo de trabajo...")
+                        else:
+                            enviar_mensaje(chat_id, "ℹ️ No hay ningún loop en estado de pausa actualmente.")
                             
                     elif comando == "/resumen":
                         enviar_mensaje(chat_id, "📑 Generando resumen del día en curso...")

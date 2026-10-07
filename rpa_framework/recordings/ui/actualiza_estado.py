@@ -75,7 +75,7 @@ class ActualizaEstadoAutomation:
         self.executor = None
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-    def db_update_status(self, status='En Proceso'):
+    def db_update_status(self, status='En Proceso', observacion=None):
         """Actualiza el estado en la BD"""
         if not HAS_MYSQL:
             return
@@ -88,8 +88,13 @@ class ActualizaEstadoAutomation:
             )
             cursor = conn.cursor()
             script_name = "actualiza_estado"
-            query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
-            cursor.execute(query, (script_name, status))
+            if observacion:
+                obs_fmt = f"[{script_name}] {observacion}"[:500]
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s, observacion = %s WHERE estado = 'En Proceso'"
+                cursor.execute(query, (script_name, status, obs_fmt))
+            else:
+                query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
+                cursor.execute(query, (script_name, status))
             conn.commit()
             conn.close()
             logger.info(f"[DB] Tracking actualizado: {script_name} ({status})")
@@ -302,7 +307,7 @@ class ActualizaEstadoAutomation:
 
             # Acción 4: CLICK INICIAL (Toolbar/Menú)
             try:
-                humanized_click(700, 60, hold_time=1.0)
+                humanized_click(820, 60, hold_time=1.0)
                 results["completed"] += 1
                 logger.info(f"[4/6] ✅ click sostenido inicial")
             except Exception as e:
@@ -319,19 +324,21 @@ class ActualizaEstadoAutomation:
                 elapsed = time.time() - start_loop_time
                 if elapsed > max_wait_time:
                     timeout_msg = f"Se excedió el tiempo máximo de espera ({max_wait_time//60} minutos) sin detectar 'Aprobado'."
-                    logger.error(f"❌ {timeout_msg}")
+                    logger.warning(f"⚠️ {timeout_msg}")
                     try:
                         try:
-                            from utils.error_handler import handle_error_and_exit
+                            from utils.error_handler import notificar_aprobacion_pendiente
                         except ImportError:
-                            from rpa_framework.utils.error_handler import handle_error_and_exit
-                        handle_error_and_exit("actualiza_estado.py", timeout_msg)
-                    except ImportError:
-                        self.db_update_status('Terminado - Pending')
-                        results["status"] = "TIMEOUT"
-                        results["errors"].append({"reason": timeout_msg})
-                        results["end_time"] = datetime.now().isoformat()
-                        return results
+                            from rpa_framework.utils.error_handler import notificar_aprobacion_pendiente
+                        notificar_aprobacion_pendiente("actualiza_estado.py", timeout_msg)
+                    except Exception as e_notif:
+                        logger.error(f"Error en notificar_aprobacion_pendiente: {e_notif}")
+                        self.db_update_status('Aprobacion_Pendiente', observacion=timeout_msg)
+
+                    results["status"] = "PENDING_APPROVAL"
+                    results["errors"].append({"reason": timeout_msg})
+                    results["end_time"] = datetime.now().isoformat()
+                    return results
 
                 intentos_refresh += 1
                 logger.info(f"🔄 Intento de validación #{intentos_refresh} (Tiempo transcurrido: {int(elapsed)}s)...")
@@ -372,8 +379,19 @@ class ActualizaEstadoAutomation:
             if aprobado_confirmado:
                 results["status"] = "SUCCESS"
             else:
-                results["status"] = "PARTIAL"
-                results["errors"].append({"reason": "No se detectó 'Aprobado' tras agotar los reintentos."})
+                msg_no_aprob = "No se detectó 'Aprobado' tras agotar los reintentos."
+                logger.warning(f"⚠️ {msg_no_aprob}")
+                try:
+                    try:
+                        from utils.error_handler import notificar_aprobacion_pendiente
+                    except ImportError:
+                        from rpa_framework.utils.error_handler import notificar_aprobacion_pendiente
+                    notificar_aprobacion_pendiente("actualiza_estado.py", msg_no_aprob)
+                except Exception as e_notif:
+                    logger.error(f"Error en notificar_aprobacion_pendiente: {e_notif}")
+                    self.db_update_status('Aprobacion_Pendiente', observacion=msg_no_aprob)
+                results["status"] = "PENDING_APPROVAL"
+                results["errors"].append({"reason": msg_no_aprob})
 
         except Exception as e:
             logger.error(f"❌ Error crítico: {e}")
@@ -386,7 +404,7 @@ class ActualizaEstadoAutomation:
                     from rpa_framework.utils.error_handler import handle_error_and_exit
                 handle_error_and_exit("actualiza_estado.py", str(e))
             except ImportError:
-                self.db_update_status('error')
+                self.db_update_status('error', observacion=str(e))
         
         results["end_time"] = datetime.now().isoformat()
         logger.info(f"📊 RESUMEN: {results['completed']} OK, Status: {results['status']}")
@@ -411,7 +429,7 @@ def main():
     print(f"Resultado: {results['status']}")
     print("="*50)
     
-    return 0 if results["status"] == "SUCCESS" else 1
+    return 0 if results["status"] in ["SUCCESS", "PENDING_APPROVAL"] else 1
 
 if __name__ == "__main__":
     sys.exit(main())

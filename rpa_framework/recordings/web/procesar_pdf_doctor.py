@@ -70,6 +70,28 @@ class BuscadorBaseDatosPDF:
             if conn and conn.is_connected():
                 conn.close()
 
+    def guardar_url_previa(self, url):
+        """Guarda la URL del PDF anticipadamente en registro_acciones antes de abrirlo/descargarlo"""
+        conn = None
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            query = """
+            UPDATE registro_acciones 
+            SET URL = %s, `update` = NOW(), ultimo_nodo = %s
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (url, self.script_name))
+            conn.commit()
+            print(f"[DB] URL del PDF guardada anticipadamente: {url}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Error al guardar URL anticipada en BD: {e}")
+            return False
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
+
     def actualizar_datos_pdf(self, numero_documento, diagnostico, examen, url, fecha_agendada=None):
         """Actualiza numero_documento, diagnostico, examen, url y fecha_agendada en registro_acciones"""
         conn = None
@@ -92,8 +114,9 @@ class BuscadorBaseDatosPDF:
                 conn.close()
 
 class ExtractorPDFDoctor:
-    def __init__(self, port=9222):
+    def __init__(self, port=9222, bd=None):
         self.port = port
+        self.bd = bd
         self.driver = None
         self.temp_pdf_path = os.path.join(tempfile.gettempdir(), "temp_downloaded_rpa.pdf")
 
@@ -172,12 +195,17 @@ class ExtractorPDFDoctor:
             
             # 2. Procesar (Cambiamos al target si no estamos ahí)
             self.driver.switch_to.window(target_handle)
+            time.sleep(1.0)
             current_url = self.driver.current_url
             logger.info(f"Procesando PDF desde URL: {current_url}")
             
             if not current_url or current_url == "about:blank":
                 logger.warning("URL vacía o about:blank en ventana objetivo.")
                 return None
+
+            # Guardar la URL en la base de datos ANTES de intentar abrir/descargar el PDF
+            if self.bd and current_url:
+                self.bd.guardar_url_previa(current_url)
 
             extracted_data = None
             if self.descargar_pdf(current_url):
@@ -208,25 +236,92 @@ class ExtractorPDFDoctor:
             logger.error(f"Error en el proceso de PDF: {e}")
             return None
 
-    def descargar_pdf(self, url):
+    def descargar_pdf(self, url, max_retries=3, delay=2.0):
+        """
+        Descarga el PDF a self.temp_pdf_path con reintentos y validación de contenido.
+        Verifica que el archivo no esté vacío y contenga encabezado válido (%PDF).
+        Si requests HTTP falla o devuelve 0 bytes, intenta descarga directa vía fetch/JS en el navegador.
+        """
+        # Limpiar archivo temporal previo si existe
+        if os.path.exists(self.temp_pdf_path):
+            try:
+                os.remove(self.temp_pdf_path)
+            except Exception:
+                pass
+
+        if url.startswith("blob:"):
+            return self.descargar_blob(url)
+
+        for intento in range(1, max_retries + 1):
+            try:
+                logger.info(f"Descargando PDF (Intento {intento}/{max_retries}) desde: {url}")
+                session = requests.Session()
+                for cookie in self.driver.get_cookies():
+                    session.cookies.set(cookie['name'], cookie['value'])
+                
+                headers = {"User-Agent": self.driver.execute_script("return navigator.userAgent;")}
+                response = session.get(url, headers=headers, stream=True, verify=False, timeout=20)
+                response.raise_for_status()
+
+                with open(self.temp_pdf_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+
+                if os.path.exists(self.temp_pdf_path):
+                    file_size = os.path.getsize(self.temp_pdf_path)
+                    if file_size > 100:
+                        with open(self.temp_pdf_path, 'rb') as f_chk:
+                            header = f_chk.read(5)
+                        if header.startswith(b'%PDF'):
+                            logger.info(f"PDF descargado correctamente vía HTTP ({file_size} bytes).")
+                            return True
+                        else:
+                            logger.warning(f"Descarga HTTP recibida ({file_size} bytes) pero sin encabezado %PDF válido.")
+                    else:
+                        logger.warning(f"Descarga HTTP devolvió archivo vacío o insuficiente ({file_size} bytes).")
+            except Exception as e:
+                logger.warning(f"Fallo en intento {intento} de descarga HTTP: {e}")
+
+            if intento < max_retries:
+                time.sleep(delay)
+
+        # Fallback: descarga directa en contexto de sesión del navegador vía JS fetch
+        logger.info("Intentando fallback de descarga mediante JS fetch en el navegador...")
+        if self.descargar_via_browser_fetch(url):
+            if os.path.exists(self.temp_pdf_path) and os.path.getsize(self.temp_pdf_path) > 100:
+                with open(self.temp_pdf_path, 'rb') as f_chk:
+                    if f_chk.read(5).startswith(b'%PDF'):
+                        logger.info("PDF descargado correctamente mediante fallback JS fetch.")
+                        return True
+
+        logger.error(f"Fallo definitivo al descargar PDF tras {max_retries} intentos y fallback JS.")
+        return False
+
+    def descargar_via_browser_fetch(self, url):
+        """Descarga el PDF ejecutando fetch con credenciales directamente en el contexto del navegador."""
         try:
-            if url.startswith("blob:"):
-                return self.descargar_blob(url)
-
-            session = requests.Session()
-            for cookie in self.driver.get_cookies():
-                session.cookies.set(cookie['name'], cookie['value'])
-            
-            headers = {"User-Agent": self.driver.execute_script("return navigator.userAgent;")}
-            response = session.get(url, headers=headers, stream=True, verify=False)
-            response.raise_for_status()
-
-            with open(self.temp_pdf_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
+            script = """
+                var uri = arguments[0];
+                var callback = arguments[1];
+                fetch(uri, {credentials: 'include'})
+                    .then(function(r) { return r.blob(); })
+                    .then(function(blob) {
+                        var reader = new FileReader();
+                        reader.readAsDataURL(blob);
+                        reader.onloadend = function() { callback(reader.result); };
+                    })
+                    .catch(function(e) { callback(null); });
+            """
+            result = self.driver.execute_async_script(script, url)
+            if result and "," in result:
+                header, encoded = result.split(",", 1)
+                data = base64.b64decode(encoded)
+                with open(self.temp_pdf_path, 'wb') as f:
+                    f.write(data)
+                return True
+            return False
         except Exception as e:
-            logger.error(f"Fallo descarga HTTP: {e}")
+            logger.warning(f"Fallo descarga vía fallback JS fetch: {e}")
             return False
 
     def descargar_blob(self, blob_url):
@@ -254,7 +349,9 @@ class ExtractorPDFDoctor:
                  data = base64.b64decode(encoded)
                  with open(self.temp_pdf_path, 'wb') as f:
                      f.write(data)
-                 return True
+                 if os.path.exists(self.temp_pdf_path) and os.path.getsize(self.temp_pdf_path) > 100:
+                     return True
+                 logger.warning("Blob descargado pero está vacío o es inválido.")
             return False
         except Exception as e:
             logger.error(f"Fallo descarga Blob: {e}")
@@ -262,6 +359,10 @@ class ExtractorPDFDoctor:
 
     def extraer_datos(self):
         try:
+            if not os.path.exists(self.temp_pdf_path) or os.path.getsize(self.temp_pdf_path) < 100:
+                logger.error("El archivo temporal del PDF no existe o está vacío (menos de 100 bytes).")
+                return None
+
             with open(self.temp_pdf_path, 'rb') as f:
                 reader = pypdf.PdfReader(f)
                 pages_text = [page.extract_text() or "" for page in reader.pages]
@@ -364,7 +465,7 @@ class ExtractorPDFDoctor:
 
 def main():
     bd = BuscadorBaseDatosPDF()
-    extractor = ExtractorPDFDoctor()
+    extractor = ExtractorPDFDoctor(bd=bd)
     
     try:
         # 1. Inicio Tracking

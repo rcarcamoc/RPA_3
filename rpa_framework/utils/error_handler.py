@@ -83,21 +83,47 @@ def _tomar_screenshot():
         return None
 
 
-def _consultar_registro():
-    """Consulta el registro 'En Proceso' desde la BD. Devuelve dict o None."""
+def _consultar_registro(record_id=None):
+    """Consulta el registro 'En Proceso' o por ID desde la BD. Devuelve dict o None."""
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
-        query = """
-        SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
-               patologia_critica, patologia_critica_detectada, examen, URL,
-               resolucion_pantalla
-        FROM ris.registro_acciones
-        WHERE estado = 'En Proceso'
-        LIMIT 1
-        """
-        cursor.execute(query)
-        row = cursor.fetchone()
+        if record_id:
+            query = """
+            SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
+                   patologia_critica, patologia_critica_detectada, examen, URL,
+                   resolucion_pantalla
+            FROM ris.registro_acciones
+            WHERE id = %s
+            LIMIT 1
+            """
+            cursor.execute(query, (record_id,))
+            row = cursor.fetchone()
+        else:
+            query = """
+            SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
+                   patologia_critica, patologia_critica_detectada, examen, URL,
+                   resolucion_pantalla
+            FROM ris.registro_acciones
+            WHERE estado = 'En Proceso'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+            cursor.execute(query)
+            row = cursor.fetchone()
+
+            # Si no se encontró en 'En Proceso', fallback al último registro de registro_acciones
+            if not row:
+                cursor.execute("""
+                SELECT id, inicio, doctor_detectado, numero_documento, fecha_agendada,
+                       patologia_critica, patologia_critica_detectada, examen, URL,
+                       resolucion_pantalla
+                FROM ris.registro_acciones
+                ORDER BY id DESC
+                LIMIT 1
+                """)
+                row = cursor.fetchone()
+
         cursor.close()
         conn.close()
         return row
@@ -106,18 +132,26 @@ def _consultar_registro():
         return None
 
 
-def _marcar_error(script_name, error_description):
-    """Actualiza el registro 'En Proceso' a 'Error' en BD."""
+def _marcar_error(script_name, error_description, record_id=None):
+    """Actualiza el registro a 'Error' en BD por record_id o 'En Proceso'."""
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         obs = f"[{script_name}] {error_description}"[:500]  # limitar largo
-        query = """
-        UPDATE ris.registro_acciones
-        SET estado = 'Error', observacion = %s, `update` = NOW()
-        WHERE estado = 'En Proceso'
-        """
-        cursor.execute(query, (obs,))
+        if record_id:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = 'Error', observacion = %s, `update` = NOW()
+            WHERE id = %s
+            """
+            cursor.execute(query, (obs, record_id))
+        else:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = 'Error', observacion = %s, `update` = NOW()
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (obs,))
         conn.commit()
         rows_affected = cursor.rowcount
         cursor.close()
@@ -129,8 +163,10 @@ def _marcar_error(script_name, error_description):
 
 def _formatear_mensaje(script_name, error_description, record_data):
     """Genera el texto del mensaje Telegram con formato HTML incluyendo resolución de pantalla."""
+    rec_id = record_data.get("id") if (record_data and isinstance(record_data, dict)) else None
+    id_header = f" (Fila #{rec_id})" if rec_id else ""
     lineas = [
-        f"🚨 <b>ERROR en {script_name}</b>",
+        f"🚨 <b>ERROR en {script_name}</b>{id_header}",
         "",
         f"📋 <b>Problema:</b>",
         f"{error_description}",
@@ -156,6 +192,7 @@ def _formatear_mensaje(script_name, error_description, record_data):
             record_data["resolucion_pantalla"] = resolucion_actual
 
         labels = {
+            "id":                       "🆔 ID Fila BD",
             "inicio":                   "🕐 Inicio",
             "resolucion_pantalla":      "🖥️ Resolución",
             "doctor_detectado":         "👨‍⚕️ Doctor",
@@ -174,32 +211,110 @@ def _formatear_mensaje(script_name, error_description, record_data):
     else:
         if resolucion_actual:
             lineas.append(f"🖥️ <b>Resolución de pantalla:</b> <code>{resolucion_actual}</code>")
-        lineas.append("<i>⚠️ No se encontró registro con estado 'En Proceso'.</i>")
+        lineas.append("<i>⚠️ No se encontró registro en la base de datos.</i>")
 
     return "\n".join(lineas)
 
 
-def handle_error_and_exit(script_name: str, error_description: str):
+def _marcar_estado(script_name, descripcion, nuevo_estado='Aprobacion_Pendiente', record_id=None):
+    """Actualiza el registro al estado especificado en BD por record_id o 'En Proceso'."""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        obs = f"[{script_name}] {descripcion}"[:500]
+        if record_id:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = %s, observacion = %s, `update` = NOW()
+            WHERE id = %s
+            """
+            cursor.execute(query, (nuevo_estado, obs, record_id))
+        else:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = %s, observacion = %s, `update` = NOW()
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (nuevo_estado, obs))
+        conn.commit()
+        rows_affected = cursor.rowcount
+        cursor.close()
+        conn.close()
+        logger.info(f"Registro marcado como '{nuevo_estado}' ({rows_affected} filas afectadas).")
+    except Exception as e:
+        logger.error(f"Error actualizando estado a {nuevo_estado} en BD: {e}")
+
+
+def notificar_aprobacion_pendiente(script_name: str, descripcion: str, record_id: int = None):
+    """
+    Notifica a Telegram que el caso finalizó su flujo pero quedó pendiente
+    de aprobación/validación visual en RIS/PACS, y marca el registro en BD
+    como 'Aprobacion_Pendiente' sin abortar el proceso.
+    """
+    record_data = _consultar_registro(record_id=record_id)
+    rec_id = record_data.get("id") if record_data else record_id
+
+    id_log = f" (ID Fila BD: #{rec_id})" if rec_id else ""
+    print(f"\n[ERROR_HANDLER] APROBACIÓN PENDIENTE en '{script_name}'{id_log}: {descripcion}", flush=True)
+    logger.warning(f"⚠️ [{script_name}]{id_log} {descripcion}")
+
+    screenshot_path = _tomar_screenshot()
+
+    # Formatear mensaje con encabezado claro
+    mensaje = _formatear_mensaje(script_name, f"⚠️ <b>Validación no confirmada:</b> {descripcion}", record_data)
+    if rec_id:
+        mensaje = mensaje.replace(f"🚨 <b>ERROR en {script_name}</b> (Fila #{rec_id})", f"🚨 <b>APROBACIÓN PENDIENTE en {script_name}</b> (Fila #{rec_id})")
+    mensaje = mensaje.replace(f"🚨 <b>ERROR en {script_name}</b>", f"🚨 <b>APROBACIÓN PENDIENTE en {script_name}</b>")
+
+    enviar_alerta_todos, enviar_foto_todos = _get_telegram()
+
+    try:
+        import inspect
+        sig = inspect.signature(enviar_alerta_todos)
+        if "record_id" in sig.parameters:
+            enviar_alerta_todos(mensaje, record_id=rec_id)
+        else:
+            enviar_alerta_todos(mensaje)
+        logger.info("Notificación de Aprobación Pendiente enviada a Telegram.")
+    except Exception as e:
+        logger.error(f"Error enviando texto a Telegram: {e}")
+
+    try:
+        if screenshot_path and os.path.exists(screenshot_path):
+            id_tag = f" (ID Fila BD: #{rec_id})" if rec_id else ""
+            caption = f"📸 Captura para revisión: <b>{script_name}</b>{id_tag} (Aprobación Pendiente)"
+            enviar_foto_todos(screenshot_path, caption)
+            logger.info("Screenshot de Aprobación Pendiente enviado a Telegram.")
+    except Exception as e:
+        logger.error(f"Error enviando foto a Telegram: {e}")
+
+    # Marcar en BD como Aprobacion_Pendiente
+    _marcar_estado(script_name, descripcion, nuevo_estado='Aprobacion_Pendiente', record_id=rec_id)
+    return True
+
+
+def handle_error_and_exit(script_name: str, error_description: str, record_id: int = None):
     """
     Punto de entrada único para errores críticos en el workflow PACS.
 
     Pasos:
       1. Toma screenshot completo
-      2. Consulta datos del registro en BD
-      3. Envía mensaje de texto a Telegram (descripción + datos)
+      2. Consulta datos del registro en BD (incluyendo ID de fila)
+      3. Envía mensaje de texto a Telegram (descripción + datos del registro)
       4. Envía el screenshot a Telegram
       5. Marca el registro como 'Error' en BD
       6. sys.exit(1)
     """
-    print(f"\n[ERROR_HANDLER] ERROR CRÍTICO en '{script_name}': {error_description}", flush=True)
-    logger.error(f"❌ [{script_name}] {error_description}")
-
     # 1. Screenshot
     screenshot_path = _tomar_screenshot()
 
     # 2. Datos del registro
-    record_data = _consultar_registro()
-    record_id = record_data.get("id") if record_data else None
+    record_data = _consultar_registro(record_id=record_id)
+    rec_id = record_data.get("id") if record_data else record_id
+
+    id_log = f" (ID Fila BD: #{rec_id})" if rec_id else ""
+    print(f"\n[ERROR_HANDLER] ERROR CRÍTICO en '{script_name}'{id_log}: {error_description}", flush=True)
+    logger.error(f"❌ [{script_name}]{id_log} {error_description}")
 
     # 3. Mensaje de texto
     mensaje = _formatear_mensaje(script_name, error_description, record_data)
@@ -213,7 +328,7 @@ def handle_error_and_exit(script_name: str, error_description: str):
         import inspect
         sig = inspect.signature(enviar_alerta_todos)
         if "record_id" in sig.parameters:
-            enviar_alerta_todos(mensaje, record_id=record_id)
+            enviar_alerta_todos(mensaje, record_id=rec_id)
         else:
             enviar_alerta_todos(mensaje)
         logger.info("Mensaje de texto enviado a Telegram.")
@@ -223,14 +338,16 @@ def handle_error_and_exit(script_name: str, error_description: str):
     try:
         # Enviar la imagen como foto separada con caption corto
         if screenshot_path and os.path.exists(screenshot_path):
-            caption = f"📸 Captura del error en <b>{script_name}</b>"
+            id_tag = f" (ID Fila BD: #{rec_id})" if rec_id else ""
+            caption = f"📸 Captura del error en <b>{script_name}</b>{id_tag}"
             enviar_foto_todos(screenshot_path, caption)
             logger.info("Screenshot enviado a Telegram.")
     except Exception as e:
         logger.error(f"Error enviando foto a Telegram: {e}")
 
     # 5. Marcar como Error en BD
-    _marcar_error(script_name, error_description)
+    _marcar_error(script_name, error_description, record_id=rec_id)
 
     # 6. Salir
     sys.exit(1)
+
