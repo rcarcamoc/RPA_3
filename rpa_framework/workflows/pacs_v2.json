@@ -1,0 +1,246 @@
+{
+  "id": "pacs_v2",
+  "name": "pacs_v2",
+  "description": "Flujo PACS optimizado V2 con background preloading",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -913.0,
+        "y": -630.0
+      }
+    },
+    {
+      "id": "n11_0",
+      "type": "action",
+      "label": "Comprueba VPN",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -616.0,
+        "y": -624.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n2_0",
+      "type": "action",
+      "label": "Muestra Escritorio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -363.0,
+        "y": -493.0
+      },
+      "script": "",
+      "command": "powershell -command \"(new-object -com shell.application).minimizeall()\"",
+      "output_variable": "",
+      "command_type": "desktop",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n3_0",
+      "type": "action",
+      "label": "Abre PACS V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -578.0,
+        "y": -502.0
+      },
+      "script": "ui\\Abre_pacs_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n4_0",
+      "type": "action",
+      "label": "Ingresa User PACS V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -867.0,
+        "y": -498.0
+      },
+      "script": "ui\\ingresa_user_pacs_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n15_0",
+      "type": "action",
+      "label": "Verifica Inicio V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -841.0,
+        "y": -364.0
+      },
+      "script": "ui\\verifica_inicio_v4_similitud_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n6_0",
+      "type": "action",
+      "label": "Busca Pacientes V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -571.0,
+        "y": -358.0
+      },
+      "script": "ocr\\busca_busqueda_de_pacientes_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n7_0",
+      "type": "action",
+      "label": "Ingresa ID Cliente V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -221.0,
+        "y": -381.0
+      },
+      "script": "ui\\busqueda_paciente_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n9_0",
+      "type": "action",
+      "label": "Busqueda Triple V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -287.0,
+        "y": -231.0
+      },
+      "script": "ocr\\busqueda_triple_text_only_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n10_0",
+      "type": "action",
+      "label": "Diagnostica y Pega V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -637.0,
+        "y": -212.0
+      },
+      "script": "ui\\pega_en_word_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n13_0",
+      "type": "action",
+      "label": "Actualiza Estado V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -954.0,
+        "y": -204.0
+      },
+      "script": "ui\\actualiza_estado_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n14_0",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -1100.0,
+        "y": -204.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n11_0"
+    },
+    {
+      "from": "n11_0",
+      "to": "n2_0"
+    },
+    {
+      "from": "n2_0",
+      "to": "n3_0"
+    },
+    {
+      "from": "n3_0",
+      "to": "n4_0"
+    },
+    {
+      "from": "n4_0",
+      "to": "n15_0"
+    },
+    {
+      "from": "n15_0",
+      "to": "n6_0"
+    },
+    {
+      "from": "n6_0",
+      "to": "n7_0"
+    },
+    {
+      "from": "n7_0",
+      "to": "n9_0"
+    },
+    {
+      "from": "n9_0",
+      "to": "n10_0"
+    },
+    {
+      "from": "n10_0",
+      "to": "n13_0"
+    },
+    {
+      "from": "n13_0",
+      "to": "n14_0"
+    }
+  ],
+  "variables": {}
+}
