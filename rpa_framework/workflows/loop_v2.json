@@ -1,0 +1,45 @@
+{
+  "id": "loop_v2",
+  "name": "loop_v2",
+  "description": "Bucle de procesamiento automatizado V2 ejecutando Sub_work_v2",
+  "nodes": [
+    {
+      "id": "n1_0",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -63.0,
+        "y": -152.0
+      }
+    },
+    {
+      "id": "n2_0",
+      "type": "loop",
+      "label": "Loop V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -4.0,
+        "y": 34.0
+      },
+      "script": "",
+      "loop_type": "count",
+      "iterations": "5",
+      "iterable": "",
+      "condition": "",
+      "loopVar": "item",
+      "workflow_path": "Sub_work_v2.json",
+      "error_delay": 0,
+      "duration_hours": 1.0
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1_0",
+      "to": "n2_0"
+    }
+  ],
+  "variables": {}
+}

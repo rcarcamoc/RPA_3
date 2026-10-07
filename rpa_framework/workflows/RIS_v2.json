@@ -1,0 +1,225 @@
+{
+  "id": "ris_v2",
+  "name": "RIS_v2",
+  "description": "Flujo de extracción RIS optimizado V2",
+  "nodes": [
+    {
+      "id": "n_start",
+      "type": "start",
+      "label": "Inicio",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -711.0,
+        "y": -559.0
+      }
+    },
+    {
+      "id": "n_check_db",
+      "type": "action",
+      "label": "Verifica conexion MySQL",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -476.0,
+        "y": -556.0
+      },
+      "script": "sistema\\check_db_connection.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_crea_registro",
+      "type": "action",
+      "label": "Crea registro DB V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -155.0,
+        "y": -512.0
+      },
+      "script": "sistema\\crear_registro_db_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_openrouter",
+      "type": "action",
+      "label": "Verifica OpenRouter",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -200.0,
+        "y": -363.0
+      },
+      "script": "sistema\\verifica_openrouter.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_vpn",
+      "type": "action",
+      "label": "Verifica VPN",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -233.0,
+        "y": -239.0
+      },
+      "script": "sistema\\verifica_vpn.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_inicio_ris",
+      "type": "action",
+      "label": "Inicia RIS V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -678.0,
+        "y": -373.0
+      },
+      "script": "web\\Inicio_ris_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_seleccion_int",
+      "type": "action",
+      "label": "Selecciona Integramedica V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -708.0,
+        "y": -206.0
+      },
+      "script": "web\\seleccion_int_2_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "custom",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_busca_doctor",
+      "type": "action",
+      "label": "Busca Doctor V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -663.0,
+        "y": -55.0
+      },
+      "script": "web\\busca_doctor_ultima_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_procesar_pdf",
+      "type": "action",
+      "label": "Procesar PDF Doctor V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -422.0,
+        "y": 112.0
+      },
+      "script": "web\\procesar_pdf_doctor_v2.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_detecta_patologia",
+      "type": "action",
+      "label": "Detecta Patologia IA V2",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": -179.0,
+        "y": 111.0
+      },
+      "script": "web\\detecta_patologia_ia_v2_opt.py",
+      "command": "",
+      "output_variable": "",
+      "command_type": "",
+      "program_path": "",
+      "process_name": ""
+    },
+    {
+      "id": "n_end",
+      "type": "end",
+      "label": "Fin",
+      "on_error": "stop",
+      "enabled": true,
+      "position": {
+        "x": 44.0,
+        "y": 101.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "n_start",
+      "to": "n_check_db"
+    },
+    {
+      "from": "n_check_db",
+      "to": "n_crea_registro"
+    },
+    {
+      "from": "n_crea_registro",
+      "to": "n_openrouter"
+    },
+    {
+      "from": "n_openrouter",
+      "to": "n_vpn"
+    },
+    {
+      "from": "n_vpn",
+      "to": "n_inicio_ris"
+    },
+    {
+      "from": "n_inicio_ris",
+      "to": "n_seleccion_int"
+    },
+    {
+      "from": "n_seleccion_int",
+      "to": "n_busca_doctor"
+    },
+    {
+      "from": "n_busca_doctor",
+      "to": "n_procesar_pdf"
+    },
+    {
+      "from": "n_procesar_pdf",
+      "to": "n_detecta_patologia"
+    },
+    {
+      "from": "n_detecta_patologia",
+      "to": "n_end"
+    }
+  ],
+  "variables": {}
+}
