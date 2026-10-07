@@ -21,6 +21,16 @@ import json
 import time
 from typing import Tuple, Dict, Any, Optional
 
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    import difflib
+    class _FuzzFallback:
+        @staticmethod
+        def ratio(s1, s2):
+            return difflib.SequenceMatcher(None, s1, s2).ratio() * 100
+    fuzz = _FuzzFallback()
+
 logger = logging.getLogger(__name__)
 
 # Cargar variables de entorno si están disponibles
@@ -74,7 +84,7 @@ class AuditorClinico:
         # Tokens de Lateralidad (sin letras individuales para evitar falsos positivos con códigos o columnas como 'Normal B')
         self.TOKENS_DER = {'derecho', 'derecha', 'der', 'dcha', 'dcho'}
         self.TOKENS_IZQ = {'izquierdo', 'izquierda', 'izq', 'izda'}
-        self.TOKENS_BILAT = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat'}
+        self.TOKENS_BILAT = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat', 'eell', 'ee11', 'ee55'}
 
     def obtener_modelos_auditor(self) -> list:
         """
@@ -209,11 +219,11 @@ class AuditorClinico:
 
         t_has_der = bool(t_words & self.TOKENS_DER)
         t_has_izq = bool(t_words & self.TOKENS_IZQ)
-        t_has_bilat = bool(t_words & self.TOKENS_BILAT)
+        t_has_bilat = bool(t_words & self.TOKENS_BILAT) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', t_norm)) or bool(re.search(r'\bamb(?:os|as)\b', t_norm))
 
         o_has_der = bool(o_words & self.TOKENS_DER)
         o_has_izq = bool(o_words & self.TOKENS_IZQ)
-        o_has_bilat = bool(o_words & self.TOKENS_BILAT)
+        o_has_bilat = bool(o_words & self.TOKENS_BILAT) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', o_norm)) or bool(re.search(r'\bamb(?:os|as)\b', o_norm))
 
         # Caso Bilateral
         if t_has_bilat:
@@ -246,13 +256,13 @@ class AuditorClinico:
         words = set(t.split())
 
         # TC / Tomografía
-        tc_tokens = {'tc', 'tac', 'ct', 'tomografia', 'angiotac', 'urotac', 'pielografia'}
-        if bool(words & tc_tokens) or re.search(r'\bangio\s*tc\b', t) or 'angiotc' in words:
+        tc_tokens = {'tc', 'tac', 'ct', 'tomografia', 'angiotac', 'angiotc', 'urotac', 'urolac', 'pielografia', 'pielotc', 'pielotac'}
+        if bool(words & tc_tokens) or re.search(r'\bangio\s*(?:tc|tac)\b', t) or re.search(r'\b(?:uro|pielo)\s*(?:tc|tac|lac)\b', t):
             return 'TC'
 
         # RM / Resonancia
-        rm_tokens = {'rm', 'rmn', 'mri', 'resonancia', 'colangioresonancia'}
-        if bool(words & rm_tokens) or re.search(r'\bcolangio\s*rm\b', t) or re.search(r'\bangio\s*rm\b', t):
+        rm_tokens = {'rm', 'rmn', 'rnm', 'rim', 'ram', 'mri', 'resonancia', 'colangioresonancia', 'colangiorm'}
+        if bool(words & rm_tokens) or re.search(r'\bcolangio\s*(?:rm|rmn|resonancia)\b', t) or re.search(r'\bangio\s*(?:rm|rmn)\b', t):
             return 'RM'
 
         # RX / Radiografía (Evaluado con prioridad ante indicadores claros de radiografía)
@@ -264,8 +274,9 @@ class AuditorClinico:
         # ECO / Ecotomografía
         # 'us' solo se considera si no hay indicadores de RX para evitar falsos positivos
         # con columnas/estados del PACS (ej: 'CRISM US N')
-        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'doppler'}
-        if bool(words & eco_tokens):
+        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'doppler', 'coppler', 'eoppler', 'dopler', 'doopler', 'oppler', 'cappler', 'goppler', 'toppler'}
+        has_eco = bool(words & eco_tokens) or any(fuzz.ratio('doppler', w) >= 70 for w in words)
+        if has_eco:
             return 'ECO'
         if 'us' in words and not has_rx:
             return 'ECO'
@@ -307,9 +318,12 @@ class AuditorClinico:
         es_fonasa_sombrilla = ('vascular periferica' in t_norm and 'partes blandas' in t_norm)
 
         # 2. ECO Doppler / Vascular vs. Simple
-        doppler_tokens = {'doppler', 'vascular', 'arterial', 'venosa', 'venoso', 'carotidea', 'carotideo', 'flujo'}
-        t_is_doppler = bool(t_words & doppler_tokens) and not es_fonasa_sombrilla
-        o_is_doppler = bool(o_words & doppler_tokens)
+        doppler_tokens = {'doppler', 'coppler', 'eoppler', 'dopler', 'doopler', 'oppler', 'cappler', 'goppler', 'toppler',
+                          'vascular', 'arterial', 'venosa', 'venoso', 'carotidea', 'carotideo', 'flujo'}
+        t_has_fuzzy_doppler = any(fuzz.ratio('doppler', w) >= 70 for w in t_words)
+        o_has_fuzzy_doppler = any(fuzz.ratio('doppler', w) >= 70 for w in o_words)
+        t_is_doppler = (bool(t_words & doppler_tokens) or t_has_fuzzy_doppler) and not es_fonasa_sombrilla
+        o_is_doppler = bool(o_words & doppler_tokens) or o_has_fuzzy_doppler
 
         if t_is_doppler and not o_is_doppler:
             return False, "Target exige ecografía DOPPLER/VASCULAR pero candidato es ecografía simple o articular"
@@ -318,9 +332,9 @@ class AuditorClinico:
             return False, "Candidato es ECO DOPPLER/VASCULAR pero target pide ecografía simple/partes blandas (Falso positivo tipo ID 595)"
 
         # 3. Colangio-RM (evaluar antes de angio para máxima especificidad)
-        colangio_tokens = {'colangio', 'colangioresonancia'}
-        t_is_colangio = bool(t_words & colangio_tokens) or bool(re.search(r'\bcolangio\s*rm\b', t_norm))
-        o_is_colangio = bool(o_words & colangio_tokens) or bool(re.search(r'\bcolangio\s*rm\b', o_norm))
+        colangio_tokens = {'colangio', 'colangioresonancia', 'colangiorm'}
+        t_is_colangio = bool(t_words & colangio_tokens) or bool(re.search(r'\bcolangio\s*(?:rm|rmn|resonancia)\b', t_norm))
+        o_is_colangio = bool(o_words & colangio_tokens) or bool(re.search(r'\bcolangio\s*(?:rm|rmn|resonancia)\b', o_norm))
 
         if t_is_colangio and not o_is_colangio:
             return False, "Target exige COLANGIO RESONANCIA pero candidato no especifica técnica colangio"
@@ -338,9 +352,9 @@ class AuditorClinico:
             return False, "Candidato es ANGIOGRAFIA especializada pero target pide estudio estándar no-angio"
 
         # 5. Urografía / Pielografía
-        pielo_tokens = {'pielografia', 'urografia', 'urotac'}
-        t_is_pielo = bool(t_words & pielo_tokens)
-        o_is_pielo = bool(o_words & pielo_tokens)
+        pielo_tokens = {'pielografia', 'urografia', 'urotac', 'urolac', 'pielotc', 'pielotac'}
+        t_is_pielo = bool(t_words & pielo_tokens) or bool(re.search(r'\b(?:pielo|uro)\s*(?:tc|tac|lac|grafia)\b', t_norm))
+        o_is_pielo = bool(o_words & pielo_tokens) or bool(re.search(r'\b(?:pielo|uro)\s*(?:tc|tac|lac|grafia)\b', o_norm))
 
         if t_is_pielo and not o_is_pielo:
             return False, "Target exige PIELOGRAFIA/UROGRAFIA pero candidato no cuenta con dicha técnica"
@@ -398,7 +412,7 @@ class AuditorClinico:
             res['eeii'].add('cadera')
         if bool(words & {'femur', 'muslo'}):
             res['eeii'].add('femur')
-        if bool(words & {'rodilla', 'rotula', 'rotulas', 'menisco', 'popliteo', 'sesamoideos'}):
+        if bool(words & {'rodilla', 'rotula', 'rotulas', 'menisco', 'popliteo', 'sesamoideos', 'patelofemoral', 'femoropatelar', 'patela'}):
             res['eeii'].add('rodilla')
         if bool(words & {'pierna', 'tibia', 'perone', 'pantorrilla', 'gastrocnemio'}):
             res['eeii'].add('pierna')
@@ -636,8 +650,14 @@ RESPONDE EXCLUSIVAMENTE EN JSON:
         ok_sub, razon_sub = self.auditar_submodalidad(target_diag, ocr_candidato)
         detalles['reglas_n1']['submodalidad'] = {'ok': ok_sub, 'razon': razon_sub}
         if not ok_sub:
-            logger.warning(f"🚫 [AUDITOR RECHAZA] Sub-modalidad: {razon_sub}")
-            return False, f"Rechazado por Auditor Clínico (Técnica/Sub-modalidad): {razon_sub}", detalles
+            if metodo == "llm":
+                logger.info(f"ℹ️ [AUDITOR LLM] Objeción de sub-modalidad superada por verificación semántica previa del LLM ({razon_sub}).")
+                ok_sub = True
+                detalles['reglas_n1']['submodalidad']['ok'] = True
+                detalles['reglas_n1']['submodalidad']['override_llm'] = True
+            else:
+                logger.warning(f"🚫 [AUDITOR RECHAZA] Sub-modalidad: {razon_sub}")
+                return False, f"Rechazado por Auditor Clínico (Técnica/Sub-modalidad): {razon_sub}", detalles
 
         # ── 4. Nivel 1: Región Anatómica ─────────────────────────────────────
         ok_anat, razon_anat = self.auditar_anatomia(target_diag, ocr_candidato)

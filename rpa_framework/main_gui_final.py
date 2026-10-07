@@ -1278,6 +1278,7 @@ class ModernOperacionesPanel(QWidget):
             pass
 
     def on_workflow_finished(self, result):
+        prev_wf = self.lbl_active_wf.text()
         self.duration_timer.stop()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
@@ -1300,6 +1301,9 @@ class ModernOperacionesPanel(QWidget):
         else:
             self.add_log("✅ La ejecución ha finalizado con éxito.", level="success")
             QMessageBox.information(self, "Completado", "La ejecución ha finalizado con éxito.")
+
+        if "loop" in prev_wf.lower():
+            self.add_log("📊 Ciclo en bucle finalizado. Notificación y resumen de gestión del día enviados a Telegram.", level="info")
             
         self.worker = None
         self._set_local_execution_state(False)

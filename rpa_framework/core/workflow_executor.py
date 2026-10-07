@@ -98,6 +98,12 @@ class WorkflowExecutor:
         self.active_process = None
         self.nested_executor = None
         
+        # Control de pausa/reanudación
+        self.is_paused = False
+        import threading
+        self.pause_event = threading.Event()
+        self.pause_event.set()
+        
         self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
         self.logger.log(f"   Variables iniciales: {self.context}")
         
@@ -169,8 +175,26 @@ class WorkflowExecutor:
                     except ImportError:
                         from rpa_framework.utils.telegram_manager import enviar_video_todos
 
+                    rec_id = None
+                    try:
+                        import mysql.connector
+                        _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                        _cur = _conn.cursor(dictionary=True)
+                        _cur.execute("SELECT id FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
+                        _r = _cur.fetchone()
+                        if not _r:
+                            _cur.execute("SELECT id FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
+                            _r = _cur.fetchone()
+                        if _r:
+                            rec_id = _r.get('id')
+                        _cur.close()
+                        _conn.close()
+                    except Exception:
+                        pass
+
                     screen_res = self.context.get("screen_resolution") or get_screen_resolution()
-                    caption = f"❌ <b>Error en Workflow: {raw_name}</b>\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(error_desc)[:250]}"
+                    id_txt = f"\n🆔 <b>ID Fila BD:</b> <code>{rec_id}</code>" if rec_id else ""
+                    caption = f"❌ <b>Error en Workflow: {raw_name}</b>{id_txt}\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(error_desc)[:250]}"
                     enviar_video_todos(saved_video_path, caption=caption)
                     self.logger.log("📱 Grabación de video del error enviada a Telegram")
                 except Exception as tel_e:
@@ -365,10 +389,27 @@ class WorkflowExecutor:
                 except Exception:
                     pass
     
+    def pause(self):
+        """Pausa la ejecución del workflow."""
+        self.is_paused = True
+        if hasattr(self, 'pause_event') and self.pause_event:
+            self.pause_event.clear()
+        self.logger.log("⏸️ Workflow pausado")
+
+    def resume(self):
+        """Reanuda la ejecución del workflow si estaba pausado."""
+        self.is_paused = False
+        if hasattr(self, 'pause_event') and self.pause_event:
+            self.pause_event.set()
+        self.logger.log("▶️ Workflow reanudado")
+
     def stop(self):
         """Detiene la ejecución del workflow"""
         self.should_stop = True
         self._external_stop = True  # Marcar como stop externo (usuario/Telegram)
+        self.is_paused = False
+        if hasattr(self, 'pause_event') and self.pause_event:
+            self.pause_event.set()
         self.logger.log("⏹️ Deteniendo workflow...")
         
         if self.screen_recorder:
@@ -768,7 +809,7 @@ class WorkflowExecutor:
                             rec_id = rec_chk['id']
                             cur_chk.execute("UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE id = %s", (f"[{node.label}] Error código {returncode}: {ultimo_log[:300]}", rec_id))
                             conn_chk.commit()
-                            enviar_alerta_todos(f"🚨 <b>ERROR en {node.label}</b>\n\n📋 <b>Problema:</b>\nScript terminó con código de error {returncode}.\n\n<code>{ultimo_log}</code>", record_id=rec_id)
+                            enviar_alerta_todos(f"🚨 <b>ERROR en {node.label}</b> (Fila #{rec_id})\n\n🆔 <b>ID Fila BD:</b> <code>{rec_id}</code>\n\n📋 <b>Problema:</b>\nScript terminó con código de error {returncode}.\n\n<code>{ultimo_log}</code>", record_id=rec_id)
                         cur_chk.close()
                         conn_chk.close()
                     except Exception as chk_e:
@@ -876,14 +917,47 @@ class WorkflowExecutor:
             is_infinite = True
             self.logger.log("   Modo: Infinito — solo se detiene con Stop manual")
 
+        # ── Notificación de Inicio a Telegram (Solo para Root Loop) ──
+        is_root_loop = not getattr(self, 'is_sub_workflow', False)
+        start_loop_ts = time.time()
+        motivo_fin = "completado"
+
+        if is_root_loop:
+            detalles_str = ""
+            if loop_type == 'count':
+                detalles_str = f"{iterations} iteraciones configuradas"
+            elif loop_type == 'timed':
+                detalles_str = f"{hours:g} horas programadas"
+            elif loop_type == 'infinite':
+                detalles_str = "Continuo infinito (hasta detención manual)"
+            elif loop_type == 'while':
+                detalles_str = f"Condición: {node.condition}"
+            elif loop_type == 'list':
+                detalles_str = f"Lista: {node.iterable} ({len(iterator)} elementos)"
+
+            try:
+                try:
+                    from utils.notificador_resumen import notificar_inicio_loop
+                except ImportError:
+                    from rpa_framework.utils.notificador_resumen import notificar_inicio_loop
+                notificar_inicio_loop(modo=loop_type, detalles=detalles_str, workflow_name=self.workflow.name)
+            except Exception as e_start_notif:
+                self.logger.log(f"⚠️ Error enviando notificación de inicio de loop a Telegram: {e_start_notif}")
+
         # ── 2. Ejecutar Loop ────────────────────────────────────────────
         idx = 0
+        consecutive_errors = 0
         MAX_ITER = 100_000  # Safety break para while (~83 días a 1 iter/min)
 
         while True:
+            # Si el loop está pausado, esperar hasta reanudación o parada externa
+            while not self.pause_event.is_set() and not self.should_stop:
+                time.sleep(0.5)
+
             # Solo se respeta el stop EXTERNO (botón Stop del usuario).
             # Se verifica ANTES de la iteración, nunca durante.
             if self.should_stop:
+                motivo_fin = "detenido"
                 self.logger.log("⏹️ Loop detenido por señal externa del usuario.")
                 break
 
@@ -893,6 +967,7 @@ class WorkflowExecutor:
             if is_timed:
                 remaining = deadline - time.time()
                 if remaining <= 0:
+                    motivo_fin = "tiempo_cumplido"
                     hours = float(getattr(node, 'duration_hours', 1.0))
                     self.logger.log(f"⏰ Tiempo completado ({hours:g}h). Loop finalizado.")
                     break
@@ -906,6 +981,7 @@ class WorkflowExecutor:
 
             elif is_while:
                 if idx >= MAX_ITER:
+                    motivo_fin = "limite_seguridad"
                     self.logger.log(f"⚠️ Límite de seguridad alcanzado ({MAX_ITER:,} iteraciones)")
                     break
                 try:
@@ -914,12 +990,14 @@ class WorkflowExecutor:
                     self.logger.log(f"⚠️ Error evaluando condición: {cond_err} — asumiendo True")
                     condition_result = True
                 if not condition_result:
+                    motivo_fin = "condicion_finalizada"
                     break
                 current_item = idx
 
             else:
                 # count / list
                 if idx >= len(iterator):
+                    motivo_fin = "completado"
                     break
                 current_item = iterator[idx]
 
@@ -942,6 +1020,9 @@ class WorkflowExecutor:
                 elif node.script:
                     self._run_script_internal(node)
 
+                # Iteración exitosa: reiniciar contador de errores consecutivos
+                consecutive_errors = 0
+
                 # Iteración exitosa: descartar video de esta iteración y reiniciar limpio para la siguiente
                 if self.enable_recording and not self.is_sub_workflow and not self.should_stop:
                     if self.screen_recorder:
@@ -957,6 +1038,59 @@ class WorkflowExecutor:
                         self.screen_recorder = None
                     break
                 self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
+
+                # Verificar si el fallo provino de actualiza_estado o si quedó en Aprobacion_Pendiente
+                es_aprobacion_pendiente = False
+                err_str = str(e).lower()
+                if "actualiza_estado" in err_str or "aprobacion_pendiente" in err_str:
+                    es_aprobacion_pendiente = True
+                else:
+                    try:
+                        import mysql.connector
+                        _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                        _cur = _conn.cursor(dictionary=True)
+                        _cur.execute("SELECT id, estado, observacion FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
+                        _ultimo = _cur.fetchone()
+                        _cur.close()
+                        _conn.close()
+                        if _ultimo:
+                            est_ult = str(_ultimo.get("estado") or "").lower()
+                            obs_ult = str(_ultimo.get("observacion") or "").lower()
+                            if "aprobacion_pendiente" in est_ult or "actualiza_estado" in obs_ult:
+                                es_aprobacion_pendiente = True
+                    except Exception:
+                        pass
+
+                if es_aprobacion_pendiente:
+                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente: NO suma al contador de errores de auto-pausa.")
+                else:
+                    consecutive_errors += 1
+                    self.logger.log(f"   ⚠️ Errores consecutivos en loop: {consecutive_errors}/2")
+                    if consecutive_errors >= 2:
+                        self.logger.log("   🚨 2 errores consecutivos detectados. Pausando loop y alertando a Telegram...")
+                        self.pause()
+                        try:
+                            from utils.telegram_manager import notificar_loop_pausado
+                            rec_id_loop = _ultimo.get("id") if (_ultimo and isinstance(_ultimo, dict)) else None
+                            notificar_loop_pausado(ultimo_error=str(e), workflow_name=self.workflow.name, iteracion=idx + 1, record_id=rec_id_loop)
+                        except Exception as e_notif:
+                            self.logger.log(f"   ⚠️ Error enviando alerta de pausa a Telegram: {e_notif}")
+
+                        # Esperar respuesta del usuario desde Telegram (Reanudar o Detener)
+                        while not self.pause_event.is_set() and not self.should_stop:
+                            time.sleep(0.5)
+
+                        if self.should_stop:
+                            motivo_fin = "detenido"
+                            self.logger.log("⏹️ Loop cancelado por el usuario durante la pausa.")
+                            if self.screen_recorder:
+                                self.screen_recorder.discard()
+                                self.screen_recorder = None
+                            break
+
+                        # Al reanudar:
+                        consecutive_errors = 0
+                        self.logger.log("   ▶️ Loop reanudado por el usuario. Continuando...")
 
                 # Guardar y enviar video del error de esta iteración
                 wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
@@ -974,6 +1108,7 @@ class WorkflowExecutor:
                     while time.time() < end_d and not self.should_stop:
                         time.sleep(0.2)
                     if self.should_stop:
+                        motivo_fin = "detenido"
                         break
 
             finally:
@@ -987,11 +1122,28 @@ class WorkflowExecutor:
                         self.should_stop = False
 
             if self.should_stop:
+                motivo_fin = "detenido"
                 break
 
             idx += 1
 
         self.logger.log(f"✅ Loop finalizado ({idx} iteraciones ejecutadas)")
+        if is_root_loop:
+            duracion_total = time.time() - start_loop_ts
+            self.logger.log("📢 Enviando notificación de fin de ciclo y resumen diario a Telegram...")
+            try:
+                try:
+                    from utils.notificador_resumen import notificar_fin_loop_con_resumen
+                except ImportError:
+                    from rpa_framework.utils.notificador_resumen import notificar_fin_loop_con_resumen
+                notificar_fin_loop_con_resumen(
+                    motivo=motivo_fin,
+                    iteraciones=idx,
+                    duracion_segundos=duracion_total,
+                    workflow_name=self.workflow.name
+                )
+            except Exception as e_fin_notif:
+                self.logger.log(f"⚠️ Error enviando notificación de fin de loop a Telegram: {e_fin_notif}")
         return self.workflow.get_next_node(node.id)
 
     def _run_workflow_internal(self, wf_path: str):

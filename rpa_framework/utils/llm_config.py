@@ -66,16 +66,15 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "nvidia/nemotron-3-super-120b-a12b",                      # Primario - Validado OK
-   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 1 - Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 2 - Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 3 - Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 4 - Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 5 - Validado OK
-   "stealth/space-bunny-alpha",                              # Fallback 6 - Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 7 - Validado OK
-   "dots-studio/dots-3-note-preview:free",                   # Fallback 8 - Validado OK
-   "qwen/qwen3.8-27b:free",                                  # Fallback 9 - Validado OK
+   "nvidia/nemotron-parse-2.0",                              # Primario — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
+   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 2 — Validado OK
+   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 3 — Validado OK
+   "cohere/north-mini-code:free",                            # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 5 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 6 — Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 7 — Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 8 — Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
@@ -83,9 +82,8 @@ OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "stealth/space-bunny-alpha",
-    "dots-studio/dots-3-note-preview:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "meta/llama-3.2-90b-vision-instruct",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

@@ -359,20 +359,20 @@ class BusquedaTextOnly:
         target_norm = self.normalize_text(text_target)
         ocr_norm = self.normalize_text(text_ocr)
 
-        der_tokens = {'derecho', 'derecha', 'der', 'dcha'}
-        izq_tokens = {'izquierdo', 'izquierda', 'izq'}
-        bilat_tokens = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat'}
+        der_tokens = {'derecho', 'derecha', 'der', 'dcha', 'dcho'}
+        izq_tokens = {'izquierdo', 'izquierda', 'izq', 'izda'}
+        bilat_tokens = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat', 'eell', 'ee11', 'ee55'}
 
         target_words = set(target_norm.split())
         ocr_words = set(ocr_norm.split())
 
         target_has_der = bool(target_words & der_tokens)
         target_has_izq = bool(target_words & izq_tokens)
-        target_has_bilat = bool(target_words & bilat_tokens)
+        target_has_bilat = bool(target_words & bilat_tokens) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', target_norm)) or bool(re.search(r'\bamb(?:os|as)\b', target_norm))
 
         ocr_has_der = bool(ocr_words & der_tokens)
         ocr_has_izq = bool(ocr_words & izq_tokens)
-        ocr_has_bilat = bool(ocr_words & bilat_tokens)
+        ocr_has_bilat = bool(ocr_words & bilat_tokens) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', ocr_norm)) or bool(re.search(r'\bamb(?:os|as)\b', ocr_norm))
 
         # Caso Bilateral
         if target_has_bilat:
@@ -418,19 +418,30 @@ class BusquedaTextOnly:
             (r'\bpa\s*lat\b', 'ap lateral'),
             (r'\bap-lat\b', 'ap lateral'),
             (r'\bpa-lat\b', 'ap lateral'),
+            (r'\b(?:pa|ap)\s*y\s*lat(?:eral)?\b', 'ap lateral'),
             (r'\br\s*m\b', 'resonancia magnetica'),
             (r'\brmn\b', 'resonancia magnetica'),
             (r'\brnm\b', 'resonancia magnetica'),
             (r'\brim\b', 'resonancia magnetica'),
+            (r'\bram\b', 'resonancia magnetica'),
+            (r'\bmri\b', 'resonancia magnetica'),
             (r'\bt\s*c\b', 'tomografia computada'),
             (r'\btac\b', 'tomografia computada'),
+            (r'\bct\b', 'tomografia computada'),
             (r'\beco\b', 'ecotomografia'),
             (r'\becografia\b', 'ecotomografia'),
-            (r'\bee\s*ii\b', 'extremidades inferiores'),
-            (r'\beeii\b', 'extremidades inferiores'),
-            (r'\bee\s*ss\b', 'extremidades superiores'),
-            (r'\beess\b', 'extremidades superiores'),
+            (r'\becoo\b', 'ecotomografia'),
+            (r'\beoo\b', 'ecotomografia'),
+            (r'\b(?:coppler|eoppler|dopler|doopler|oppler|cappler|goppler|toppler)\b', 'doppler'),
+            (r'\b(?:urolac|urotac|uro-tac)\b', 'urotac'),
+            (r'\b(?:pielotc|pielotac|pielo-tc|pielografia)\b', 'pielografia'),
+            (r'\bcolangio\s*rm\b|\bcolangiorm\b|\bcolangioresonancia\b', 'colangioresonancia'),
+            (r'\bee\s*(?:ii|ll|11|li|il)\b', 'extremidades inferiores'),
+            (r'\b(?:eeii|eell|ee11)\b', 'extremidades inferiores'),
+            (r'\bee\s*(?:ss|55)\b', 'extremidades superiores'),
+            (r'\b(?:eess|ee55)\b', 'extremidades superiores'),
             (r'\brot\b', 'rotula'),
+            (r'\bfemoropatelar\b', 'patelofemoral'),
         ]
         for patron, reemplazo in reemplazos:
             t = re.sub(patron, reemplazo, t)
@@ -605,49 +616,90 @@ class BusquedaTextOnly:
     def _pre_filter_llm(self, ocr_text: str, target_diag: str) -> bool:
         """
         Pre-filtro anti-alucinación y seguridad clínica:
-        1. Valida concordancia clínica (lateralidad, modalidad, submodalidad y anatomía)
-           a través del Auditor Clínico en memoria (0 ms).
-        2. Devuelve True (proceder con LLM) sólo si el texto OCR tiene
-           al menos MIN_FUZZY_FOR_LLM de similitud con el target.
+        1. Calcula la similitud fuzzy y médica (fila completa y fragmento normalizado).
+        2. Si la similitud supera el 70% de confianza, se deriva al LLM para revisión médica experta,
+           incluso si fue objetado inicialmente por el filtro del auditor determinista
+           (salvo conflicto explícito de lateralidad opuesta).
+        3. Si la similitud es < 70%, exige aprobación estricta del Auditor Clínico
+           y al menos MIN_FUZZY_FOR_LLM.
         """
-        # 1. Auditoría Clínica Determinista de Nivel 1
-        if self.auditor:
-            aprobado, razon, _ = self.auditor.auditar(target_diag, ocr_text, metodo='pre_filtro_llm', requiere_llm=False)
-            if not aprobado:
-                logger.warning(
-                    f"🚫 Pre-filtro RECHAZA llamar al LLM: {razon} "
-                    f"(target='{target_diag}' | ocr='{ocr_text[:60]}')."
-                )
-                return False
-        else:
-            # Fallback si auditor no estuviera instanciado
-            if not self.verificar_lateralidad(target_diag, ocr_text):
-                logger.warning(
-                    f"🚫 Pre-filtro RECHAZA llamar al LLM: Incompatibilidad de lateralidad anatómica "
-                    f"entre target='{target_diag}' y ocr='{ocr_text[:60]}'."
-                )
-                return False
-
         target_norm = self.normalize_text(target_diag)
         ocr_norm    = self.normalize_text(ocr_text)
 
         score_partial = fuzz.partial_ratio(target_norm, ocr_norm)
         score_token   = fuzz.token_set_ratio(target_norm, ocr_norm)
-        best_score    = max(score_partial, score_token)
+        score_full    = max(score_partial, score_token)
+
+        frag_estudio    = self.extraer_fragmento_estudio(ocr_text)
+        frag_med_norm   = self.normalizar_terminologia_medica(frag_estudio)
+        target_med_norm = self.normalizar_terminologia_medica(target_diag)
+        score_frag      = max(
+            fuzz.ratio(target_med_norm, frag_med_norm),
+            fuzz.token_set_ratio(target_med_norm, frag_med_norm),
+            fuzz.partial_ratio(target_med_norm, frag_med_norm)
+        ) if frag_med_norm else 0
+
+        confianza = max(score_full, score_frag)
 
         logger.info(
             f"🔍 Pre-filtro LLM | target='{target_diag}' | ocr='{ocr_text[:60]}' "
-            f"| partial={score_partial} token={score_token} → umbral={MIN_FUZZY_FOR_LLM}"
+            f"| full={score_full} frag={score_frag} → confianza={confianza:.1f}% (min={MIN_FUZZY_FOR_LLM}%)"
         )
 
-        if best_score < MIN_FUZZY_FOR_LLM:
-            logger.warning(
-                f"🚫 Pre-filtro RECHAZA llamar al LLM (score={best_score} < {MIN_FUZZY_FOR_LLM}). "
-                f"Los textos son demasiado diferentes para ser el mismo examen."
+        # 1. Auditoría Clínica Determinista de Nivel 1
+        auditor_aprobado = True
+        auditor_razon = "OK"
+        if self.auditor:
+            auditor_aprobado, auditor_razon, _ = self.auditor.auditar(
+                target_diag, ocr_text, metodo='pre_filtro_llm', requiere_llm=False
             )
-            return False
+        else:
+            if not self.verificar_lateralidad(target_diag, ocr_text):
+                auditor_aprobado = False
+                auditor_razon = "Incompatibilidad de lateralidad anatómica"
 
-        return True
+        # Caso A: El auditor aprueba
+        if auditor_aprobado:
+            if confianza < MIN_FUZZY_FOR_LLM:
+                logger.warning(
+                    f"🚫 Pre-filtro RECHAZA llamar al LLM (score={confianza:.1f} < {MIN_FUZZY_FOR_LLM}). "
+                    f"Los textos son demasiado diferentes para ser el mismo examen."
+                )
+                return False
+            return True
+
+        # Caso B: El auditor rechaza, pero la confianza es >= 70%
+        # Se deriva al LLM para una revisión médica experta
+        if confianza >= 70:
+            # Control de seguridad crítico: jamás permitir cruce de lateralidad opuesta directa
+            t_words = set(target_norm.split())
+            o_words = set(ocr_norm.split())
+            der_set = {'derecho', 'derecha', 'der', 'dcha', 'dcho'}
+            izq_set = {'izquierdo', 'izquierda', 'izq', 'izda'}
+            t_es_der = bool(t_words & der_set) and not bool(t_words & izq_set)
+            t_es_izq = bool(t_words & izq_set) and not bool(t_words & der_set)
+            o_es_der = bool(o_words & der_set) and not bool(o_words & izq_set)
+            o_es_izq = bool(o_words & izq_set) and not bool(o_words & der_set)
+
+            if (t_es_der and o_es_izq) or (t_es_izq and o_es_der):
+                logger.warning(
+                    f"🚫 Pre-filtro RECHAZA llamar al LLM por conflicto crítico de lateralidad opuesta: "
+                    f"target='{target_diag}' vs ocr='{ocr_text[:60]}'."
+                )
+                return False
+
+            logger.info(
+                f"🤖 [DERIVACIÓN LLM >70%] Confianza={confianza:.1f}% >= 70%. "
+                f"Candidato no pasó filtro del auditor ({auditor_razon}), pero se deriva al LLM para revisión médica experta."
+            )
+            return True
+
+        # Caso C: Rechazado por auditor y confianza < 70%
+        logger.warning(
+            f"🚫 Pre-filtro RECHAZA llamar al LLM: {auditor_razon} y confianza={confianza:.1f}% < 70% "
+            f"(target='{target_diag}' | ocr='{ocr_text[:60]}')."
+        )
+        return False
 
     def call_llm_text_verification(self, ocr_text, target_diag, id_registro=0):
         """
@@ -1217,16 +1269,24 @@ RESPONDE SOLO EN FORMATO JSON:
         valid_llm_candidates = []
         for cand in candidates:
             ocr_text_cand = cand.get('full_text', "")
-            # Validar lateralidad clínica antes de considerar al LLM
-            if not self.verificar_lateralidad(target_diag, ocr_text_cand):
-                continue
-            # Pre-filtro fuzzy básico
+            # Pre-filtro clínico y fuzzy (incluye derivación al LLM si confianza >= 70%)
             if not self._pre_filter_llm(ocr_text_cand, target_diag):
                 continue
+
             t_norm = self.normalize_text(target_diag)
             o_norm = self.normalize_text(ocr_text_cand)
-            score = max(fuzz.partial_ratio(t_norm, o_norm), fuzz.token_set_ratio(t_norm, o_norm))
-            cand['_fuzzy_score'] = score
+            score_full = max(fuzz.partial_ratio(t_norm, o_norm), fuzz.token_set_ratio(t_norm, o_norm))
+
+            frag_estudio = self.extraer_fragmento_estudio(ocr_text_cand)
+            frag_med_norm = self.normalizar_terminologia_medica(frag_estudio)
+            target_med_norm = self.normalizar_terminologia_medica(target_diag)
+            score_frag = max(
+                fuzz.ratio(target_med_norm, frag_med_norm),
+                fuzz.token_set_ratio(target_med_norm, frag_med_norm),
+                fuzz.partial_ratio(target_med_norm, frag_med_norm)
+            ) if frag_med_norm else 0
+
+            cand['_fuzzy_score'] = max(score_full, score_frag)
             valid_llm_candidates.append(cand)
 
         # Ordenar de mayor a menor similitud antes de llamar al LLM
@@ -1255,10 +1315,16 @@ RESPONDE SOLO EN FORMATO JSON:
                     )
                     if self.vf: self.vf.hide_persistent_message("audit")
                     if not aprobado:
-                        logger.warning(f"🛡️ [AUDITOR RECHAZA] Match LLM descartado por auditoría clínica: {razon}")
-                        continue
+                        fuzzy_c = cand.get('_fuzzy_score', 0)
+                        # Si fue derivado para revisión con confianza >= 70% y el LLM lo aprobó explícitamente:
+                        if fuzzy_c >= 70 and "IZQUIERDO" not in razon and "DERECHO" not in razon:
+                            logger.info(f"✅ [REVISIÓN LLM VALIDADA] Candidato ({fuzzy_c:.1f}%) aprobado por LLM superando objeción determinista del auditor: {razon}")
+                            aprobado = True
+                        else:
+                            logger.warning(f"🛡️ [AUDITOR RECHAZA] Match LLM descartado por auditoría clínica: {razon}")
+                            continue
 
-                logger.info(f"✅ MATCH LLM CONFIRMADO Y AUDITADO (Fase 2) → clic en Y={int(y_click)}")
+                logger.info(f"✅ MATCH LLM CONFIRMADO (Fase 2) → clic en Y={int(y_click)}")
                 self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
                 return True, ''
             else:

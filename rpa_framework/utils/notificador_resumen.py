@@ -98,8 +98,11 @@ def obtener_datos(fecha_inicio, fecha_fin):
 def is_success(e):
     return any(k in str(e).lower() for k in ['terminado', 'finalizado', 'éxito', 'exito'])
 
+def is_pending_approval(e):
+    return any(k in str(e).lower() for k in ['aprobacion_pendiente', 'pendiente de aprobación', 'pending'])
+
 def is_error(e):
-    return any(k in str(e).lower() for k in ['error', 'fallo', 'falla', 'falló'])
+    return any(k in str(e).lower() for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e)
 
 def is_in_progress(e):
     return any(k in str(e).lower() for k in ['proceso'])
@@ -126,18 +129,21 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         conteo_hora = df_hora['estado'].value_counts()
         exitos_h = sum(cnt for st, cnt in conteo_hora.items() if is_success(st))
         proceso_h = sum(cnt for st, cnt in conteo_hora.items() if is_in_progress(st))
+        pendientes_h = sum(cnt for st, cnt in conteo_hora.items() if is_pending_approval(st))
         errores_h = sum(cnt for st, cnt in conteo_hora.items() if is_error(st))
         
         if exitos_h > 0:
             texto += f"• ✅ Procesados con éxito: <b>{exitos_h}</b>\n"
         if proceso_h > 0:
             texto += f"• ⏳ En ejecución: <b>{proceso_h}</b>\n"
+        if pendientes_h > 0:
+            texto += f"• ⚠️ Aprobación pendiente: <b>{pendientes_h}</b>\n"
         if errores_h > 0:
             texto += f"• ❌ Con incidencias: <b>{errores_h}</b>\n"
             
         # Otros estados no estándar
         for st, cnt in conteo_hora.items():
-            if not (is_success(st) or is_in_progress(st) or is_error(st)):
+            if not (is_success(st) or is_in_progress(st) or is_error(st) or is_pending_approval(st)):
                 texto += f"• ℹ️ {st}: <b>{cnt}</b>\n"
                 
         texto += f"👉 <i>Total en la hora: {total_hora} casos gestionados</i>\n"
@@ -149,34 +155,39 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
     else:
         conteo_dia = df_dia['estado'].value_counts()
         exitos_d = sum(cnt for st, cnt in conteo_dia.items() if is_success(st))
+        pendientes_d = sum(cnt for st, cnt in conteo_dia.items() if is_pending_approval(st))
         errores_d = sum(cnt for st, cnt in conteo_dia.items() if is_error(st))
         
         texto += f"• 🎯 Total procesados hoy: <b>{total_dia} casos</b>\n"
+        if exitos_d > 0:
+            texto += f"• ✅ Completados 100%: <b>{exitos_d} casos</b>\n"
+        if pendientes_d > 0:
+            texto += f"• ⏳ Aprobación pendiente: <b>{pendientes_d} casos</b> <i>(completados por RPA)</i>\n"
         
-        base_tasa = exitos_d + errores_d
-        tasa = (exitos_d / base_tasa * 100) if base_tasa > 0 else 100.0
+        completados_d = exitos_d + pendientes_d
+        base_tasa = completados_d + errores_d
+        tasa = (completados_d / base_tasa * 100) if base_tasa > 0 else 100.0
         tasa_emoji = "🟢" if tasa >= 95.0 else ("🟡" if tasa >= 80.0 else "🔴")
-        texto += f"• {tasa_emoji} Tasa de efectividad: <b>{tasa:.1f}%</b>\n"
+        texto += f"• {tasa_emoji} Tasa de efectividad: <b>{tasa:.1f}%</b> ({completados_d} de {base_tasa} gestionados)\n"
         
-        # Desglose de errores y alertas pendientes
-        pendientes = 0
+        # Desglose de errores y alertas
+        sin_gestionar = 0
         if errores_d > 0 and 'estado_notificacion' in df_dia.columns:
-            df_err = df_dia[df_dia['estado'].astype(str).str.lower().str.contains('error|fall', na=False)]
-            pendientes = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
-            gestionados = len(df_err[df_err['estado_notificacion'] == 'Gestionado'])
-            if pendientes > 0:
-                texto += f"• ⚠️ Errores acumulados: <b>{errores_d}</b> (🔴 <b>{pendientes}</b> pendiente{'s' if pendientes > 1 else ''} de revisión)\n"
+            df_err = df_dia[df_dia['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df_dia['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending', na=False)]
+            sin_gestionar = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
+            if sin_gestionar > 0:
+                texto += f"• ❌ Errores técnicos: <b>{errores_d}</b> (🔴 <b>{sin_gestionar}</b> alerta{'s' if sin_gestionar > 1 else ''} sin gestionar en Telegram)\n"
             else:
-                texto += f"• ⚠️ Errores acumulados: <b>{errores_d}</b> (🟢 Todos gestionados)\n"
+                texto += f"• ❌ Errores técnicos: <b>{errores_d}</b> (🟢 Todas gestionadas)\n"
         elif errores_d == 0:
-            texto += "• ⚠️ Alertas pendientes: <b>Ninguna</b> ✨\n"
+            texto += "• 🟢 Errores técnicos: <b>0</b> ✨\n"
             
     # Estado Operativo general
     texto += "\n"
     if total_dia == 0:
         texto += "💡 <b>Estado:</b> 🟢 <i>Sistema listo para operar</i>"
-    elif 'pendientes' in locals() and pendientes > 0:
-        texto += f"💡 <b>Estado:</b> ⚠️ <i>Atención requerida ({pendientes} alerta{'s' if pendientes > 1 else ''} pendiente{'s' if pendientes > 1 else ''})</i>"
+    elif 'sin_gestionar' in locals() and sin_gestionar > 0:
+        texto += f"💡 <b>Estado:</b> ⚠️ <i>Atención requerida ({sin_gestionar} alerta{'s' if sin_gestionar > 1 else ''} sin gestionar en Telegram)</i>"
     elif total_hora > 0 and any(is_error(st) for st in df_hora['estado'].unique()):
         texto += "💡 <b>Estado:</b> ⚠️ <i>Incidencia en la última hora</i>"
     elif total_hora == 0:
@@ -196,25 +207,30 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
     total_hora = len(df_hora) if df_hora is not None else 0
     
     exitos_d = sum(1 for e in df_dia['estado'] if is_success(e)) if total_dia > 0 else 0
+    pendientes_d = sum(1 for e in df_dia['estado'] if is_pending_approval(e)) if total_dia > 0 else 0
     errores_d = sum(1 for e in df_dia['estado'] if is_error(e)) if total_dia > 0 else 0
     
-    base_tasa = exitos_d + errores_d
-    tasa_exito = (exitos_d / base_tasa * 100) if base_tasa > 0 else 100.0
+    completados_d = exitos_d + pendientes_d
+    base_tasa = completados_d + errores_d
+    tasa_exito = (completados_d / base_tasa * 100) if base_tasa > 0 else 100.0
     
     # 4 Tarjetas KPI superiores
     ventana_label = periodo_str.split(" a ")[0] if " a " in periodo_str else periodo_str
+    subt_efectividad = f"{exitos_d} OK • {pendientes_d} pend." if pendientes_d > 0 else f"{completados_d} completados hoy"
+    subt_procesados = f"{exitos_d} OK • {pendientes_d} pend." if pendientes_d > 0 else f"{completados_d} exitosos"
+
     if is_daily:
         kpis = [
             ('TOTAL DÍA', f'{total_dia}', 'Casos jornada', '#0f172a', '#ffffff', '#e2e8f0'),
-            ('PROCESADOS', f'{exitos_d}', 'Exitosos', '#0284c7', '#f0f9ff', '#bae6fd'),
-            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', f'{exitos_d} completados', '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
+            ('PROCESADOS', f'{completados_d}', subt_procesados, '#0284c7', '#f0f9ff', '#bae6fd'),
+            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
             ('INCIDENCIAS', f'{errores_d}', 'Alertas jornada' if errores_d > 0 else 'Sin alertas activas', '#b91c1c' if errores_d > 0 else '#475569', '#fef2f2' if errores_d > 0 else '#ffffff', '#fecaca' if errores_d > 0 else '#e2e8f0')
         ]
     else:
         kpis = [
             ('TOTAL DÍA', f'{total_dia}', 'Casos acumulados', '#0f172a', '#ffffff', '#e2e8f0'),
             ('ÚLTIMA HORA', f'{total_hora}', f'Ventana {ventana_label}', '#0284c7', '#f0f9ff', '#bae6fd'),
-            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', f'{exitos_d} exitosos hoy', '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
+            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
             ('INCIDENCIAS', f'{errores_d}', 'Alertas hoy' if errores_d > 0 else 'Sin alertas activas', '#b91c1c' if errores_d > 0 else '#475569', '#fef2f2' if errores_d > 0 else '#ffffff', '#fecaca' if errores_d > 0 else '#e2e8f0')
         ]
     
@@ -253,10 +269,10 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
         
         def get_col_color(c):
             cl = str(c).lower()
+            if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return '#f59e0b' # Ámbar
             if 'error' in cl or 'fall' in cl: return '#ef4444' # Rojo coral
             if any(x in cl for x in ['terminado', 'finalizado', 'exito', 'éxito']): return '#10b981' # Verde esmeralda
             if 'proceso' in cl: return '#0ea5e9' # Azul cielo
-            if 'pending' in cl: return '#f59e0b' # Ámbar
             return '#94a3b8' # Gris pizarra
             
         colors = [get_col_color(col) for col in agrupado.columns]
@@ -264,10 +280,10 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
         # Mapear nombres de columnas a etiquetas amigables para la leyenda
         def format_legend_label(col_name):
             cl = str(col_name).lower()
+            if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return 'Pendiente'
             if any(x in cl for x in ['terminado', 'finalizado', 'éxito', 'exito']): return 'Exitoso'
             if 'proceso' in cl: return 'En Proceso'
             if 'error' in cl or 'fall' in cl: return 'Error'
-            if 'pending' in cl: return 'Pendiente'
             return str(col_name)
             
         agrupado.columns = [format_legend_label(c) for c in agrupado.columns]
@@ -323,20 +339,25 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     conteo_estados = df['estado'].value_counts()
     
     exitos = sum(cnt for st, cnt in conteo_estados.items() if is_success(st))
+    pendientes = sum(cnt for st, cnt in conteo_estados.items() if is_pending_approval(st))
     errores = sum(cnt for st, cnt in conteo_estados.items() if is_error(st))
-    base_tasa = exitos + errores
-    tasa = (exitos / base_tasa * 100) if base_tasa > 0 else 100.0
+    completados = exitos + pendientes
+    base_tasa = completados + errores
+    tasa = (completados / base_tasa * 100) if base_tasa > 0 else 100.0
     tasa_emoji = "🟢" if tasa >= 95.0 else ("🟡" if tasa >= 80.0 else "🔴")
     
     texto = f"📊 <b>Resumen {tipo_reporte}</b>\n"
     texto += f"📅 <i>{periodo_str}</i>\n\n"
     texto += f"🎯 <b>Total Gestionado:</b> <b>{total} casos</b>\n"
-    texto += f"{tasa_emoji} <b>Tasa de Efectividad:</b> <b>{tasa:.1f}%</b>\n\n"
+    texto += f"{tasa_emoji} <b>Tasa de Efectividad:</b> <b>{tasa:.1f}%</b> ({completados} de {base_tasa})\n\n"
     texto += "📋 <b>Desglose por Estado:</b>\n"
     
     if exitos > 0:
-        texto += f"• ✅ Procesados con éxito: <b>{exitos}</b>\n"
+        texto += f"• ✅ Completados 100%: <b>{exitos}</b>\n"
     
+    if pendientes > 0:
+        texto += f"• ⏳ Aprobación Pendiente: <b>{pendientes}</b> <i>(completados por RPA)</i>\n"
+        
     proceso = sum(cnt for st, cnt in conteo_estados.items() if is_in_progress(st))
     if proceso > 0:
         texto += f"• ⏳ En Proceso: <b>{proceso}</b>\n"
@@ -344,16 +365,16 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     if errores > 0:
         texto += f"• ❌ Con Incidencias / Error: <b>{errores}</b>\n"
         if 'estado_notificacion' in df.columns:
-            df_err = df[df['estado'].astype(str).str.lower().str.contains('error|fall', na=False)]
-            pendientes = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
+            df_err = df[df['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending', na=False)]
+            sin_gestionar = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
             gestionados = len(df_err[df_err['estado_notificacion'] == 'Gestionado'])
-            if pendientes > 0:
-                texto += f"   └ 🔴 <b>{pendientes}</b> pendiente{'s' if pendientes > 1 else ''} de revisión\n"
+            if sin_gestionar > 0:
+                texto += f"   └ 🔴 <b>{sin_gestionar}</b> alerta{'s' if sin_gestionar > 1 else ''} sin gestionar en Telegram\n"
             if gestionados > 0:
                 texto += f"   └ 🟢 <b>{gestionados}</b> gestionado{'s' if gestionados > 1 else ''}\n"
                 
     for st, cnt in conteo_estados.items():
-        if not (is_success(st) or is_in_progress(st) or is_error(st)):
+        if not (is_success(st) or is_in_progress(st) or is_error(st) or is_pending_approval(st)):
             texto += f"• ℹ️ {st}: <b>{cnt}</b>\n"
                 
     return texto
@@ -445,6 +466,128 @@ def enviar_reporte_daily():
                 os.remove(img_dashboard)
             except Exception:
                 pass
+
+def notificar_inicio_loop(modo: str = "count", detalles: str = "", workflow_name: str = "loop"):
+    """
+    Envía notificación por Telegram cuando inicia un ciclo en bucle de ejecución.
+    """
+    now = datetime.datetime.now()
+    hora_str = now.strftime("%H:%M:%S")
+    fecha_str = now.strftime("%d/%m/%Y")
+    
+    modo_map = {
+        "count": "Por Cantidad de Ciclos",
+        "timed": "Por Tiempo Programado",
+        "infinite": "Continuo Infinito",
+        "while": "Condicional (While)",
+        "list": "Por Lista de Datos"
+    }
+    modo_amigable = modo_map.get(str(modo).lower(), modo)
+    
+    lineas = [
+        "🔄 <b>CICLO EN BUCLE INICIADO</b>",
+        "",
+        f"🤖 <b>Workflow:</b> <code>{workflow_name}</code>",
+        f"⚙️ <b>Modo:</b> {modo_amigable}",
+    ]
+    if detalles:
+        lineas.append(f"📌 <b>Configuración:</b> {detalles}")
+        
+    lineas.extend([
+        f"🕒 <b>Inicio:</b> <code>{hora_str}</code> (<i>{fecha_str}</i>)",
+        "",
+        "ℹ️ <i>El robot ejecutará las iteraciones configuradas. Al finalizar el bucle se enviará el resumen de gestión del día.</i>"
+    ])
+    
+    mensaje = "\n".join(lineas)
+    try:
+        telegram_manager.enviar_mensaje_todos(mensaje)
+    except Exception as e:
+        print(f"Error enviando notificación de inicio de loop a Telegram: {e}")
+
+def notificar_fin_loop_con_resumen(motivo: str = "completado", iteraciones: int = 0, duracion_segundos: float = 0, workflow_name: str = "loop"):
+    """
+    Envía notificación por Telegram cuando termina el bucle de ejecución,
+    acompañada de un resumen consolidado y dashboard gráfico de la gestión del día.
+    """
+    now = datetime.datetime.now()
+    hora_fin_str = now.strftime("%H:%M:%S")
+    fecha_fin_str = now.strftime("%d/%m/%Y")
+    
+    # Formatear duración transcurrida
+    if duracion_segundos >= 3600:
+        h = int(duracion_segundos // 3600)
+        m = int((duracion_segundos % 3600) // 60)
+        s = int(duracion_segundos % 60)
+        dur_str = f"{h}h {m}m {s}s"
+    elif duracion_segundos >= 60:
+        m = int(duracion_segundos // 60)
+        s = int(duracion_segundos % 60)
+        dur_str = f"{m}m {s}s"
+    else:
+        dur_str = f"{int(duracion_segundos)}s"
+        
+    motivo_lower = str(motivo).lower()
+    if any(k in motivo_lower for k in ["detenido", "stop"]):
+        header = "🛑 <b>CICLO EN BUCLE DETENIDO</b>"
+        resultado_desc = "Detenido por solicitud del usuario / señal externa"
+    elif any(k in motivo_lower for k in ["tiempo", "timed"]):
+        header = "⏰ <b>CICLO EN BUCLE FINALIZADO (TIEMPO CUMPLIDO)</b>"
+        resultado_desc = "Tiempo programado cumplido con éxito"
+    elif any(k in motivo_lower for k in ["error", "fall"]):
+        header = "❌ <b>CICLO EN BUCLE INTERRUMPIDO POR ERROR</b>"
+        resultado_desc = f"Interrupción: {motivo}"
+    else:
+        header = "🏁 <b>CICLO EN BUCLE FINALIZADO</b>"
+        resultado_desc = "Todas las iteraciones completadas con éxito"
+        
+    # Obtener datos del día en curso (de 00:00:00 a ahora)
+    fecha_inicio_d = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    fecha_fin_d = now
+    df_dia = obtener_datos(fecha_inicio_d, fecha_fin_d)
+    
+    # Texto de finalización de ciclo
+    msg_fin = (
+        f"{header}\n\n"
+        f"🤖 <b>Workflow:</b> <code>{workflow_name}</code>\n"
+        f"📋 <b>Resultado:</b> {resultado_desc}\n"
+        f"🔄 <b>Iteraciones ejecutadas:</b> <b>{iteraciones}</b>\n"
+        f"⏱️ <b>Duración del ciclo:</b> <code>{dur_str}</code>\n"
+        f"🕒 <b>Hora fin:</b> <code>{hora_fin_str}</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    
+    # Resumen de gestión del día
+    resumen_gestion = generar_texto_resumen_simple(df_dia, "Gestión del Día", fecha_fin_str)
+    texto_completo = msg_fin + resumen_gestion
+    
+    # Generar Dashboard Gráfico Ejecutivo
+    img_dashboard = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"dashboard_fin_loop_{int(time.time())}.png")
+    foto_enviada = False
+    
+    try:
+        df_vacio = pd.DataFrame(columns=['inicio', 'estado', 'estado_notificacion'])
+        periodo_chart = f"Cierre Ciclo ({fecha_fin_str})"
+        if generar_dashboard_ejecutivo(df_vacio, df_dia, periodo_chart, img_dashboard, is_daily=True):
+            if len(texto_completo) <= 1024:
+                telegram_manager.enviar_foto_todos(img_dashboard, caption=texto_completo)
+                foto_enviada = True
+            else:
+                caption_breve = f"{header}\n\n📊 <b>Resumen Gestión del Día</b> (<i>{fecha_fin_str}</i>)\n🔄 {iteraciones} iteraciones • ⏱️ {dur_str}"
+                telegram_manager.enviar_foto_todos(img_dashboard, caption=caption_breve)
+                telegram_manager.enviar_mensaje_todos(texto_completo)
+                foto_enviada = True
+    except Exception as e_dash:
+        print(f"Error generando dashboard gráfico de fin de loop: {e_dash}")
+    finally:
+        if os.path.exists(img_dashboard):
+            try:
+                os.remove(img_dashboard)
+            except Exception:
+                pass
+                
+    if not foto_enviada:
+        telegram_manager.enviar_mensaje_todos(texto_completo)
 
 def main():
     print("Iniciando servicio de notificaciones resumidas de Telegram...")
