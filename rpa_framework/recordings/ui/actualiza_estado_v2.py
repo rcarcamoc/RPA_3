@@ -2,10 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 Script autogenerado: actualiza_estado_v2
-Optimizado para V2:
-- Sin espera inicial de 5s.
-- Ciclo de polling acelerado de ~15s a ~2.5s.
-- Refresh ágil y verificación OCR inmediata.
+Mantiene los tiempos y esperas originales definidos previamente para la correcta
+sincronización con el servidor de Carestream RIS y la carga de la grilla OCR:
+- Pausa inicial de 5 segundos.
+- Espera de 1.5s tras enfocar ventana.
+- Clic sostenido inicial en toolbar (hold_time=1.0s).
+- Espera de 10 segundos tras clic en Refresh (1906, 167).
+- Presión de tecla F5 con espera de 2 segundos.
+- Espera de 2 segundos entre reintentos de validación OCR.
+- Tiempo máximo de espera: 180 segundos (3 minutos).
 """
 
 import sys
@@ -53,13 +58,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def humanized_click(x, y, clicks=1, interval=0.08, hold_time=0.0):
+def humanized_click(x, y, clicks=1, interval=0.1, hold_time=0.0):
     """
     Realiza un movimiento de mouse humanizado hacia (x, y) y hace click u opcionalmente lo sostiene.
+    Tiempos definidos previamente.
     """
-    duration = random.uniform(0.2, 0.4)
+    duration = random.uniform(0.5, 1.0)
     pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeInOutQuad)
-    time.sleep(random.uniform(0.05, 0.15))
+    time.sleep(random.uniform(0.1, 0.3))
     
     if hold_time > 0.0:
         pyautogui.mouseDown(x, y)
@@ -70,7 +76,7 @@ def humanized_click(x, y, clicks=1, interval=0.08, hold_time=0.0):
 
 
 class ActualizaEstadoAutomation:
-    """Automatización generada: actualiza_estado_v2"""
+    """Automatización generada: actualiza_estado_v2 con tiempos definidos previamente"""
     
     def __init__(self):
         self.app = None
@@ -139,26 +145,34 @@ class ActualizaEstadoAutomation:
 
     def check_aprobado_ocr(self, coordinate_str):
         """
-        Busca la palabra 'Aprobado' en una franja de 30px de altura en la coordenada Y dada.
+        Busca la palabra 'Aprobado' en una franja de 30px de altura en la coordenada Y dada,
+        cubriendo todo el ancho de la pantalla (o región lógica).
+        Incluye feedback visual, guardado de logs y visualización de textos.
         """
         if not coordinate_str or ',' not in coordinate_str:
             logger.warning("Coordenada inválida en DB")
             return False
 
         try:
+            # Parsear coordenada (ej: "433,338")
             parts = coordinate_str.split(',')
             y_base = int(parts[1])
             
+            # Definir región: Todo el ancho, 30px de alto centrado en Y
             screen_w, screen_h = pyautogui.size()
             region = (0, max(0, y_base - 17), screen_w, 30)
             
+            # 1. Feedback Visual: Destacar zona en pantalla
             if vf:
-                vf.highlight_region(*region, color="#00FF00", duration=0.5)
+                vf.highlight_region(*region, color="#00FF00", duration=1.0)
+                time.sleep(0.2)
 
+            logger.info(f"📸 Capturando región OCR para validación: {region}")
             screenshot = pyautogui.screenshot(region=region)
             img_np = np.array(screenshot)
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
+            # 2. Guardar captura en log/estado
             try:
                 log_dir = Path(r"c:\Desarrollo\RPA_3\rpa_framework\log\estado")
                 log_dir.mkdir(parents=True, exist_ok=True)
@@ -166,19 +180,33 @@ class ActualizaEstadoAutomation:
                 save_path = log_dir / f"check_aprobado_{timestamp}.png"
                 cv2.imwrite(str(save_path), img_bgr)
             except Exception as e_log:
-                pass
+                logger.warning(f"No se pudo guardar log de imagen: {e_log}")
             
+            # Preprocesamiento Avanzado:
+            # 1. Escalar (3x) para que Tesseract lea mejor fuentes pequeñas
             scale = 3
             img_resized = cv2.resize(img_bgr, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            
+            # 2. Convertir a escala de grises
             gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
             
+            # 3. Detectar si el fondo es oscuro e invertir si es necesario
             avg_brightness = np.mean(gray)
             if avg_brightness < 100:
+                logger.info(f"🌑 Fondo oscuro detectado ({avg_brightness:.1f}), invirtiendo para OCR...")
                 gray = cv2.bitwise_not(gray)
             
+            # 4. Umbralizado Otsu
             _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             
+            try:
+                preproc_path = log_dir / f"preproc_{timestamp}.png"
+                cv2.imwrite(str(preproc_path), binary)
+            except Exception:
+                pass
+            
             if pytesseract:
+                logger.info("🔍 Ejecutando OCR mediante Tesseract (spa)...")
                 custom_config = r'--oem 3 --psm 7 -l spa'
                 text = pytesseract.image_to_string(binary, config=custom_config)
                 detected_text = text.strip().lower()
@@ -186,11 +214,15 @@ class ActualizaEstadoAutomation:
                 print(f"[OCR] Texto detectado: \"{detected_text}\"")
                 logger.info(f"OCR Texto crudo: '{detected_text}'")
                 
+                # Búsqueda Robusta
                 target = "aprobado"
+                
+                # A. Búsqueda directa
                 if target in detected_text:
                     logger.info("✅ Palabra 'Aprobado' detectada directamente.")
                     return True
                 
+                # B. Búsqueda difusa (Fuzzy Match)
                 words = re.findall(r'\w+', detected_text)
                 for word in words:
                     if len(word) >= 6:
@@ -207,7 +239,7 @@ class ActualizaEstadoAutomation:
             return False
 
     def setup(self) -> bool:
-        """Conecta a la aplicación objetivo."""
+        """Conecta a la aplicación objetivo de forma robusta."""
         logger.info("Configurando conexión a la aplicación...")
         
         try:
@@ -219,16 +251,17 @@ class ActualizaEstadoAutomation:
                 for win in all_wins:
                     if pattern in win.name and "Google Chrome" not in win.name:
                         try:
-                            logger.info(f"Conectando a {win.name}")
+                            logger.info(f"Intentando conectar con patrón '{pattern}' en ventana: {win.name}")
                             self.app = Application(backend='uia').connect(handle=win.handle)
                             connected = True
                             break
-                        except:
+                        except Exception:
                             continue
                 if connected:
                     break
             
             if not connected:
+                logger.warning("No se encontró ventana por título, conectando a Desktop")
                 self.app = Application(backend='uia')
             
             self.executor = ActionExecutor(self.app, {})
@@ -258,7 +291,7 @@ class ActualizaEstadoAutomation:
         self.db_update_status('En Proceso')
         
         try:
-            # Enfocar Carestream RIS
+            # Acciones 1-3: Asegurar que el RIS está en primer plano
             try:
                 patterns = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream RIS V11"]
                 all_windows = findwindows.find_elements()
@@ -273,25 +306,28 @@ class ActualizaEstadoAutomation:
                         break
                 
                 if target_element:
+                    logger.info(f"Enfocando ventana encontrada: {target_element.name}")
+                    self.app = Application(backend='uia').connect(handle=target_element.handle)
+                    self.executor.app = self.app
                     window = self.app.window(handle=target_element.handle)
                     window.set_focus()
-                    time.sleep(0.5)
+                    time.sleep(1.5)
                     results["completed"] += 3
                     logger.info(f"[1-3/6] ✅ '{target_element.name}' enfocado correctamente")
             except Exception as e:
                 logger.error(f"[1-3/6] ❌ Error enfocando: {e}")
 
-            # Acción 4: Click inicial en Toolbar
+            # Acción 4: CLICK INICIAL (Toolbar/Menú)
             try:
-                humanized_click(820, 60, hold_time=0.3)
+                humanized_click(820, 60, hold_time=1.0)
                 results["completed"] += 1
-                logger.info("[4/6] ✅ Click inicial toolbar realizado")
+                logger.info(f"[4/6] ✅ click sostenido inicial")
             except Exception as e:
-                logger.error(f"[4/6] ❌ Error en click inicial: {e}")
+                logger.error(f"[4/6] ❌ click: {e}")
 
-            # Loop de Refresh y OCR rápido
+            # Acción 5: LOOP DE REFRESH Y VALIDACIÓN OCR CON TIEMPOS DEFINIDOS PREVIAMENTE
             intentos_refresh = 0
-            max_wait_time = 180
+            max_wait_time = 180  # 3 minutos en segundos
             start_loop_time = time.time()
             aprobado_confirmado = False
 
@@ -304,6 +340,7 @@ class ActualizaEstadoAutomation:
                         from rpa_framework.utils.error_handler import notificar_aprobacion_pendiente
                         notificar_aprobacion_pendiente("actualiza_estado_v2.py", timeout_msg)
                     except Exception as e_notif:
+                        logger.error(f"Error en notificar_aprobacion_pendiente: {e_notif}")
                         self.db_update_status('Aprobacion_Pendiente', observacion=timeout_msg)
 
                     results["status"] = "PENDING_APPROVAL"
@@ -312,40 +349,50 @@ class ActualizaEstadoAutomation:
                     return results
 
                 intentos_refresh += 1
-                logger.info(f"🔄 Intento #{intentos_refresh} (Elapsed: {int(elapsed)}s)...")
+                logger.info(f"🔄 Intento de validación #{intentos_refresh} (Tiempo transcurrido: {int(elapsed)}s)...")
                 
-                # Clic rápido en Refresh
+                # Hacer clic en Refresh con hold_time original de 1.0s
                 try:
-                    humanized_click(1906, 167, hold_time=0.2)
-                    time.sleep(1.2) # Tiempo suficiente para recarga de grilla
+                    humanized_click(1906, 167, hold_time=1.0)
+                    logger.info(f"[5/6] ✅ Refresh clicado (Intento {intentos_refresh})")
+                    time.sleep(10)  # Esperar a que la lista cargue (tiempo definido previamente)
                 except Exception as e:
                     logger.error(f"Error en refresh: {e}")
-
-                # Verificar OCR
+                
+                # Acción extra: Presionar F5 con espera original de 2s
+                try:
+                    pyautogui.press('f5')
+                    logger.info(f"⌨️ F5 presionado (Intento {intentos_refresh})")
+                    time.sleep(2)
+                except Exception as e:
+                    logger.error(f"Error al presionar F5: {e}")
+                
+                # Consultar coordenada y verificar OCR
                 coord = self.fetch_coordinada_db()
                 if coord:
                     if self.check_aprobado_ocr(coord):
                         aprobado_confirmado = True
-                        results["completed"] += 2
+                        results["completed"] += 2  # Refresh + Validación
                         logger.info("🎯 Validación EXITOSA: Se encontró 'Aprobado'.")
                         self.db_update_status('Terminado')
-                        break
                     else:
-                        # Si no está en primer intento, presionar F5 y breve espera
-                        if intentos_refresh % 2 == 0:
-                            pyautogui.press('f5')
-                            time.sleep(1.0)
-                        else:
-                            time.sleep(1.0)
+                        logger.warning("⏳ 'Aprobado' no encontrado aún. Reintentando...")
+                        time.sleep(2)  # Tiempo definido previamente
                 else:
-                    logger.warning("⚠️ No se encontró coordenada en DB.")
-                    time.sleep(1.5)
+                    logger.warning("⚠️ No se encontró coordenada en DB. ¿Se ejecutó el paso previo de búsqueda?")
+                    time.sleep(2)  # Tiempo definido previamente
 
             if aprobado_confirmado:
                 results["status"] = "SUCCESS"
             else:
                 msg_no_aprob = "No se detectó 'Aprobado' tras agotar los reintentos."
                 logger.warning(f"⚠️ {msg_no_aprob}")
+                try:
+                    from rpa_framework.utils.error_handler import notificar_aprobacion_pendiente
+                    notificar_aprobacion_pendiente("actualiza_estado_v2.py", msg_no_aprob)
+                except Exception as e_notif:
+                    logger.error(f"Error en notificar_aprobacion_pendiente: {e_notif}")
+                    self.db_update_status('Aprobacion_Pendiente', observacion=msg_no_aprob)
                 results["status"] = "PENDING_APPROVAL"
                 results["errors"].append({"reason": msg_no_aprob})
 
@@ -369,8 +416,12 @@ class ActualizaEstadoAutomation:
 
 
 def main():
-    """Punto de entrada principal."""
+    """Punto de entrada principal con pausa inicial definida previamente."""
     setup_logging()
+    
+    logger.info("⏳ Iniciando pausa de 5 segundos antes de comenzar...")
+    time.sleep(5)  # Pausa previa definida
+    
     automation = ActualizaEstadoAutomation()
     results = automation.run()
     
