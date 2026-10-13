@@ -918,7 +918,7 @@ class WorkflowExecutor:
             self.logger.log("   Modo: Infinito — solo se detiene con Stop manual")
 
         # ── Notificación de Inicio a Telegram (Solo para Root Loop) ──
-        is_root_loop = not getattr(self, 'is_sub_workflow', False)
+        is_root_loop = (not getattr(self, 'is_sub_workflow', False)) or (str(getattr(self.workflow, 'name', '')).lower() == "loop")
         start_loop_ts = time.time()
         motivo_fin = "completado"
 

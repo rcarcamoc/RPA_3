@@ -68,7 +68,7 @@ def get_llm_request_params(model_id):
 BASE_LLM_MODELS = [
    "nvidia/nemotron-parse-2.0",                              # Primario — Validado OK
    "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
-   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 2 — Validado OK
+   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 2 — Validado OK
    "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 3 — Validado OK
    "cohere/north-mini-code:free",                            # Fallback 4 — Validado OK
    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 5 — Validado OK
@@ -82,8 +82,9 @@ OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b",
-    "meta/llama-3.2-90b-vision-instruct",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "google/gemma-4-31b-it",
+    "inclusionai/ling-3.1-flash",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

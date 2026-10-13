@@ -88,6 +88,7 @@ def consultar_datos_periodo(fecha_inicio, fecha_fin):
           OR numero_documento IS NOT NULL
       )
       AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%') OR numero_documento IS NOT NULL)
+      AND (estado != 'sin registros para trabajar' OR numero_documento IS NOT NULL)
     ORDER BY id ASC
     """
     cursor.execute(query, (fecha_inicio, fecha_fin))
@@ -236,10 +237,13 @@ def generar_excel_reporte(periodo: str = "hoy"):
                     errores_pendientes += 1
             elif 'proceso' in st:
                 en_proceso += 1
+            elif 'sin registros' in st:
+                pass
             else:
                 if st: exitosos += 1
 
-            if r.get("patologia_critica") and str(r.get("patologia_critica")).strip():
+            pato_val = str(r.get("patologia_critica") or "").strip().lower()
+            if pato_val in ['si', 'sí', '1', 'true', 'detectada', 'positiva', 'critica', 'crítica']:
                 patologias += 1
 
         completados = exitosos + pendientes
@@ -252,16 +256,17 @@ def generar_excel_reporte(periodo: str = "hoy"):
             incidencias_label = "0"
 
         if pendientes > 0:
-            proc_label = f"{en_proceso} (Gest: {pendientes_gestionados} | Pend: {pendientes_pendientes})"
+            pendientes_label = f"{pendientes} (Gest: {pendientes_gestionados} | Pend: {pendientes_pendientes})"
         else:
-            proc_label = str(en_proceso)
+            pendientes_label = "0"
 
         kpis = [
-            ("TOTAL CASOS", str(total_casos), "B4:C4", "B5:C5", "1F4E79"),
-            ("EXITOSOS / COMPL.", f"{completados} ({tasa_exito})", "D4:E4", "D5:E5", "276A3C"),
-            ("CON INCIDENCIAS", incidencias_label, "F4:G4", "F5:G5", "C00000"),
-            ("EN PROCESO / PEND.", proc_label, "H4:I4", "H5:I5", "806000"),
-            ("PATOLOGÍAS CRÍTICAS", str(patologias), "J4:L4", "J5:L5", "9C0006")
+            ("TOTAL CASOS", str(total_casos), "A4:B4", "A5:B5", "1F4E79"),
+            ("EXITOSOS (TOTAL)", f"{completados} ({tasa_exito})", "C4:D4", "C5:D5", "1E7E34"),
+            ("├ COMPL. 100%", str(exitosos), "E4:F4", "E5:F5", "28A745"),
+            ("└ APROB. PEND.", pendientes_label, "G4:H4", "G5:H5", "B25E00"),
+            ("CON INCIDENCIAS", incidencias_label, "I4:J4", "I5:J5", "C00000"),
+            ("PATOLOGÍAS CRÍT.", f"{patologias} caso{'s' if patologias != 1 else ''}", "K4:L4", "K5:L5", "9C0006" if patologias > 0 else "595959")
         ]
 
         ws.row_dimensions[4].height = 16
@@ -391,7 +396,8 @@ def generar_excel_reporte(periodo: str = "hoy"):
                         cell.font = font_notif_pendiente
 
                 elif col_idx == 10:  # Patología Crítica
-                    if patologia_val != "--" and patologia_val.strip():
+                    pato_clean = str(patologia_val).strip().lower()
+                    if pato_clean in ['si', 'sí', '1', 'true', 'detectada', 'positiva', 'critica', 'crítica']:
                         cell.fill = fill_patologia
                         cell.font = font_patologia
 
@@ -434,6 +440,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
             "nombre_periodo": nombre_periodo,
             "total_casos": total_casos,
             "exitosos": exitosos,
+            "completados_totales": completados,
             "errores": errores,
             "errores_gestionados": errores_gestionados,
             "errores_pendientes": errores_pendientes,
