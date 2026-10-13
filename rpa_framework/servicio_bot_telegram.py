@@ -919,6 +919,8 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
             nombre_periodo = res["nombre_periodo"]
             total = res["total_casos"]
             exitos = res["exitosos"]
+            pendientes = res.get("pendientes_aprobacion", 0)
+            completados_totales = res.get("completados_totales", exitos + pendientes)
             errores = res["errores"]
             errores_gest = res.get("errores_gestionados", 0)
             errores_pend = res.get("errores_pendientes", 0)
@@ -927,15 +929,30 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
             tasa = res["tasa_exito"]
 
             err_detail = f" (Gestionados: {errores_gest} | Pendientes: {errores_pend})" if errores > 0 else ""
+            pend_detail = f" (Gestionados: {res.get('pendientes_gestionados', 0)} | Pendientes: {res.get('pendientes_pendientes', 0)})" if pendientes > 0 else ""
 
             caption = (
                 f"📊 <b>REPORTE EXCEL - ATRYS RPA</b>\n\n"
                 f"📅 <b>Periodo:</b> {nombre_periodo}\n"
-                f"🔢 <b>Total casos:</b> <b>{total}</b>\n"
-                f"✅ <b>Exitosos:</b> {exitos} ({tasa})\n"
-                f"❌ <b>Con Incidencias:</b> {errores}{err_detail}\n"
-                f"⏳ <b>En Proceso / Pendientes:</b> {proceso}\n"
-                f"🚨 <b>Patologías Críticas:</b> {patologias}\n\n"
+                f"🔢 <b>Total casos gestionados:</b> <b>{total}</b>\n\n"
+                f"📋 <b>Desglose por Estado:</b>\n"
+            )
+            if completados_totales > 0:
+                caption += f"• 🟢 <b>Exitosos (Total):</b> <b>{completados_totales}</b>\n"
+                if exitos > 0:
+                    caption += f"   ├ ✅ Completados 100%: <b>{exitos}</b>\n"
+                if pendientes > 0:
+                    caption += f"   └ ⏳ Aprobación Pendiente: <b>{pendientes}</b>{pend_detail}\n"
+            else:
+                caption += "• 🟢 <b>Exitosos (Total):</b> <b>0</b>\n"
+
+            caption += f"• ❌ <b>Con Incidencias:</b> <b>{errores}</b>{err_detail}\n"
+            if proceso > 0:
+                caption += f"• 🔄 <b>En Proceso:</b> <b>{proceso}</b>\n"
+
+            caption += (
+                f"\n📈 <b>Tasa de Efectividad:</b> <b>{tasa}</b>\n"
+                f"🚨 <b>Patologías Críticas:</b> <b>{patologias}</b>\n\n"
                 f"📁 <i>Archivo adjunto listo para consultar.</i>"
             )
 

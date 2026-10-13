@@ -131,13 +131,16 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         proceso_h = sum(cnt for st, cnt in conteo_hora.items() if is_in_progress(st))
         pendientes_h = sum(cnt for st, cnt in conteo_hora.items() if is_pending_approval(st))
         errores_h = sum(cnt for st, cnt in conteo_hora.items() if is_error(st))
+        total_exitosos_h = exitos_h + pendientes_h
         
-        if exitos_h > 0:
-            texto += f"• ✅ Procesados con éxito: <b>{exitos_h}</b>\n"
+        if total_exitosos_h > 0:
+            texto += f"• 🟢 <b>Exitosos:</b> <b>{total_exitosos_h}</b>\n"
+            if exitos_h > 0:
+                texto += f"   ├ ✅ Completados 100%: <b>{exitos_h}</b>\n"
+            if pendientes_h > 0:
+                texto += f"   └ ⏳ Aprobación pendiente: <b>{pendientes_h}</b>\n"
         if proceso_h > 0:
             texto += f"• ⏳ En ejecución: <b>{proceso_h}</b>\n"
-        if pendientes_h > 0:
-            texto += f"• ⚠️ Aprobación pendiente: <b>{pendientes_h}</b>\n"
         if errores_h > 0:
             texto += f"• ❌ Con incidencias: <b>{errores_h}</b>\n"
             
@@ -157,14 +160,16 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         exitos_d = sum(cnt for st, cnt in conteo_dia.items() if is_success(st))
         pendientes_d = sum(cnt for st, cnt in conteo_dia.items() if is_pending_approval(st))
         errores_d = sum(cnt for st, cnt in conteo_dia.items() if is_error(st))
+        completados_d = exitos_d + pendientes_d
         
         texto += f"• 🎯 Total procesados hoy: <b>{total_dia} casos</b>\n"
-        if exitos_d > 0:
-            texto += f"• ✅ Completados 100%: <b>{exitos_d} casos</b>\n"
-        if pendientes_d > 0:
-            texto += f"• ⏳ Aprobación pendiente: <b>{pendientes_d} casos</b> <i>(completados por RPA)</i>\n"
+        if completados_d > 0:
+            texto += f"• 🟢 <b>Exitosos (Total):</b> <b>{completados_d} casos</b>\n"
+            if exitos_d > 0:
+                texto += f"   ├ ✅ Completados 100%: <b>{exitos_d}</b>\n"
+            if pendientes_d > 0:
+                texto += f"   └ ⏳ Aprobación pendiente: <b>{pendientes_d}</b> <i>(completados por RPA)</i>\n"
         
-        completados_d = exitos_d + pendientes_d
         base_tasa = completados_d + errores_d
         tasa = (completados_d / base_tasa * 100) if base_tasa > 0 else 100.0
         tasa_emoji = "🟢" if tasa >= 95.0 else ("🟡" if tasa >= 80.0 else "🔴")
@@ -216,21 +221,21 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
     
     # 4 Tarjetas KPI superiores
     ventana_label = periodo_str.split(" a ")[0] if " a " in periodo_str else periodo_str
-    subt_efectividad = f"{exitos_d} OK • {pendientes_d} pend." if pendientes_d > 0 else f"{completados_d} completados hoy"
-    subt_procesados = f"{exitos_d} OK • {pendientes_d} pend." if pendientes_d > 0 else f"{completados_d} exitosos"
+    subt_efectividad = f"{exitos_d} Compl. • {pendientes_d} Aprob. Pend." if pendientes_d > 0 else f"{completados_d} exitosos hoy"
+    subt_exitosos = f"{exitos_d} 100% • {pendientes_d} Aprob. Pend." if pendientes_d > 0 else f"{completados_d} exitosos"
 
     if is_daily:
         kpis = [
             ('TOTAL DÍA', f'{total_dia}', 'Casos jornada', '#0f172a', '#ffffff', '#e2e8f0'),
-            ('PROCESADOS', f'{completados_d}', subt_procesados, '#0284c7', '#f0f9ff', '#bae6fd'),
-            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
+            ('EXITOSOS', f'{completados_d}', subt_exitosos, '#15803d', '#f0fdf4', '#bbf7d0'),
+            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#0284c7' if tasa_exito >= 85 else '#b45309', '#f0f9ff' if tasa_exito >= 85 else '#fffbeb', '#bae6fd' if tasa_exito >= 85 else '#fde68a'),
             ('INCIDENCIAS', f'{errores_d}', 'Alertas jornada' if errores_d > 0 else 'Sin alertas activas', '#b91c1c' if errores_d > 0 else '#475569', '#fef2f2' if errores_d > 0 else '#ffffff', '#fecaca' if errores_d > 0 else '#e2e8f0')
         ]
     else:
         kpis = [
             ('TOTAL DÍA', f'{total_dia}', 'Casos acumulados', '#0f172a', '#ffffff', '#e2e8f0'),
-            ('ÚLTIMA HORA', f'{total_hora}', f'Ventana {ventana_label}', '#0284c7', '#f0f9ff', '#bae6fd'),
-            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#15803d' if tasa_exito >= 90 else '#b45309', '#f0fdf4' if tasa_exito >= 90 else '#fffbeb', '#bbf7d0' if tasa_exito >= 90 else '#fde68a'),
+            ('EXITOSOS HOY', f'{completados_d}', subt_exitosos, '#15803d', '#f0fdf4', '#bbf7d0'),
+            ('EFECTIVIDAD', f'{tasa_exito:.1f}%', subt_efectividad, '#0284c7' if tasa_exito >= 85 else '#b45309', '#f0f9ff' if tasa_exito >= 85 else '#fffbeb', '#bae6fd' if tasa_exito >= 85 else '#fde68a'),
             ('INCIDENCIAS', f'{errores_d}', 'Alertas hoy' if errores_d > 0 else 'Sin alertas activas', '#b91c1c' if errores_d > 0 else '#475569', '#fef2f2' if errores_d > 0 else '#ffffff', '#fecaca' if errores_d > 0 else '#e2e8f0')
         ]
     
@@ -280,8 +285,8 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
         # Mapear nombres de columnas a etiquetas amigables para la leyenda
         def format_legend_label(col_name):
             cl = str(col_name).lower()
-            if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return 'Pendiente'
-            if any(x in cl for x in ['terminado', 'finalizado', 'éxito', 'exito']): return 'Exitoso'
+            if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return 'Aprobación Pendiente'
+            if any(x in cl for x in ['terminado', 'finalizado', 'éxito', 'exito']): return 'Completado 100%'
             if 'proceso' in cl: return 'En Proceso'
             if 'error' in cl or 'fall' in cl: return 'Error'
             return str(col_name)
@@ -352,11 +357,12 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     texto += f"{tasa_emoji} <b>Tasa de Efectividad:</b> <b>{tasa:.1f}%</b> ({completados} de {base_tasa})\n\n"
     texto += "📋 <b>Desglose por Estado:</b>\n"
     
-    if exitos > 0:
-        texto += f"• ✅ Completados 100%: <b>{exitos}</b>\n"
-    
-    if pendientes > 0:
-        texto += f"• ⏳ Aprobación Pendiente: <b>{pendientes}</b> <i>(completados por RPA)</i>\n"
+    if completados > 0:
+        texto += f"• 🟢 <b>Exitosos (Total):</b> <b>{completados}</b>\n"
+        if exitos > 0:
+            texto += f"   ├ ✅ Completados 100%: <b>{exitos}</b>\n"
+        if pendientes > 0:
+            texto += f"   └ ⏳ Aprobación Pendiente: <b>{pendientes}</b> <i>(completados por RPA)</i>\n"
         
     proceso = sum(cnt for st, cnt in conteo_estados.items() if is_in_progress(st))
     if proceso > 0:
