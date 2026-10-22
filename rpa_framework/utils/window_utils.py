@@ -58,14 +58,6 @@ def is_pacs_login_window(hwnd: int) -> bool:
                 return True
     except Exception:
         pass
-    try:
-        from pywinauto import Desktop
-        win = Desktop(backend="uia").window(handle=hwnd)
-        if win.child_window(auto_id="txtPassword").exists(timeout=0.1) or \
-           win.child_window(auto_id="txtUsername").exists(timeout=0.1):
-            return True
-    except Exception:
-        pass
     return False
 
 

@@ -1,5 +1,6 @@
 import time
 import os
+import json
 import datetime
 import mysql.connector
 import pandas as pd
@@ -28,6 +29,98 @@ DIAS_SEMANA_VALIDOS = [0, 1, 2, 3, 4] # Lunes a Viernes (0=Lunes, 4=Viernes)
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 PAUSE_FILE = BASE_DIR / "config" / "notifications_paused.txt"
 LOG_FILE   = BASE_DIR / "logs" / "rpa.log"
+LAST_WORKFLOW_FILE = BASE_DIR / "config" / "last_workflow_execution.json"
+EXECUTION_STATE_FILE = BASE_DIR / "config" / "execution_state.json"
+
+
+def registrar_ejecucion_workflow(workflow_name: str = "", status: str = "running"):
+    """Registra la ejecución reciente de un workflow para el control del notificador horario."""
+    try:
+        LAST_WORKFLOW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "workflow": workflow_name,
+            "status": status,
+            "timestamp": time.time(),
+            "datetime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(LAST_WORKFLOW_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Error registrando ejecución de workflow: {e}")
+
+
+def se_ejecuto_workflow_ultimos_minutos(minutos: int = 60, tolerancia_minutos: int = 5) -> bool:
+    """
+    Retorna True si se ejecutó o está ejecutándose algún workflow durante los últimos N minutos (por defecto 60 + 5m tolerancia).
+    Consulta múltiples fuentes fiables:
+    1. Estado de ejecución actual (execution_state.json).
+    2. Archivo de tracking de última ejecución (last_workflow_execution.json).
+    3. Registros de acciones en la base de datos MySQL (tabla registro_acciones).
+    4. Archivos de logs de workflows (wf_*.log).
+    """
+    ventana_segundos = (minutos + tolerancia_minutos) * 60
+    ahora_ts = time.time()
+    ahora_dt = datetime.datetime.now()
+    limite_dt = ahora_dt - datetime.timedelta(seconds=ventana_segundos)
+
+    # 1. Verificar si hay un workflow en ejecución activa en este instante
+    if EXECUTION_STATE_FILE.exists():
+        try:
+            with open(EXECUTION_STATE_FILE, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+            if state_data.get("is_running", False):
+                return True
+            updated_at = state_data.get("updated_at", 0)
+            if ahora_ts - updated_at <= ventana_segundos:
+                return True
+        except Exception:
+            pass
+
+    # 2. Verificar archivo de tracking de última ejecución
+    if LAST_WORKFLOW_FILE.exists():
+        try:
+            with open(LAST_WORKFLOW_FILE, "r", encoding="utf-8") as f:
+                last_data = json.load(f)
+            ts = last_data.get("timestamp", 0)
+            if ahora_ts - ts <= ventana_segundos:
+                return True
+        except Exception:
+            pass
+
+    # 3. Verificar registros en base de datos MySQL (tabla registro_acciones)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = "SELECT id FROM registro_acciones WHERE inicio >= %s OR `update` >= %s LIMIT 1"
+        cursor.execute(query, (limite_dt, limite_dt))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return True
+    except Exception:
+        pass
+
+    # 4. Verificar archivos de logs de workflows (wf_*.log)
+    log_dirs = [
+        BASE_DIR / "logs",
+        BASE_DIR.parent / "logs",
+        BASE_DIR / "workflows" / "logs",
+    ]
+    for d in log_dirs:
+        if not d.exists():
+            continue
+        try:
+            for item in d.glob("wf_*.log"):
+                try:
+                    mtime = item.stat().st_mtime
+                    if ahora_ts - mtime <= ventana_segundos:
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return False
 
 
 def notificaciones_pausadas() -> bool:
@@ -387,7 +480,7 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
 
 def enviar_reporte_hourly(force=False):
     """Envía el reporte de la última hora y el acumulado del día con 1 dashboard visual y texto amigable.
-    Se salta si las notificaciones están pausadas (a menos que force=True).
+    Se salta si las notificaciones están pausadas o si no se ejecutó ningún workflow en los últimos 60 minutos (a menos que force=True).
     """
     now = datetime.datetime.now()
     
@@ -400,6 +493,11 @@ def enviar_reporte_hourly(force=False):
 
         if notificaciones_pausadas():
             print(f"[{now}] Notificaciones pausadas — reporte horario omitido.")
+            return
+
+        # Solo enviar si se ejecutó algún workflow durante los últimos 60 minutos
+        if not se_ejecuto_workflow_ultimos_minutos(minutos=60):
+            print(f"[{now}] No se ejecutó ningún workflow en los últimos 60 minutos — reporte horario omitido.")
             return
         
     # 1. Datos de la última hora (e.g. de 09:00:00 a 09:59:59)
@@ -516,6 +614,15 @@ def notificar_fin_loop_con_resumen(motivo: str = "completado", iteraciones: int 
     Envía notificación por Telegram cuando termina el bucle de ejecución,
     acompañada de un resumen consolidado y dashboard gráfico de la gestión del día.
     """
+    # Si la detención fue originada por el supervisor autónomo (Watchdog), omitir notificación de detención manual
+    try:
+        from utils.watchdog_supervisor import is_watchdog_recovering
+        if is_watchdog_recovering():
+            print("ℹ️ Fin de loop originado por Watchdog. Omitiendo notificación redundante de parada manual.")
+            return
+    except Exception:
+        pass
+
     now = datetime.datetime.now()
     hora_fin_str = now.strftime("%H:%M:%S")
     fecha_fin_str = now.strftime("%d/%m/%Y")

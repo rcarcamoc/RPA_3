@@ -26,6 +26,7 @@ class OCREngine:
     Soportados:
     - easyocr: Mejor para español, flexible
     - tesseract: Rápido, requiere instalación adicional
+    - paddleocr: Alta precisión y robustez para texto complejo/fechas
     """
     
     def __init__(
@@ -42,8 +43,8 @@ class OCREngine:
         Inicializar motor OCR.
         
         Args:
-            engine: 'easyocr' o 'tesseract'
-            language: Código de idioma (ej: 'es', 'en', 'pt')
+            engine: 'easyocr', 'tesseract' o 'paddleocr'
+            language: Código de idioma (ej: 'es', 'en', 'pt', 'spa')
             confidence_threshold: Umbral mínimo de confianza (0-1)
             use_gpu: Usar GPU si está disponible
             model_storage_dir: Directorio para almacenar modelos
@@ -55,6 +56,7 @@ class OCREngine:
         self.custom_config = custom_config
         self.preprocess = preprocess
         self.reader = None
+        self.paddle_ocr = None
         self.last_processed_image = None
         self.scale_factor = 1.0  # Factor de escala aplicado en preprocesamiento
         
@@ -64,6 +66,8 @@ class OCREngine:
             self._init_easyocr(model_storage_dir)
         elif engine == 'tesseract':
             self._init_tesseract()
+        elif engine == 'paddleocr':
+            self._init_paddleocr()
         else:
             raise ValueError(f"Engine no soportado: {engine}")
     
@@ -104,6 +108,25 @@ class OCREngine:
             logger.error(f"Error inicializando Tesseract: {e}")
             import traceback
             traceback.print_exc()
+            raise
+
+    def _init_paddleocr(self):
+        """Inicializar PaddleOCR"""
+        try:
+            from paddleocr import PaddleOCR
+            lang = 'es' if self.language in ['es', 'spa'] else self.language
+            self.paddle_ocr = PaddleOCR(
+                lang=lang,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False
+            )
+            logger.info("PaddleOCR inicializado correctamente")
+        except ImportError:
+            logger.error("PaddleOCR no está instalado.")
+            raise
+        except Exception as e:
+            logger.error(f"Error inicializando PaddleOCR: {e}")
             raise
     
     def extract_text_with_location(
@@ -150,6 +173,8 @@ class OCREngine:
                 results = self._extract_tesseract(image, detail)
                 self.language = original_lang
                 return results
+            elif self.engine == 'paddleocr':
+                return self._extract_paddleocr(image, detail)
         except Exception as e:
             logger.error(f"Error en extracción OCR ({self.engine}): {e}")
             raise
@@ -306,6 +331,54 @@ class OCREngine:
             text_data.append(text_info)
         
         logger.info(f"Tesseract: Extraídos {len(text_data)} textos")
+        return text_data
+
+    def _extract_paddleocr(self, image: np.ndarray, detail: bool = True) -> List[Dict]:
+        """Extraer texto usando PaddleOCR"""
+        # PaddleOCR espera imagen en formato BGR o RGB (numpy)
+        res = self.paddle_ocr.predict(image)
+        text_data = []
+        if not res:
+            return text_data
+
+        rec_texts = res[0].get('rec_texts', [])
+        rec_scores = res[0].get('rec_scores', [])
+        rec_boxes = res[0].get('rec_boxes', [])
+
+        for text, score, box in zip(rec_texts, rec_scores, rec_boxes):
+            text = text.strip()
+            if not text:
+                continue
+            conf = float(score)
+            if conf < self.confidence_threshold:
+                continue
+
+            x_min, y_min, x_max, y_max = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            w = max(0.0, x_max - x_min)
+            h = max(0.0, y_max - y_min)
+
+            text_info = {
+                'text': text,
+                'confidence': conf,
+                'bbox': [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]],
+                'bounds': {
+                    'x_min': x_min,
+                    'y_min': y_min,
+                    'x_max': x_max,
+                    'y_max': y_max,
+                },
+                'center': {
+                    'x': x_min + w / 2.0,
+                    'y': y_min + h / 2.0,
+                },
+                'dimensions': {
+                    'width': w,
+                    'height': h,
+                }
+            }
+            text_data.append(text_info)
+
+        logger.info(f"PaddleOCR: Extraídos {len(text_data)} textos")
         return text_data
     
     def _preprocess_image(self, image: np.ndarray) -> np.ndarray:

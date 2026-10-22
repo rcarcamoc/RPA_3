@@ -84,6 +84,7 @@ DEBUG_LOG = LOG_DIR / "service_debug.log"
 UPDATE_FILE = CONFIG_DIR / "telegram_last_update.json"
 STATE_FILE = CONFIG_DIR / "execution_state.json"
 STOP_SIGNAL = CONFIG_DIR / "stop_signal.txt"
+CMD_SIGNAL = CONFIG_DIR / "command_signal.json"
 
 # Estado global
 active_executor = None
@@ -126,6 +127,12 @@ def set_execution_state(is_running, workflow_name=""):
             json.dump(state, f)
     except Exception as e:
         print(f"Error guardando estado: {e}")
+
+    try:
+        from utils.notificador_resumen import registrar_ejecucion_workflow
+        registrar_ejecucion_workflow(workflow_name, status="running" if is_running else "finished")
+    except Exception:
+        pass
 
     global tray_manager
     if tray_manager:
@@ -201,7 +208,7 @@ def detener_ejecucion_actual(chat_id=None, source="Telegram"):
         return False
 
 def monitor_stop_signal():
-    """Monitorea si la GUI solicita detener la ejecución mediante stop_signal.txt."""
+    """Monitorea señales de parada y comandos externos hacia el servicio interactivo."""
     while True:
         try:
             if STOP_SIGNAL.exists():
@@ -211,6 +218,28 @@ def monitor_stop_signal():
                 except Exception:
                     pass
                 detener_ejecucion_actual(source="Archivo Stop Signal")
+
+            if CMD_SIGNAL.exists():
+                try:
+                    with open(CMD_SIGNAL, "r", encoding="utf-8") as f:
+                        cmd_data = json.load(f)
+                    try:
+                        CMD_SIGNAL.unlink()
+                    except Exception:
+                        pass
+                    action = cmd_data.get("action")
+                    params = cmd_data.get("params")
+                    print(f"📥 [IPC] Recibido comando externo: action={action}, params={params}")
+                    if action in ["pega", "pacs"]:
+                        start_workflow_async("pacs.json")
+                    elif action in ["loop"]:
+                        start_workflow_async("loop.json", params)
+                    elif action in ["inicio"]:
+                        start_workflow_async("Sub_work.json")
+                except Exception as e_cmd:
+                    print(f"⚠️ Error procesando command_signal: {e_cmd}")
+                    try: CMD_SIGNAL.unlink()
+                    except Exception: pass
         except Exception as e:
             print(f"Error en monitor_stop_signal: {e}")
         time.sleep(1)
@@ -234,6 +263,16 @@ def run_workflow(wf_path, params=None, on_finish=None):
                     elif tipo_loop == "timed":
                         node.duration_hours = float(valor)
         
+        # Recargar dinámicamente workflow_executor para asegurar últimas modificaciones en disco
+        import importlib
+        try:
+            import core.workflow_executor
+            importlib.reload(core.workflow_executor)
+            from core.workflow_executor import WorkflowExecutor
+        except Exception as e_reload:
+            print(f"⚠️ Aviso al recargar workflow_executor: {e_reload}")
+            from core.workflow_executor import WorkflowExecutor
+
         active_executor = WorkflowExecutor(wf)
         set_execution_state(True, wf.name)
         
@@ -276,17 +315,30 @@ def is_any_workflow_running():
             pass
     return False
 
+_last_loop_params = {"tipo": "count", "valor": "10"}
+
+def get_last_loop_params():
+    global _last_loop_params
+    return _last_loop_params
+
 def start_workflow_async(workflow_file, params=None, on_finish_callback=None):
-    global active_executor, executor_thread
+    global active_executor, executor_thread, _last_loop_params
     
+    if "loop" in workflow_file.lower() and params:
+        _last_loop_params = params
+
     if is_any_workflow_running():
         print("⚠️ No se puede iniciar flujo: Ya hay una ejecución activa.")
         return False
         
     wf_path = os.path.join("workflows", workflow_file)
     if not os.path.exists(wf_path):
-        print(f"⚠️ Workflow no encontrado: {wf_path}")
-        return False
+        alt_path = Path(__file__).resolve().parent / "workflows" / workflow_file
+        if alt_path.exists():
+            wf_path = str(alt_path)
+        else:
+            print(f"⚠️ Workflow no encontrado: {wf_path} ni en {alt_path}")
+            return False
         
     try:
         if STOP_SIGNAL.exists():
@@ -1433,6 +1485,18 @@ def telegram_polling_loop():
     set_execution_state(False)
     
     threading.Thread(target=monitor_stop_signal, daemon=True).start()
+
+    try:
+        from utils.watchdog_supervisor import start_watchdog_supervisor
+        start_watchdog_supervisor(
+            start_wf_func=start_workflow_async,
+            stop_wf_func=detener_ejecucion_actual,
+            is_running_func=is_any_workflow_running,
+            get_loop_params_func=get_last_loop_params
+        )
+        print("🛡️ Supervisor Watchdog iniciado (Umbral: 12 min con auto-recuperación).")
+    except Exception as e:
+        print(f"⚠️ No se pudo iniciar el Supervisor Watchdog: {e}")
     
     if STOP_SIGNAL.exists():
         try: STOP_SIGNAL.unlink()

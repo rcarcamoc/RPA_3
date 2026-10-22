@@ -85,12 +85,15 @@ def ejecutar_extraccion_ris_sincrona():
         script_path = base_dir / script
         logger.info(f"Ejecutando: {script}...")
         res = subprocess.run([sys.executable, str(script_path), str(target_id)], env=env)
-        if res.returncode != 0:
+        if res.returncode == 2:
+            logger.info(f"ℹ️ Paso {script} finalizó con código 2 (Sin registros para trabajar).")
+            return 2
+        elif res.returncode != 0:
             logger.error(f"Error en paso sincrónico {script}")
-            return False
+            return 1
 
     logger.info("✓ Extracción sincrónica de RIS finalizada exitosamente.")
-    return True
+    return 0
 
 def main():
     examen_listo = tomar_examen_precargado()
@@ -99,8 +102,12 @@ def main():
         logger.info("⚡ Saltando fase de RIS completa. Procediendo DIRECTO a PACS (0 segundos de espera).")
         sys.exit(0)
     else:
-        if ejecutar_extraccion_ris_sincrona():
+        resultado = ejecutar_extraccion_ris_sincrona()
+        if resultado == 0:
             sys.exit(0)
+        elif resultado == 2:
+            logger.info("ℹ️ Sin registros en extracción sincrónica. Finalizando fase limpiamente con código 2.")
+            sys.exit(2)
         else:
             sys.exit(1)
 

@@ -171,59 +171,104 @@ class VisualFeedback:
     def show_persistent_message(self, text: str, name: str, bg_color: str = "#333333", fg_color: str = "#FFFFFF"):
         """
         Muestra un mensaje que permanece hasta que se llama a hide_persistent_message.
+        Thread-safe: no recrea Tk roots si ya existe la ventana, sino que actualiza su contenido in-place.
+        La destrucción de la ventana ocurre de forma segura dentro del mismo hilo que creó Tk,
+        evitando deadlocks con root.after() y Tcl.
         """
         try:
-            # Si ya existe uno con ese nombre, cerrarlo
+            # Si ya existe una ventana activa con ese nombre, actualizarla in-place sin recrear Tk
+            if name in self._persistent_windows:
+                item = self._persistent_windows[name]
+                if item.get("thread") and item["thread"].is_alive() and not item["stop_event"].is_set():
+                    item["data"]["text"] = text
+                    item["data"]["bg_color"] = bg_color
+                    item["data"]["fg_color"] = fg_color
+                    item["update_event"].set()
+                    return
+
+            # Si existía una finalizando, esperar brevemente a que limpie
             self.hide_persistent_message(name)
-            
+
+            stop_event = threading.Event()
+            update_event = threading.Event()
+            ready_event = threading.Event()
+            data = {"text": text, "bg_color": bg_color, "fg_color": fg_color}
+
             def _create():
-                root = tk.Tk()
-                root.overrideredirect(True)
-                root.attributes("-topmost", True)
-                root.attributes("-alpha", 0.9)
-                
-                font_style = ("Segoe UI", 12, "bold")
-                
-                # Crear un frame para el borde
-                frame = tk.Frame(root, bg=bg_color, padx=2, pady=2)
-                frame.pack()
-                
-                label = tk.Label(frame, text=text, bg=bg_color, fg=fg_color, font=font_style, padx=25, pady=12)
-                label.pack()
-                
-                root.update_idletasks()
-                width = root.winfo_width()
-                height = root.winfo_height()
-                screen_width = root.winfo_screenwidth()
-                
-                x = (screen_width // 2) - (width // 2)
-                y = 50 # Un poco más abajo que los normales
-                
-                root.geometry(f"{width}x{height}+{x}+{y}")
-                
-                self._persistent_windows[name] = root
-                root.mainloop()
+                root = None
+                try:
+                    root = tk.Tk()
+                    root.overrideredirect(True)
+                    root.attributes("-topmost", True)
+                    root.attributes("-alpha", 0.9)
+
+                    font_style = ("Segoe UI", 12, "bold")
+
+                    frame = tk.Frame(root, bg=data["bg_color"], padx=2, pady=2)
+                    frame.pack()
+
+                    label = tk.Label(frame, text=data["text"], bg=data["bg_color"], fg=data["fg_color"], font=font_style, padx=25, pady=12)
+                    label.pack()
+
+                    root.update_idletasks()
+                    width = root.winfo_width()
+                    height = root.winfo_height()
+                    screen_width = root.winfo_screenwidth()
+
+                    x = (screen_width // 2) - (width // 2)
+                    y = 50
+
+                    root.geometry(f"{width}x{height}+{x}+{y}")
+                    ready_event.set()
+
+                    while not stop_event.is_set():
+                        if update_event.is_set():
+                            update_event.clear()
+                            label.config(text=data["text"], bg=data["bg_color"], fg=data["fg_color"])
+                            frame.config(bg=data["bg_color"])
+                            root.update_idletasks()
+                            new_w = root.winfo_width()
+                            new_h = root.winfo_height()
+                            new_x = (root.winfo_screenwidth() // 2) - (new_w // 2)
+                            root.geometry(f"{new_w}x{new_h}+{new_x}+{y}")
+                        root.update()
+                        time.sleep(0.05)
+                except Exception as ex:
+                    logger.debug(f"Error en hilo de mensaje persistente '{name}': {ex}")
+                finally:
+                    ready_event.set()
+                    if root is not None:
+                        try:
+                            root.destroy()
+                        except Exception:
+                            pass
+                    self._persistent_windows.pop(name, None)
 
             t = threading.Thread(target=_create, daemon=True)
+            self._persistent_windows[name] = {
+                "stop_event": stop_event,
+                "update_event": update_event,
+                "thread": t,
+                "data": data
+            }
             t.start()
-            
-            # Esperar un poco a que se cree
-            timeout = 2.0
-            start = time.time()
-            while name not in self._persistent_windows and time.time() - start < timeout:
-                time.sleep(0.1)
-                
+            ready_event.wait(timeout=1.0)
+
         except Exception as e:
             logger.error(f"Error mostrando mensaje persistente '{name}': {e}")
 
     def hide_persistent_message(self, name: str):
         """
-        Oculta un mensaje persistente por su nombre.
+        Oculta un mensaje persistente por su nombre señalizando el stop_event.
+        La destrucción de la ventana ocurre de forma segura dentro del mismo hilo que creó Tk.
         """
         try:
             if name in self._persistent_windows:
-                root = self._persistent_windows.pop(name)
-                root.after(0, root.destroy)
+                item = self._persistent_windows.pop(name, None)
+                if item:
+                    item["stop_event"].set()
+                    if item.get("thread") and item["thread"].is_alive():
+                        item["thread"].join(timeout=0.4)
         except Exception as e:
             logger.error(f"Error ocultando mensaje persistente '{name}': {e}")
 

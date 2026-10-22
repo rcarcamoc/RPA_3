@@ -118,6 +118,7 @@ class ExtractorPDFDoctor:
         self.port = port
         self.bd = bd
         self.driver = None
+        self.ris_post_data = None
         self.temp_pdf_path = os.path.join(tempfile.gettempdir(), "temp_downloaded_rpa.pdf")
 
     def conectar(self):
@@ -132,15 +133,51 @@ class ExtractorPDFDoctor:
             logger.error(f"Error al conectar con navegador: {e}")
             raise
 
+    def _extraer_datos_post_ris(self):
+        """Extrae los campos de frmLista o del último link setExamenImg en la pestaña principal RIS."""
+        try:
+            script = """
+                var res = {};
+                var f = document.forms['frmLista'] || document.getElementById('frmLista');
+                if (f) {
+                    var inputs = f.querySelectorAll('input');
+                    for (var i = 0; i < inputs.length; i++) {
+                        if (inputs[i].name) res[inputs[i].name] = inputs[i].value;
+                    }
+                }
+                if (!res.idExamen || res.idExamen === '-1') {
+                    var links = document.querySelectorAll('a[href*="setExamenImg"]');
+                    if (links.length > 0) {
+                        var href = links[links.length - 1].getAttribute('href') || '';
+                        var m = href.match(/setExamenImg\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)/);
+                        if (m) {
+                            res.idExamen = m[1];
+                            res.idAgenda = m[2];
+                            res.idPaciente = m[3];
+                            res.descargaInterna = '-1';
+                        }
+                    }
+                }
+                return res;
+            """
+            data = self.driver.execute_script(script)
+            if isinstance(data, dict) and data.get("idExamen") and data.get("idExamen") != "-1":
+                logger.info(f"Datos POST de RIS capturados: idExamen={data.get('idExamen')}, idPaciente={data.get('idPaciente')}")
+                return data
+        except Exception as e:
+            logger.warning(f"No se pudieron extraer datos POST de frmLista: {e}")
+        return None
+
     def procesar_pestana_pdf(self):
         """
-        Busca una pestaña que parezca ser un PDF (blob: o .pdf),
+        Busca una pestaña que parezca ser un PDF (blob:, .pdf o /atencion/pdf),
         descarga el contenido y extrae los datos solicitados.
-        PROTEGE la ventana cuyo título comienza embargo esta con 'RIS'.
+        PROTEGE la ventana cuyo título comienza con 'RIS'.
         """
+        ris_handle = None
+        target_handle = None
         try:
             handles = self.driver.window_handles
-            ris_handle = None
             pdf_handle = None
             
             logger.info(f"Analizando {len(handles)} pestañas abiertas...")
@@ -156,14 +193,14 @@ class ExtractorPDFDoctor:
                     logger.info(f"Ventana [{h[-4:]}]: Titulo='{title}' | URL='{url}'")
 
                     # Identificar ventana Principal (RIS)
-                    # Usamos .upper() para evitar problemas de case, aunque el usuario dijo "RIS"
                     if title and title.strip().upper().startswith("RIS"):
                         ris_handle = h
                         logger.info("-> MARCADA COMO PRINCIPAL (NO CERRAR)")
+                        self.ris_post_data = self._extraer_datos_post_ris()
                         continue # Pasamos a la siguiente, esta no es el PDF
                     
                     # Identificar candidato PDF (si no es la RIS)
-                    if url and ("blob:" in url or ".pdf" in url.lower() or "print" in url.lower()):
+                    if url and ("blob:" in url or ".pdf" in url.lower() or "/atencion/pdf" in url.lower() or "print" in url.lower()):
                          pdf_handle = h
                          logger.info(f"-> MARCADA COMO PDF (POR URL): {url}")
 
@@ -191,12 +228,20 @@ class ExtractorPDFDoctor:
 
             if target_handle == ris_handle:
                 logger.warning("La ventana objetivo resultó ser la RIS. Abortando cierre para protegerla.")
-                # Podríamos intentar extraer datos igual, pero sin cerrar
             
             # 2. Procesar (Cambiamos al target si no estamos ahí)
             self.driver.switch_to.window(target_handle)
             time.sleep(1.0)
             current_url = self.driver.current_url
+
+            # Si está en /ris/atencion/pdf y aún no tiene título ni redirigió a .pdf, dar breve espera
+            if current_url and "/ris/atencion/pdf" in current_url.lower():
+                for _ in range(4):
+                    if ".pdf" in (self.driver.current_url or "").lower() or ".pdf" in (self.driver.title or "").lower():
+                        break
+                    time.sleep(0.5)
+                current_url = self.driver.current_url
+
             logger.info(f"Procesando PDF desde URL: {current_url}")
             
             if not current_url or current_url == "about:blank":
@@ -208,27 +253,35 @@ class ExtractorPDFDoctor:
                 self.bd.guardar_url_previa(current_url)
 
             extracted_data = None
-            if self.descargar_pdf(current_url):
-                 extracted_data = self.extraer_datos()
-                 if extracted_data:
-                     extracted_data["url"] = current_url
-                 
-                 # 3. Cerrar PDF (Solo si NO es la RIS y NO es la única)
-                 if target_handle != ris_handle and len(self.driver.window_handles) > 1:
-                     logger.info("Cerrando pestaña del PDF...")
-                     self.driver.close()
-                 else:
-                     logger.info("No se cerrará la ventana (Es la RIS o la única abierta).")
-
-            # 4. Asegurar foco en RIS al terminar
-            if ris_handle:
+            try:
+                if self.descargar_pdf(current_url):
+                    extracted_data = self.extraer_datos()
+                    if extracted_data:
+                        extracted_data["url"] = current_url
+            finally:
+                # 3. Cerrar PDF siempre (Solo si NO es la RIS y NO es la única)
                 try:
-                    self.driver.switch_to.window(ris_handle)
-                    logger.info("Foco retornado a ventana RIS.")
-                except:
-                    logger.warning("No se pudo volver a la ventana RIS (¿cerrada?).")
-            elif len(self.driver.window_handles) > 0:
-                 self.driver.switch_to.window(self.driver.window_handles[0])
+                    if target_handle != ris_handle and len(self.driver.window_handles) > 1:
+                        self.driver.switch_to.window(target_handle)
+                        logger.info("Cerrando pestaña del PDF...")
+                        self.driver.close()
+                    else:
+                        logger.info("No se cerrará la ventana (Es la RIS o la única abierta).")
+                except Exception as e_close:
+                    logger.warning(f"No se pudo cerrar la pestaña del PDF: {e_close}")
+
+                # 4. Asegurar foco en RIS al terminar
+                if ris_handle:
+                    try:
+                        self.driver.switch_to.window(ris_handle)
+                        logger.info("Foco retornado a ventana RIS.")
+                    except Exception:
+                        logger.warning("No se pudo volver a la ventana RIS (¿cerrada?).")
+                elif len(self.driver.window_handles) > 0:
+                    try:
+                        self.driver.switch_to.window(self.driver.window_handles[0])
+                    except Exception:
+                        pass
 
             return extracted_data
 
@@ -240,7 +293,7 @@ class ExtractorPDFDoctor:
         """
         Descarga el PDF a self.temp_pdf_path con reintentos y validación de contenido.
         Verifica que el archivo no esté vacío y contenga encabezado válido (%PDF).
-        Si requests HTTP falla o devuelve 0 bytes, intenta descarga directa vía fetch/JS en el navegador.
+        Soporta tanto URLs directas (GET) como el endpoint dinámico /ris/atencion/pdf (POST).
         """
         # Limpiar archivo temporal previo si existe
         if os.path.exists(self.temp_pdf_path):
@@ -252,6 +305,8 @@ class ExtractorPDFDoctor:
         if url.startswith("blob:"):
             return self.descargar_blob(url)
 
+        is_dynamic_pdf_endpoint = "/ris/atencion/pdf" in url.lower()
+
         for intento in range(1, max_retries + 1):
             try:
                 logger.info(f"Descargando PDF (Intento {intento}/{max_retries}) desde: {url}")
@@ -259,8 +314,21 @@ class ExtractorPDFDoctor:
                 for cookie in self.driver.get_cookies():
                     session.cookies.set(cookie['name'], cookie['value'])
                 
-                headers = {"User-Agent": self.driver.execute_script("return navigator.userAgent;")}
-                response = session.get(url, headers=headers, stream=True, verify=False, timeout=20)
+                headers = {
+                    "User-Agent": self.driver.execute_script("return navigator.userAgent;"),
+                    "Referer": "https://ris.chile.telemedicina.com/ris/atencion/lista",
+                }
+
+                # Si la URL es /ris/atencion/pdf y tenemos datos POST de frmLista, enviamos POST directamente
+                if is_dynamic_pdf_endpoint and self.ris_post_data:
+                    post_payload = dict(self.ris_post_data)
+                    if session.cookies.get("csrf_ris"):
+                        post_payload["csrf_ris"] = session.cookies.get("csrf_ris")
+                    logger.info(f"Enviando petición POST a {url} para idExamen={post_payload.get('idExamen')}...")
+                    response = session.post(url, data=post_payload, headers=headers, stream=True, verify=False, timeout=20)
+                else:
+                    response = session.get(url, headers=headers, stream=True, verify=False, timeout=20)
+
                 response.raise_for_status()
 
                 with open(self.temp_pdf_path, 'wb') as f:
@@ -277,6 +345,9 @@ class ExtractorPDFDoctor:
                             return True
                         else:
                             logger.warning(f"Descarga HTTP recibida ({file_size} bytes) pero sin encabezado %PDF válido.")
+                            # Si falló por GET y tenemos datos POST de frmLista, probar POST inmediato
+                            if not is_dynamic_pdf_endpoint and self.ris_post_data:
+                                is_dynamic_pdf_endpoint = True
                     else:
                         logger.warning(f"Descarga HTTP devolvió archivo vacío o insuficiente ({file_size} bytes).")
             except Exception as e:
@@ -300,10 +371,23 @@ class ExtractorPDFDoctor:
     def descargar_via_browser_fetch(self, url):
         """Descarga el PDF ejecutando fetch con credenciales directamente en el contexto del navegador."""
         try:
+            post_data = self.ris_post_data if ("/ris/atencion/pdf" in url.lower() and self.ris_post_data) else None
             script = """
                 var uri = arguments[0];
-                var callback = arguments[1];
-                fetch(uri, {credentials: 'include'})
+                var postData = arguments[1];
+                var callback = arguments[2];
+                var opts = {credentials: 'include'};
+                if (postData) {
+                    opts.method = 'POST';
+                    var params = new URLSearchParams();
+                    for (var k in postData) {
+                        if (Object.prototype.hasOwnProperty.call(postData, k)) {
+                            params.append(k, postData[k]);
+                        }
+                    }
+                    opts.body = params;
+                }
+                fetch(uri, opts)
                     .then(function(r) { return r.blob(); })
                     .then(function(blob) {
                         var reader = new FileReader();
@@ -312,7 +396,7 @@ class ExtractorPDFDoctor:
                     })
                     .catch(function(e) { callback(null); });
             """
-            result = self.driver.execute_async_script(script, url)
+            result = self.driver.execute_async_script(script, url, post_data)
             if result and "," in result:
                 header, encoded = result.split(",", 1)
                 data = base64.b64decode(encoded)
@@ -384,9 +468,12 @@ class ExtractorPDFDoctor:
                 r"Fecha Examen:\s*[\d\-]+\s+[\d:]+\n?",
                 r"Tiempo Cero:\s*[\d\-]+\s+[\d:]+\n?",
                 r"Fecha informe:\s*[\d\-]+\s+[\d:]+\n?",
+                r"Fecha Adquisici[oó]n Ex\.\s*[\d\-]+\s+[\d:]+\n?",
+                r"Fecha de Recepci[oó]n Ex\.\s*[\d\-]+\s+[\d:]+\n?",
+                r"Fecha/hora del informe\s*[\d\-]+\s+[\d:]+\n?",
                 r"Powered by TCPDF \(www\.tcpdf\.org\)\n?",
+                r"Consecutivo \d+\s*\(.*?\)[^\n]*\n?",
                 r"P[aá]gina \d+ [/de]+ \d+\n?",
-                r"Consecutivo \d+\s*\(.*?\)\n?",
             ]
 
             def limpiar_meta(texto):
@@ -401,9 +488,13 @@ class ExtractorPDFDoctor:
             match_doc = re.search(r'N[uú]mero de documento\s*[:\.]?\s*([\d\-]+)', pagina1, re.IGNORECASE)
             doc_number = match_doc.group(1) if match_doc else "NO ENCONTRADO"
 
-            # 2. Fecha Examen (solo está en página 1)
-            match_fecha = re.search(r'Fecha Examen:\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})', pagina1, re.IGNORECASE)
-            fecha_examen_raw = match_fecha.group(1) if match_fecha else None
+            # 2. Fecha Examen o Fecha Adquisición Ex. (solo está en página 1)
+            match_fecha = re.search(
+                r'(?:Fecha Examen:|Fecha Adquisici[oó]n Ex\.)\s*(\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})',
+                pagina1,
+                re.IGNORECASE
+            )
+            fecha_examen_raw = re.sub(r'\s+', ' ', match_fecha.group(1).strip()) if match_fecha else None
             fecha_agendada_sql = None
             if fecha_examen_raw:
                 try:
@@ -413,10 +504,14 @@ class ExtractorPDFDoctor:
                 except Exception as e:
                     logger.warning(f"Error al formatear fecha: {e}")
 
-            # 3. Cuerpo de página 1: desde "Número de ficha" en adelante
-            match_inicio = re.search(r'N[uú]mero de ficha[^\n]*\n', pagina1, re.IGNORECASE)
+            # 3. Cuerpo de página 1: desde "Número de ficha" (o "Integramédica" / "Edad" en formato /atencion/pdf)
+            match_inicio = (
+                re.search(r'N[uú]mero de ficha[^\n]*\n', pagina1, re.IGNORECASE)
+                or re.search(r'Integram[eé]dica[^\n]*\n', pagina1, re.IGNORECASE)
+                or re.search(r'Edad\s+\d+\s*a[ñn]os[^\n]*\n', pagina1, re.IGNORECASE)
+            )
             if not match_inicio:
-                logger.warning("No se encontró 'Número de ficha' en página 1.")
+                logger.warning("No se encontró 'Número de ficha' ni encabezado equivalente en página 1.")
                 return None
 
             # Limpiar el encabezado (Integramédica, fechas) que aparece justo después
@@ -429,13 +524,19 @@ class ExtractorPDFDoctor:
             examen = lineas_examen[0] if lineas_examen else "NO ENCONTRADO"
 
             # ── Páginas 2+: solo continuación del cuerpo, sin encabezado ni firma ─
+            PATRONES_CABECERA_PACIENTE = [
+                r"Continuaci[oó]n de informe paciente[^\n]*\n?",
+                r"Nombre del paciente[^\n]*\n?",
+                r"N[uú]mero de documento[^\n]*\n?",
+                r"Edad\s+\d+\s*a[ñn]os[^\n]*\n?",
+                r"Procedencia[^\n]*\n?",
+                r"N[uú]mero de ficha[^\n]*\n?",
+            ]
             continuaciones = []
             for texto_pag in pages_text[1:]:
-                # Eliminar encabezado "Continuación de informe paciente NOMBRE"
-                texto_limpio = re.sub(
-                    r"Continuaci[oó]n de informe paciente[^\n]*\n?",
-                    "", texto_pag, flags=re.IGNORECASE
-                )
+                texto_limpio = texto_pag
+                for p_cab in PATRONES_CABECERA_PACIENTE:
+                    texto_limpio = re.sub(p_cab, "", texto_limpio, flags=re.IGNORECASE)
                 # Limpiar metadatos (Powered by TCPDF, Página X de Y, etc.)
                 texto_limpio = limpiar_meta(texto_limpio)
                 # Cortar antes de la firma de esta página
@@ -449,8 +550,8 @@ class ExtractorPDFDoctor:
             diagnostico = re.sub(r'\n{3,}', '\n\n', diagnostico)
             diagnostico = "\n".join(line.rstrip() for line in diagnostico.splitlines())
 
-            # Insertar salto de página (\f) antes de "Hallazgos:" para el procesador Word
-            diagnostico = re.sub(r'(?i)(Hallazgos:)', r'\f\n\1', diagnostico)
+            # Insertar salto de página (\f) antes de "Hallazgos:" (solo al inicio de línea) para el procesador Word
+            diagnostico = re.sub(r'(?im)^(Hallazgos:)', r'\f\n\1', diagnostico)
 
             return {
                 "numero_documento": doc_number,
