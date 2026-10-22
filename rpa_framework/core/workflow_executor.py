@@ -1122,7 +1122,7 @@ class WorkflowExecutor:
                 # Verificar si el fallo provino de actualiza_estado o si quedó en Aprobacion_Pendiente
                 es_aprobacion_pendiente = False
                 err_str = str(e).lower()
-                if "actualiza_estado" in err_str or "aprobacion_pendiente" in err_str:
+                if any(k in err_str for k in ["actualiza_estado", "aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado"]):
                     es_aprobacion_pendiente = True
                 else:
                     try:
@@ -1136,13 +1136,13 @@ class WorkflowExecutor:
                         if _ultimo:
                             est_ult = str(_ultimo.get("estado") or "").lower()
                             obs_ult = str(_ultimo.get("observacion") or "").lower()
-                            if "aprobacion_pendiente" in est_ult or "actualiza_estado" in obs_ult:
+                            if any(k in est_ult for k in ["aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado", "terminado"]) or "actualiza_estado" in obs_ult:
                                 es_aprobacion_pendiente = True
                     except Exception:
                         pass
 
                 if es_aprobacion_pendiente:
-                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente: NO suma al contador de errores de auto-pausa.")
+                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente / Reclasificado (Addendum/Ya Ingresado): NO suma al contador de errores de auto-pausa.")
                 else:
                     consecutive_errors += 1
                     self.logger.log(f"   ⚠️ Errores consecutivos en loop: {consecutive_errors}/2")

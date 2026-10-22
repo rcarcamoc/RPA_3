@@ -188,14 +188,26 @@ def obtener_datos(fecha_inicio, fecha_fin):
         return pd.DataFrame(columns=['inicio', 'estado', 'estado_notificacion'])
     return pd.DataFrame(datos)
 
-def is_success(e):
-    return any(k in str(e).lower() for k in ['terminado', 'finalizado', 'éxito', 'exito'])
+def is_addendum(e):
+    return 'addendum' in str(e).lower()
+
+def is_ya_ingresado(e):
+    return any(k in str(e).lower() for k in ['ya ingresado', 'ya_ingresado'])
 
 def is_pending_approval(e):
     return any(k in str(e).lower() for k in ['aprobacion_pendiente', 'pendiente de aprobación', 'pending'])
 
+def is_success_standard(e):
+    st = str(e).lower()
+    return any(k in st for k in ['terminado', 'finalizado', 'éxito', 'exito']) and not (is_pending_approval(e) or is_addendum(e) or is_ya_ingresado(e))
+
+def is_success(e):
+    st = str(e).lower()
+    return any(k in st for k in ['terminado', 'finalizado', 'éxito', 'exito', 'addendum', 'ya ingresado', 'ya_ingresado']) or is_pending_approval(e)
+
 def is_error(e):
-    return any(k in str(e).lower() for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e)
+    st = str(e).lower()
+    return any(k in st for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e) and not is_addendum(e) and not is_ya_ingresado(e)
 
 def is_in_progress(e):
     return any(k in str(e).lower() for k in ['proceso'])
@@ -220,18 +232,24 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         texto += "• ℹ️ <i>Sin nuevos casos en esta ventana (Robot en espera activa)</i>\n"
     else:
         conteo_hora = df_hora['estado'].value_counts()
-        exitos_h = sum(cnt for st, cnt in conteo_hora.items() if is_success(st))
+        exitos_std_h = sum(cnt for st, cnt in conteo_hora.items() if is_success_standard(st))
         proceso_h = sum(cnt for st, cnt in conteo_hora.items() if is_in_progress(st))
         pendientes_h = sum(cnt for st, cnt in conteo_hora.items() if is_pending_approval(st))
+        addendum_h = sum(cnt for st, cnt in conteo_hora.items() if is_addendum(st))
+        ya_ingresado_h = sum(cnt for st, cnt in conteo_hora.items() if is_ya_ingresado(st))
         errores_h = sum(cnt for st, cnt in conteo_hora.items() if is_error(st))
-        total_exitosos_h = exitos_h + pendientes_h
+        total_exitosos_h = exitos_std_h + pendientes_h + addendum_h + ya_ingresado_h
         
         if total_exitosos_h > 0:
             texto += f"• 🟢 <b>Exitosos:</b> <b>{total_exitosos_h}</b>\n"
-            if exitos_h > 0:
-                texto += f"   ├ ✅ Completados 100%: <b>{exitos_h}</b>\n"
+            if exitos_std_h > 0:
+                texto += f"   ├ ✅ Completados 100%: <b>{exitos_std_h}</b>\n"
             if pendientes_h > 0:
-                texto += f"   └ ⏳ Aprobación pendiente: <b>{pendientes_h}</b>\n"
+                texto += f"   ├ ⏳ Aprobación pendiente: <b>{pendientes_h}</b>\n"
+            if addendum_h > 0:
+                texto += f"   ├ 📝 Addendum: <b>{addendum_h}</b>\n"
+            if ya_ingresado_h > 0:
+                texto += f"   └ 🔁 Ya ingresado: <b>{ya_ingresado_h}</b>\n"
         if proceso_h > 0:
             texto += f"• ⏳ En ejecución: <b>{proceso_h}</b>\n"
         if errores_h > 0:
@@ -250,18 +268,24 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         texto += "• 🟢 Alertas pendientes: <b>Ninguna</b> ✨\n"
     else:
         conteo_dia = df_dia['estado'].value_counts()
-        exitos_d = sum(cnt for st, cnt in conteo_dia.items() if is_success(st))
+        exitos_std_d = sum(cnt for st, cnt in conteo_dia.items() if is_success_standard(st))
         pendientes_d = sum(cnt for st, cnt in conteo_dia.items() if is_pending_approval(st))
+        addendum_d = sum(cnt for st, cnt in conteo_dia.items() if is_addendum(st))
+        ya_ingresado_d = sum(cnt for st, cnt in conteo_dia.items() if is_ya_ingresado(st))
         errores_d = sum(cnt for st, cnt in conteo_dia.items() if is_error(st))
-        completados_d = exitos_d + pendientes_d
+        completados_d = exitos_std_d + pendientes_d + addendum_d + ya_ingresado_d
         
         texto += f"• 🎯 Total procesados hoy: <b>{total_dia} casos</b>\n"
         if completados_d > 0:
             texto += f"• 🟢 <b>Exitosos (Total):</b> <b>{completados_d} casos</b>\n"
-            if exitos_d > 0:
-                texto += f"   ├ ✅ Completados 100%: <b>{exitos_d}</b>\n"
+            if exitos_std_d > 0:
+                texto += f"   ├ ✅ Completados 100%: <b>{exitos_std_d}</b>\n"
             if pendientes_d > 0:
-                texto += f"   └ ⏳ Aprobación pendiente: <b>{pendientes_d}</b> <i>(completados por RPA)</i>\n"
+                texto += f"   ├ ⏳ Aprobación pendiente: <b>{pendientes_d}</b> <i>(completados por RPA)</i>\n"
+            if addendum_d > 0:
+                texto += f"   ├ 📝 Addendum: <b>{addendum_d}</b> <i>(reclasificados)</i>\n"
+            if ya_ingresado_d > 0:
+                texto += f"   └ 🔁 Ya ingresado: <b>{ya_ingresado_d}</b> <i>(reclasificados)</i>\n"
         
         base_tasa = completados_d + errores_d
         tasa = (completados_d / base_tasa * 100) if base_tasa > 0 else 100.0
@@ -271,7 +295,7 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
         # Desglose de errores y alertas
         sin_gestionar = 0
         if errores_d > 0 and 'estado_notificacion' in df_dia.columns:
-            df_err = df_dia[df_dia['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df_dia['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending', na=False)]
+            df_err = df_dia[df_dia['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df_dia['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending|addendum|ya ingresado|ya_ingresado', na=False)]
             sin_gestionar = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
             if sin_gestionar > 0:
                 texto += f"• ❌ Errores técnicos: <b>{errores_d}</b> (🔴 <b>{sin_gestionar}</b> alerta{'s' if sin_gestionar > 1 else ''} sin gestionar en Telegram)\n"
@@ -368,6 +392,8 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
         def get_col_color(c):
             cl = str(c).lower()
             if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return '#f59e0b' # Ámbar
+            if 'addendum' in cl: return '#3b82f6' # Azul
+            if any(x in cl for x in ['ya ingresado', 'ya_ingresado']): return '#8b5cf6' # Púrpura
             if 'error' in cl or 'fall' in cl: return '#ef4444' # Rojo coral
             if any(x in cl for x in ['terminado', 'finalizado', 'exito', 'éxito']): return '#10b981' # Verde esmeralda
             if 'proceso' in cl: return '#0ea5e9' # Azul cielo
@@ -379,6 +405,8 @@ def generar_dashboard_ejecutivo(df_hora, df_dia, periodo_str, filename, is_daily
         def format_legend_label(col_name):
             cl = str(col_name).lower()
             if any(x in cl for x in ['pending', 'aprobacion_pendiente', 'pendiente']): return 'Aprobación Pendiente'
+            if 'addendum' in cl: return 'Addendum'
+            if any(x in cl for x in ['ya ingresado', 'ya_ingresado']): return 'Ya Ingresado'
             if any(x in cl for x in ['terminado', 'finalizado', 'éxito', 'exito']): return 'Completado 100%'
             if 'proceso' in cl: return 'En Proceso'
             if 'error' in cl or 'fall' in cl: return 'Error'
@@ -436,10 +464,12 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     total = len(df)
     conteo_estados = df['estado'].value_counts()
     
-    exitos = sum(cnt for st, cnt in conteo_estados.items() if is_success(st))
+    exitos_std = sum(cnt for st, cnt in conteo_estados.items() if is_success_standard(st))
     pendientes = sum(cnt for st, cnt in conteo_estados.items() if is_pending_approval(st))
+    addendums = sum(cnt for st, cnt in conteo_estados.items() if is_addendum(st))
+    ya_ingresados = sum(cnt for st, cnt in conteo_estados.items() if is_ya_ingresado(st))
     errores = sum(cnt for st, cnt in conteo_estados.items() if is_error(st))
-    completados = exitos + pendientes
+    completados = exitos_std + pendientes + addendums + ya_ingresados
     base_tasa = completados + errores
     tasa = (completados / base_tasa * 100) if base_tasa > 0 else 100.0
     tasa_emoji = "🟢" if tasa >= 95.0 else ("🟡" if tasa >= 80.0 else "🔴")
@@ -452,10 +482,14 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     
     if completados > 0:
         texto += f"• 🟢 <b>Exitosos (Total):</b> <b>{completados}</b>\n"
-        if exitos > 0:
-            texto += f"   ├ ✅ Completados 100%: <b>{exitos}</b>\n"
+        if exitos_std > 0:
+            texto += f"   ├ ✅ Completados 100%: <b>{exitos_std}</b>\n"
         if pendientes > 0:
-            texto += f"   └ ⏳ Aprobación Pendiente: <b>{pendientes}</b> <i>(completados por RPA)</i>\n"
+            texto += f"   ├ ⏳ Aprobación Pendiente: <b>{pendientes}</b> <i>(completados por RPA)</i>\n"
+        if addendums > 0:
+            texto += f"   ├ 📝 Addendum: <b>{addendums}</b> <i>(reclasificados)</i>\n"
+        if ya_ingresados > 0:
+            texto += f"   └ 🔁 Ya Ingresado: <b>{ya_ingresados}</b> <i>(reclasificados)</i>\n"
         
     proceso = sum(cnt for st, cnt in conteo_estados.items() if is_in_progress(st))
     if proceso > 0:
@@ -464,7 +498,7 @@ def generar_texto_resumen_simple(df, tipo_reporte, periodo_str):
     if errores > 0:
         texto += f"• ❌ Con Incidencias / Error: <b>{errores}</b>\n"
         if 'estado_notificacion' in df.columns:
-            df_err = df[df['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending', na=False)]
+            df_err = df[df['estado'].astype(str).str.lower().str.contains('error|fall', na=False) & ~df['estado'].astype(str).str.lower().str.contains('aprobacion_pendiente|pending|addendum|ya ingresado|ya_ingresado', na=False)]
             sin_gestionar = len(df_err[df_err['estado_notificacion'] == 'Pendiente'])
             gestionados = len(df_err[df_err['estado_notificacion'] == 'Gestionado'])
             if sin_gestionar > 0:

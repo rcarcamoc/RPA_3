@@ -210,6 +210,8 @@ def generar_excel_reporte(periodo: str = "hoy"):
         errores = 0
         en_proceso = 0
         pendientes = 0
+        addendums = 0
+        ya_ingresados = 0
         patologias = 0
 
         errores_gestionados = 0
@@ -227,6 +229,10 @@ def generar_excel_reporte(periodo: str = "hoy"):
                     pendientes_gestionados += 1
                 elif notif == 'pendiente':
                     pendientes_pendientes += 1
+            elif 'addendum' in st:
+                addendums += 1
+            elif any(k in st for k in ['ya ingresado', 'ya_ingresado']):
+                ya_ingresados += 1
             elif any(k in st for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
                 exitosos += 1
             elif any(k in st for k in ['error', 'fallo', 'falla']):
@@ -246,7 +252,7 @@ def generar_excel_reporte(periodo: str = "hoy"):
             if pato_val in ['si', 'sí', '1', 'true', 'detectada', 'positiva', 'critica', 'crítica']:
                 patologias += 1
 
-        completados = exitosos + pendientes
+        completados = exitosos + pendientes + addendums + ya_ingresados
         base_tasa = completados + errores
         tasa_exito = f"{(completados / base_tasa * 100):.1f}%" if base_tasa > 0 else "100.0%"
 
@@ -446,6 +452,8 @@ def generar_excel_reporte(periodo: str = "hoy"):
             "errores_pendientes": errores_pendientes,
             "en_proceso": en_proceso,
             "pendientes_aprobacion": pendientes,
+            "addendums": addendums,
+            "ya_ingresados": ya_ingresados,
             "pendientes_gestionados": pendientes_gestionados,
             "pendientes_pendientes": pendientes_pendientes,
             "patologias_criticas": patologias,
