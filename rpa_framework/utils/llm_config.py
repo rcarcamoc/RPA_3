@@ -66,15 +66,13 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "nvidia/nemotron-parse-2.0",                              # Primario — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b",                      # Fallback 1 — Validado OK
-   "meta/llama-3.2-11b-vision-instruct",                     # Fallback 2 — Validado OK
-   "nvidia/nemotron-3-super-120b-a12b:free",                 # Fallback 3 — Validado OK
-   "cohere/north-mini-code:free",                            # Fallback 4 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 5 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 6 — Validado OK
-   "dots-studio/dots-3-note-preview:free",                   # Fallback 7 — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 8 — Validado OK
+   "cohere/north-mini-code:free",                            # Primario — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 1 — Validado OK
+   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 2 — Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 3 — Validado OK
+   "openrouter/free",                                        # Fallback 4 — Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 5 — Validado OK
+   "minimax/minimax-m3.1-flash:free",                        # Fallback 6 — Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
@@ -82,9 +80,7 @@ OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "google/gemma-4-31b-it",
-    "inclusionai/ling-3.1-flash",
+    "dots-studio/dots-3-note-preview:free",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)

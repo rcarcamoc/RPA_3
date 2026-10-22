@@ -547,8 +547,11 @@ def main():
             buscador.click_vinculo_doctor()
             
         else:
-            print("No encontrado en la web")
-            bd.db_update_tracking(status='En Proceso')
+            print("No se encontró ningún médico o paciente en la web.")
+            bd.registrar_sin_resultados()
+            print("Esperando 5 minutos antes de reintentar...")
+            espera_con_countdown(300, "Sin registros para trabajar.\nReintentando en:")
+            sys.exit(2)
 
     except Exception as e:
         try:

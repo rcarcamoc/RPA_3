@@ -146,6 +146,9 @@ class BusquedaTextOnly:
             self.auditor = None
             logger.warning("⚠️ AuditorClinico no disponible; auditoría pre-clic desactivada.")
 
+        # Motor de respaldo PaddleOCR (Lazy loaded)
+        self._paddle_engine = None
+
     def update_db_error(self, error_message):
         """Actualiza el estado a Error en la base de datos."""
         if not HAS_MYSQL:
@@ -604,6 +607,22 @@ class BusquedaTextOnly:
         except Exception as e:
             logger.error(f"Error en execute_ocr_data (Manual): {e}")
             return []
+
+    def execute_paddle_ocr(self, img_bgr):
+        """
+        Ejecuta PaddleOCR como fallback avanzado cuando Tesseract falla.
+        Utiliza el motor profundo PP-OCR con alta robustez ante fechas (ceros/nueves) y acrónimos.
+        """
+        if self._paddle_engine is None:
+            logger.info("🚀 Inicializando motor PaddleOCR (Fallback)...")
+            self._paddle_engine = OCREngine(
+                engine='paddleocr',
+                language='es',
+                use_gpu=False,
+                confidence_threshold=0.0
+            )
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        return self._paddle_engine.extract_text_with_location(img_rgb)
 
     def get_crop_image(self, full_img, y_center):
         h, w = full_img.shape[:2]
@@ -1123,6 +1142,30 @@ RESPONDE SOLO EN FORMATO JSON:
                 if self.vf:
                      self.vf.hide_persistent_message("ocr")
 
+        # --- PASO 4: PADDLEOCR (FALLBACK INTELIGENTE CUANDO TESSERACT FALLA) ---
+        if not candidates:
+            logger.warning("⚠️ Pasos Tesseract sin candidatos. Ejecutando Paso 4: PaddleOCR (Fallback)...")
+            
+            if self.vf:
+                self.vf.show_persistent_message("PROCESANDO OCR (PADDLE)...", "ocr", bg_color="#9C27B0", fg_color="#FFFFFF")
+                
+            try:
+                ocr_results_paddle = self.execute_paddle_ocr(img_bgr)
+                candidates_paddle, rows_data_paddle = self._analyze_candidates(ocr_results_paddle, target_fecha_str)
+                
+                if candidates_paddle:
+                    logger.info(f"✅ Fallback de PaddleOCR exitoso. Encontrados {len(candidates_paddle)} candidatos.")
+                    candidates = candidates_paddle
+                    rows_data = rows_data_paddle
+                else:
+                    logger.warning("❌ Paso 4 (PaddleOCR) también sin candidatos.")
+                    rows_data = rows_data_paddle
+            except Exception as e:
+                logger.error(f"Error en fallback PaddleOCR: {e}")
+            finally:
+                if self.vf:
+                    self.vf.hide_persistent_message("ocr")
+
         logger.info(f"Total Candidatos Finales: {len(candidates)}")
 
         # Guardar imagen de log con franjas de detección OCR
@@ -1413,6 +1456,7 @@ RESPONDE SOLO EN FORMATO JSON:
                     y2 = min(h, y_c + half_h)
                 row_items = sorted(row['items'], key=lambda x: x['center']['x'])
                 row_text = " ".join([i['text'] for i in row_items])[:80]
+                row_text_safe = row_text.encode('ascii', 'replace').decode('ascii')
 
                 is_candidate = any(abs(y_c - cy) < self.ROW_TOLERANCE for cy in cand_y_centers)
 
@@ -1427,8 +1471,8 @@ RESPONDE SOLO EN FORMATO JSON:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.42
                 text_color = (0, 0, 0)
-                cv2.putText(img_log, row_text, (4, y2 - 4), font, font_scale, (255, 255, 255), 3, cv2.LINE_AA)
-                cv2.putText(img_log, row_text, (4, y2 - 4), font, font_scale, text_color, 1, cv2.LINE_AA)
+                cv2.putText(img_log, row_text_safe, (4, y2 - 4), font, font_scale, (255, 255, 255), 3, cv2.LINE_AA)
+                cv2.putText(img_log, row_text_safe, (4, y2 - 4), font, font_scale, text_color, 1, cv2.LINE_AA)
 
             # Mezclar overlay con transparencia
             alpha = 0.25
@@ -1441,10 +1485,11 @@ RESPONDE SOLO EN FORMATO JSON:
                 y2_text = min(h, int(max(all_ymaxs2)) + 2) if all_ymaxs2 else min(h, y_c + half_h)
                 row_items = sorted(row['items'], key=lambda x: x['center']['x'])
                 row_text = " ".join([i['text'] for i in row_items])[:80]
+                row_text_safe = row_text.encode('ascii', 'replace').decode('ascii')
                 is_candidate = any(abs(y_c - cy) < self.ROW_TOLERANCE for cy in cand_y_centers)
                 label_color = (0, 80, 0) if is_candidate else (80, 60, 0)
-                cv2.putText(img_log, row_text, (4, y2_text - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255,255,255), 3, cv2.LINE_AA)
-                cv2.putText(img_log, row_text, (4, y2_text - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, label_color, 1, cv2.LINE_AA)
+                cv2.putText(img_log, row_text_safe, (4, y2_text - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255,255,255), 3, cv2.LINE_AA)
+                cv2.putText(img_log, row_text_safe, (4, y2_text - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, label_color, 1, cv2.LINE_AA)
 
             # --- Líneas de borde para cada franja candidata (verde brillante) ---
             for cand in candidates:

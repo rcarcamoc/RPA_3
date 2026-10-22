@@ -177,12 +177,56 @@ class BuscadorDoctorSeleniumV2:
             logger.error(f"Error actualizando registro_acciones: {e}")
             return False
 
-    def run(self):
+    def verificar_sin_resultados(self) -> bool:
+        """Verifica si la tabla muestra 'Sin resultados'."""
+        try:
+            xpath = "//td[contains(text(), 'Sin resultados')]"
+            if self.driver.find_elements(By.XPATH, xpath):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def registrar_sin_resultados(self):
+        """Actualiza el estado a 'sin registros para trabajar'."""
+        if not HAS_MYSQL:
+            return
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            if self.target_id:
+                query = """
+                UPDATE registro_acciones 
+                SET estado = 'sin registros para trabajar', ultimo_nodo = %s, `update` = NOW()
+                WHERE id = %s
+                """
+                cursor.execute(query, (self.script_name, self.target_id))
+            else:
+                query = """
+                UPDATE registro_acciones 
+                SET estado = 'sin registros para trabajar', ultimo_nodo = %s, `update` = NOW()
+                WHERE estado = 'En Proceso'
+                """
+                cursor.execute(query, (self.script_name,))
+            conn.commit()
+            conn.close()
+            logger.info("[DB] Estado actualizado a: 'sin registros para trabajar'")
+        except Exception as e:
+            logger.error(f"Error registrando sin resultados en BD: {e}")
+
+    def run(self) -> int:
         self.conectar_navegador()
+        
+        if self.verificar_sin_resultados():
+            logger.info("ℹ️ Se detectó 'Sin resultados' en la tabla. Registrando en BD...")
+            self.registrar_sin_resultados()
+            return 2
+
         nombre_medico = self.extraer_ultimo_medico()
         if not nombre_medico:
-            logger.warning("No se detectó ningún médico en la lista.")
-            return False
+            logger.warning("No se detectó ningún médico en la lista. Registrando en BD...")
+            self.registrar_sin_resultados()
+            return 2
 
         logger.info(f"Médico Web detectado: {nombre_medico}")
         medico_bd, score = self.buscar_medico_en_bd(nombre_medico)
@@ -193,17 +237,35 @@ class BuscadorDoctorSeleniumV2:
 
         self.actualizar_registro_acciones(nombre_medico, user, clave)
         self.click_vinculo_doctor()
-        return True
+        return 0
 
 
 def main():
     target_id = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("VAR_TARGET_ID")
     background = os.environ.get("VAR_RIS_BACKGROUND", "0") == "1"
     buscador = BuscadorDoctorSeleniumV2(target_id=target_id, background=background)
-    if buscador.run():
+    try:
+        ret = buscador.run()
+    except Exception as e:
+        logger.error(f"Excepción en buscador doctor V2: {e}")
+        ret = 1
+
+    if ret == 0:
         sys.exit(0)
+    elif ret == 2:
+        logger.info("Fin de ejecución por falta de registros (código 2).")
+        if not background:
+            try:
+                from recordings.web.busca_doctor_ultima import espera_con_countdown
+                espera_con_countdown(300, "Sin registros para trabajar.\nReintentando en:")
+            except Exception:
+                time.sleep(300)
+        else:
+            time.sleep(300)
+        sys.exit(2)
     else:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

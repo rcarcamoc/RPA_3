@@ -9,6 +9,9 @@ import subprocess
 import json
 import os
 import sys
+import time
+import threading
+import queue
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -95,6 +98,7 @@ class WorkflowExecutor:
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
         self._external_stop = False  # True solo cuando stop() es llamado por el usuario
+        self.no_records_found = False  # True cuando un script o sub-workflow termina con código 2 (sin registros)
         self.active_process = None
         self.nested_executor = None
         
@@ -275,6 +279,16 @@ class WorkflowExecutor:
             self.logger.log(f"▶️ Iniciando ejecución: {self.workflow.name}")
             self.logger.log("=" * 60)
 
+            # Registrar actividad para el notificador horario
+            try:
+                try:
+                    from utils.notificador_resumen import registrar_ejecucion_workflow
+                except ImportError:
+                    from rpa_framework.utils.notificador_resumen import registrar_ejecucion_workflow
+                registrar_ejecucion_workflow(self.workflow.name, status="running")
+            except Exception:
+                pass
+
             # Verificar vigencia de validación de modelos LLM (< 6 horas)
             if not self.is_sub_workflow:
                 try:
@@ -337,18 +351,33 @@ class WorkflowExecutor:
                     break
             
             # Resultado final
-            status = "stopped" if self.should_stop else "success"
+            if self.no_records_found:
+                status = "no_records"
+            elif self.should_stop:
+                status = "stopped"
+            else:
+                status = "success"
             
             self.logger.log("=" * 60)
             self.logger.log(f"✅ Ejecución completada: {status}")
             self.logger.log(f"   Variables finales: {self.context}")
             self.logger.log("=" * 60)
             
-            # Si terminó correctamente o fue detenido, descartar grabación
+            # Si terminó correctamente, fue detenido, o finalizó sin registros, descartar grabación
             if self.screen_recorder:
                 self.screen_recorder.discard()
-                self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso/detenido)")
+                self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso/detenido/sin registros)")
                 self.screen_recorder = None
+
+            # Registrar finalización para el notificador horario
+            try:
+                try:
+                    from utils.notificador_resumen import registrar_ejecucion_workflow
+                except ImportError:
+                    from rpa_framework.utils.notificador_resumen import registrar_ejecucion_workflow
+                registrar_ejecucion_workflow(self.workflow.name, status=status)
+            except Exception:
+                pass
 
             return {
                 "status": status,
@@ -358,6 +387,16 @@ class WorkflowExecutor:
             }
             
         except Exception as e:
+            # Registrar estado en caso de error o parada para el notificador horario
+            try:
+                try:
+                    from utils.notificador_resumen import registrar_ejecucion_workflow
+                except ImportError:
+                    from rpa_framework.utils.notificador_resumen import registrar_ejecucion_workflow
+                registrar_ejecucion_workflow(self.workflow.name, status="stopped" if self.should_stop else "error")
+            except Exception:
+                pass
+
             if self.should_stop:
                 self.logger.log("⏹️ Workflow interrumpido por solicitud de parada del usuario.")
                 if self.screen_recorder:
@@ -610,7 +649,8 @@ class WorkflowExecutor:
                                   except Exception as max_err:
                                       self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
                 elif returncode == 2:
-                     self.logger.log(f"ℹ️ Comando finalizado (código 2): Sin registros. Deteniendo flujo.")
+                     self.logger.log(f"ℹ️ Comando finalizado (código 2): Sin registros para trabajar. Deteniendo flujo de forma limpia.")
+                     self.no_records_found = True
                      self.should_stop = True
                      return None
                 else:
@@ -724,21 +764,60 @@ class WorkflowExecutor:
                 )
                 self.active_process = process
                 
-                # Leer salida en tiempo real
+                # Leer salida en tiempo real con timeout de seguridad (12 minutos)
+                import queue
+                out_queue = queue.Queue()
+                def _reader():
+                    try:
+                        for l in iter(process.stdout.readline, ''):
+                            out_queue.put(l)
+                    except Exception:
+                        pass
+                    finally:
+                        out_queue.put(None)
+
+                reader_thread = threading.Thread(target=_reader, daemon=True)
+                reader_thread.start()
+
                 full_stdout = []
+                start_script_time = time.time()
+                SCRIPT_MAX_TIMEOUT = 720  # 12 minutos
+                is_timeout = False
+
                 while True:
-                    line = process.stdout.readline()
-                    if not line:
-                        if process.poll() is not None:
+                    if self.should_stop:
+                        break
+
+                    if time.time() - start_script_time > SCRIPT_MAX_TIMEOUT:
+                        is_timeout = True
+                        self.logger.log(f"🚨 TIMEOUT (12 min): Script '{node.label}' excedió el tiempo máximo permitido ({SCRIPT_MAX_TIMEOUT}s). Forzando cierre...")
+                        try:
+                            if sys.platform == "win32":
+                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, timeout=3)
+                            process.kill()
+                        except Exception:
+                            pass
+                        break
+
+                    try:
+                        line = out_queue.get(timeout=0.5)
+                        if line is None:
                             break
-                        continue
-                    
-                    clean_line = line.strip()
-                    if clean_line:
-                        self.logger.log(f"   [PY] {clean_line}")
-                        full_stdout.append(clean_line)
-                
-                returncode = process.poll()
+                        clean_line = line.strip()
+                        if clean_line:
+                            self.logger.log(f"   [PY] {clean_line}")
+                            full_stdout.append(clean_line)
+                    except queue.Empty:
+                        if process.poll() is not None and out_queue.empty():
+                            break
+
+                try:
+                    returncode = process.wait(timeout=5)
+                except Exception:
+                    returncode = process.poll()
+                if is_timeout:
+                    returncode = -1
+                    full_stdout.append(f"TIMEOUT: Script finalizado forzadamente tras {SCRIPT_MAX_TIMEOUT}s de inactividad.")
             finally:
                 if process:
                     try:
@@ -791,7 +870,8 @@ class WorkflowExecutor:
                             except Exception as max_err:
                                 self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
             elif returncode == 2:
-                self.logger.log(f"ℹ️ Script finalizado (código 2): Sin registros para trabajar. Deteniendo flujo.")
+                self.logger.log(f"ℹ️ Script finalizado (código 2): Sin registros para trabajar. Deteniendo flujo de forma limpia.")
+                self.no_records_found = True
                 self.should_stop = True
                 return None
             else:
@@ -1178,19 +1258,31 @@ class WorkflowExecutor:
         self.nested_executor.logger.log = bridged_log
         
         self.logger.log(f"   ▶️ Loop Running Workflow: {nested_wf.name}")
+        child_executor = self.nested_executor
         try:
-            result = self.nested_executor.execute()
+            result = child_executor.execute()
         finally:
             self.nested_executor = None
         
         status = result.get("status") if isinstance(result, dict) else "unknown"
-        if status == "stopped" or self.should_stop:
-            self.logger.log("   Workflow anidado detenido por usuario.")
-            self.should_stop = True
-            self._external_stop = True
-        elif status == "error":
-            if self.should_stop:
+        is_ext = self._external_stop or getattr(child_executor, '_external_stop', False)
+        if status == "no_records":
+            self.logger.log("   ℹ️ Iteración sin registros de pacientes. Continuando ciclo de loop...")
+            self.context.update(result.get("context", {}))
+            return
+        elif status == "stopped" or self.should_stop:
+            if is_ext:
                 self.logger.log("   Workflow anidado detenido por usuario.")
+                self.should_stop = True
+                self._external_stop = True
+            else:
+                self.logger.log("   Workflow anidado detenido internamente.")
+                self.should_stop = True
+        elif status == "error":
+            if self.should_stop or is_ext:
+                self.logger.log("   Workflow anidado detenido por usuario.")
+                self.should_stop = True
+                self._external_stop = is_ext
             else:
                 raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
         else:
@@ -1229,19 +1321,59 @@ class WorkflowExecutor:
                 creationflags=creationflags,
                 startupinfo=startupinfo
             )
-            self.active_process = process
+            # Leer salida con timeout de seguridad (12 minutos)
+            import queue
+            out_queue = queue.Queue()
+            def _reader_loop():
+                try:
+                    for l in iter(process.stdout.readline, ''):
+                        out_queue.put(l)
+                except Exception:
+                    pass
+                finally:
+                    out_queue.put(None)
+
+            reader_thread = threading.Thread(target=_reader_loop, daemon=True)
+            reader_thread.start()
+
+            start_script_time = time.time()
+            SCRIPT_MAX_TIMEOUT = 720  # 12 minutos
+            is_timeout = False
+
             while True:
-                line = process.stdout.readline()
-                if not line:
-                    if process.poll() is not None:
+                if self.should_stop:
+                    break
+
+                if time.time() - start_script_time > SCRIPT_MAX_TIMEOUT:
+                    is_timeout = True
+                    self.logger.log(f"🚨 TIMEOUT (12 min): Script de loop '{node.script}' excedió el tiempo máximo permitido ({SCRIPT_MAX_TIMEOUT}s). Forzando cierre...")
+                    try:
+                        if sys.platform == "win32":
+                            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, timeout=3)
+                        process.kill()
+                    except Exception:
+                        pass
+                    break
+
+                try:
+                    line = out_queue.get(timeout=0.5)
+                    if line is None:
                         break
-                    continue
-                clean_line = line.strip()
-                if clean_line:
-                    self.logger.log(f"   [LOOP-PY] {clean_line}")
-                    full_stdout.append(clean_line)
-                    
-            returncode = process.poll()
+                    clean_line = line.strip()
+                    if clean_line:
+                        self.logger.log(f"   [LOOP-PY] {clean_line}")
+                        full_stdout.append(clean_line)
+                except queue.Empty:
+                    if process.poll() is not None and out_queue.empty():
+                        break
+
+            try:
+                returncode = process.wait(timeout=5)
+            except Exception:
+                returncode = process.poll()
+            if is_timeout:
+                returncode = -1
+                full_stdout.append(f"TIMEOUT: Script de loop finalizado forzadamente tras {SCRIPT_MAX_TIMEOUT}s de inactividad.")
         finally:
             if process:
                 try:
@@ -1251,7 +1383,10 @@ class WorkflowExecutor:
                     pass
             self.active_process = None
         
-        if returncode != 0:
+        if returncode == 2:
+            self.logger.log("   ℹ️ Script de loop finalizado (código 2): Sin registros para trabajar. Continuando al siguiente ciclo.")
+            return
+        elif returncode != 0:
             if self.should_stop:
                 self.logger.log("   Script detenido por usuario.")
                 return
@@ -1494,10 +1629,20 @@ class WorkflowExecutor:
                 self.nested_executor = None
             
             status = result.get("status") if isinstance(result, dict) else "unknown"
-            if status == "stopped" or self.should_stop:
-                self.logger.log("⏹️ Sub-workflow detenido por el usuario. Deteniendo padre.")
+            is_ext = self._external_stop or getattr(nested_executor, '_external_stop', False)
+            if status == "no_records":
+                self.logger.log("ℹ️ Sub-workflow finalizado sin registros para trabajar. Terminando flujo actual de forma limpia.")
+                self.no_records_found = True
                 self.should_stop = True
-                self._external_stop = True
+                return None
+            elif status == "stopped" or self.should_stop:
+                if is_ext:
+                    self.logger.log("⏹️ Sub-workflow detenido por el usuario. Deteniendo padre.")
+                    self.should_stop = True
+                    self._external_stop = True
+                else:
+                    self.logger.log("⏹️ Sub-workflow detenido internamente.")
+                    self.should_stop = True
                 return None
             elif status == "error":
                 if self.should_stop:
