@@ -379,7 +379,13 @@ def enviar_alerta_todos(mensaje, record_id=None):
 
         reply_markup = {
             "inline_keyboard": [
-                [{"text": "⚠️ Pendiente ⚠️", "callback_data": f"gestionado_{record_id}"}]
+                [
+                    {"text": "✅ Marcar Gestionado", "callback_data": f"gest_normal_{record_id}"}
+                ],
+                [
+                    {"text": "📝 Addendum", "callback_data": f"gest_addendum_{record_id}"},
+                    {"text": "🔁 Ya Ingresado", "callback_data": f"gest_ya_ingresado_{record_id}"}
+                ]
             ]
         }
         try:

@@ -146,6 +146,8 @@ class BusquedaTextOnly:
             self.auditor = None
             logger.warning("⚠️ AuditorClinico no disponible; auditoría pre-clic desactivada.")
 
+        self.last_diagnostic = ""
+
     def update_db_error(self, error_message):
         """Actualiza el estado a Error en la base de datos."""
         if not HAS_MYSQL:
@@ -1008,6 +1010,105 @@ RESPONDE SOLO EN FORMATO JSON:
 
         return candidates, rows_data
 
+    def diagnosticar_falla(self, rows_data, candidates, target_fecha_str, target_diag, ocr_results=None, motivos_descarte=None):
+        """
+        Analiza detalladamente por qué falló la búsqueda para entregar un diagnóstico
+        preciso y comprensible al usuario en lugar de un error genérico.
+        Detecta si:
+          1. La pantalla estaba en blanco / visor PACS no cargó.
+          2. No se encontró la fecha agendada (e indica qué fechas sí se detectaron).
+          3. No se encontró el texto 'Examen Hecho' (e indica el estado real: Ordenado, Cancelado, etc.).
+          4. No coincide el examen (e indica qué examen figuraba con 'Examen Hecho').
+          5. Descarte por lateralidad anatómica o auditoría clínica/LLM.
+        """
+        total_palabras = len(ocr_results) if ocr_results else sum(len(r.get('items', [])) for r in rows_data)
+        if not candidates and total_palabras < 5:
+            return f"Pantalla en blanco o visor PACS no cargó (solo {total_palabras} palabras detectadas en pantalla)"
+
+        regex_fechas = re.compile(r'\b(\d{2}[-/]\d{2}[-/]\d{4})\b')
+        fechas_detectadas = set()
+        for r in rows_data:
+            txt = r.get('full_text', '')
+            for m in regex_fechas.findall(txt):
+                fechas_detectadas.add(m.replace('/', '-'))
+
+        # 1. Si hubo candidatos con (Fecha + Examen Hecho) pero ninguno coincidió con target_diag
+        if candidates:
+            if motivos_descarte:
+                return f"Discrepancia en examen ({motivos_descarte[0]})"
+            
+            examenes_pacs = []
+            for c in candidates:
+                frag = self.extraer_fragmento_estudio(c.get('full_text', ''))
+                if frag and len(frag) > 3:
+                    examenes_pacs.append(frag)
+                else:
+                    examenes_pacs.append(c.get('full_text', '')[:50])
+            
+            examenes_str = " | ".join(list(dict.fromkeys(examenes_pacs))[:3])
+            return (
+                f"Examen no coincide: Fecha '{target_fecha_str}' y 'Examen Hecho' confirmados, "
+                f"pero el estudio en PACS es diferente (Buscado: '{target_diag}' | En PACS: '{examenes_str}')"
+            )
+
+        # 2. Si NO hubo candidatos: Analizar si fue por FECHA o por ESTADO HECHO
+        filas_con_fecha = []
+        estados_excluidos_encontrados = []
+        ESTADOS_KEYWORDS = [
+            'cancelado', 'cancelada', 'anulado', 'anulada',
+            'agendado', 'agendada', 'citado', 'citada',
+            'ordenado', 'ordenada', 'en espera', 'solicitado', 'solicitada',
+            'aprobado', 'aprobada', 'preliminar', 'informado', 'informada'
+        ]
+
+        for r in rows_data:
+            r_text = r.get('full_text', '')
+            r_norm = self.normalize_text(r_text)
+            
+            has_date = False
+            if self.auditor:
+                has_date, _, _ = self.auditor.auditar_fecha(target_fecha_str, r_text)
+            else:
+                target_fecha_short = target_fecha_str[:-4] + target_fecha_str[-2:] if len(target_fecha_str) == 10 else ""
+                has_date = (target_fecha_str in r_text) or (target_fecha_short in r_text)
+            
+            estados_fila = []
+            for est in ESTADOS_KEYWORDS:
+                if re.search(r'\b' + re.escape(est) + r'\b', r_norm):
+                    estados_fila.append(est.upper())
+            
+            if has_date:
+                filas_con_fecha.append({
+                    'text': r_text,
+                    'estados': estados_fila
+                })
+            
+            estados_excluidos_encontrados.extend(estados_fila)
+
+        # Si se encontró la fecha pero no el estado 'Examen Hecho'
+        if filas_con_fecha:
+            estados_fecha = []
+            for f in filas_con_fecha:
+                estados_fecha.extend(f['estados'])
+            estados_str = ", ".join(sorted(set(estados_fecha))) if estados_fecha else "No indica 'Examen Hecho'"
+            return (
+                f"Texto 'Examen Hecho' no encontrado: La fecha '{target_fecha_str}' existe en PACS, "
+                f"pero los estudios figuran en estado '{estados_str}'"
+            )
+
+        # Si ni siquiera se encontró la fecha agendada
+        fechas_vistas_str = ", ".join(sorted(fechas_detectadas)) if fechas_detectadas else "ninguna detectada"
+        if estados_excluidos_encontrados:
+            estados_globales = ", ".join(sorted(set(estados_excluidos_encontrados))[:4])
+            return (
+                f"Fecha no encontrada: Se buscaba '{target_fecha_str}', pero no figura en pantalla "
+                f"(Fechas detectadas: {fechas_vistas_str} | Estados visibles: {estados_globales})"
+            )
+        else:
+            return (
+                f"Fecha no encontrada: Se buscaba '{target_fecha_str}', pero no figura en pantalla "
+                f"(Fechas detectadas: {fechas_vistas_str})"
+            )
 
     def execute(self, override_diag: str = None):
         """Ejecuta la búsqueda. Retorna (encontrado: bool, ocr_text_candidato: str)."""
@@ -1026,6 +1127,7 @@ RESPONDE SOLO EN FORMATO JSON:
             
         target_fecha_str = target_fecha_obj.strftime("%d-%m-%Y")
         logger.info(f"Buscando: [{target_fecha_str}] + [Hecho] + [{target_diag}]")
+        motivos_descarte = []
 
         # 2. Captura Inicial
         if self.vf:
@@ -1145,6 +1247,15 @@ RESPONDE SOLO EN FORMATO JSON:
                 logger.info(f"Fila {i} (Y={int(r['y_center'])}): {txt}")
             logger.info("============================================")
             
+            self.last_diagnostic = self.diagnosticar_falla(
+                rows_data=rows_data,
+                candidates=[],
+                target_fecha_str=target_fecha_str,
+                target_diag=target_diag,
+                ocr_results=locals().get('ocr_results', None),
+                motivos_descarte=motivos_descarte
+            )
+            logger.warning(f"📋 Diagnóstico de causa raíz: {self.last_diagnostic}")
             return False, ""
                 
         logger.info(f"Candidatos iniciales (Fecha + Estado): {len(candidates)}")
@@ -1164,6 +1275,7 @@ RESPONDE SOLO EN FORMATO JSON:
             # Verificación estricta de lateralidad clínica
             if not self.verificar_lateralidad(target_diag, ocr_text_candidate):
                 logger.info(f"🚫 [Fase 1] Candidato #{idx+1} descartado por lateralidad anatómica incompatible: '{ocr_text_candidate[:60]}'")
+                motivos_descarte.append(f"Lateralidad anatómica incompatible ('{target_diag}' vs '{ocr_text_candidate[:50]}')")
                 continue
 
             ocr_norm = self.normalize_text(ocr_text_candidate)
@@ -1247,6 +1359,7 @@ RESPONDE SOLO EN FORMATO JSON:
                     if self.vf: self.vf.hide_persistent_message("audit")
                     if not aprobado:
                         logger.warning(f"🛡️ [AUDITOR RECHAZA] Match {metodo_match} descartado: {razon}")
+                        motivos_descarte.append(f"Auditor rechazó: {razon}")
                         continue
 
                 # 🤖 CHECK OBLIGATORIO DE SEGURIDAD CON LLM ANTES DE CLIC
@@ -1256,6 +1369,7 @@ RESPONDE SOLO EN FORMATO JSON:
                 is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
                 if not is_match_llm:
                     logger.warning(f"🚫 [CHECK FINAL LLM RECHAZADO] LLM rechazó el candidato local ({metodo_match}) '{ocr_text_candidate[:50]}'. Descartando fila...")
+                    motivos_descarte.append(f"LLM rechazó coincidencia semántica con '{ocr_text_candidate[:50]}'")
                     continue
 
                 logger.info(f"✅ MATCH LOCAL + AUDITOR + LLM CONFIRMADO (Fase 1, {metodo_match}={score_utilizado}) → clic en Y={int(y_click)}")
@@ -1329,8 +1443,18 @@ RESPONDE SOLO EN FORMATO JSON:
                 return True, ''
             else:
                 logger.info("❌ LLM rechazó el candidato.")
+                motivos_descarte.append(f"LLM rechazó coincidencia semántica con '{ocr_text_candidate[:50]}'")
 
         logger.warning("Ningún candidato coincidió con el diagnóstico.")
+        self.last_diagnostic = self.diagnosticar_falla(
+            rows_data=rows_data,
+            candidates=candidates,
+            target_fecha_str=target_fecha_str,
+            target_diag=target_diag,
+            ocr_results=locals().get('ocr_results', None),
+            motivos_descarte=motivos_descarte
+        )
+        logger.warning(f"📋 Diagnóstico de causa raíz: {self.last_diagnostic}")
         # Retornar False + el texto del primer candidato (para mostrarlo al usuario)
         best_ocr = candidates[0].get('full_text', '') if candidates else ''
         return False, best_ocr
@@ -1603,7 +1727,10 @@ def main():
 
         # ── Si todos los reintentos automáticos fallaron, terminar con error ──────────────────
         logger.warning("⚠️ Todos los reintentos fallaron. Notificando y terminando.")
-        error_msg = f"Búsqueda fallida: no se encontró '{target_diag_raw}' (OCR detectó: '{last_ocr_text}') tras {search.MAX_RETRIES + 1} intentos."
+        if getattr(search, 'last_diagnostic', None):
+            error_msg = f"Búsqueda fallida: {search.last_diagnostic} (tras {search.MAX_RETRIES + 1} intentos)."
+        else:
+            error_msg = f"Búsqueda fallida: no se encontró '{target_diag_raw}' (OCR detectó: '{last_ocr_text}') tras {search.MAX_RETRIES + 1} intentos."
         
         _error_handler_llamado = False
         for _mod in ['utils.error_handler', 'rpa_framework.utils.error_handler']:

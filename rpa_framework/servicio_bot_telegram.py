@@ -969,10 +969,11 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
 
             file_path = res["file_path"]
             nombre_periodo = res["nombre_periodo"]
-            total = res["total_casos"]
             exitos = res["exitosos"]
             pendientes = res.get("pendientes_aprobacion", 0)
-            completados_totales = res.get("completados_totales", exitos + pendientes)
+            addendums = res.get("addendums", 0)
+            ya_ingresados = res.get("ya_ingresados", 0)
+            completados_totales = res.get("completados_totales", exitos + pendientes + addendums + ya_ingresados)
             errores = res["errores"]
             errores_gest = res.get("errores_gestionados", 0)
             errores_pend = res.get("errores_pendientes", 0)
@@ -994,7 +995,11 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
                 if exitos > 0:
                     caption += f"   ├ ✅ Completados 100%: <b>{exitos}</b>\n"
                 if pendientes > 0:
-                    caption += f"   └ ⏳ Aprobación Pendiente: <b>{pendientes}</b>{pend_detail}\n"
+                    caption += f"   ├ ⏳ Aprobación Pendiente: <b>{pendientes}</b>{pend_detail}\n"
+                if addendums > 0:
+                    caption += f"   ├ 📝 Addendum: <b>{addendums}</b>\n"
+                if ya_ingresados > 0:
+                    caption += f"   └ 🔁 Ya Ingresado: <b>{ya_ingresados}</b>\n"
             else:
                 caption += "• 🟢 <b>Exitosos (Total):</b> <b>0</b>\n"
 
@@ -1794,8 +1799,8 @@ def telegram_polling_loop():
                             responder_callback(cb_id, text="Deteniendo transmisión...")
                             detener_live_stream_telegram(chat_id)
                                 
-                        elif callback_data and callback_data.startswith("gestionado_"):
-                            record_id = callback_data.split("_")[1]
+                        elif callback_data and (callback_data.startswith("gestionado_") or callback_data.startswith("gest_normal_")):
+                            record_id = callback_data.split("_")[-1]
                             try:
                                 import mysql.connector
                                 conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
@@ -1809,9 +1814,55 @@ def telegram_polling_loop():
                                 editar_mensaje(chat_id, msg_id, callback_query["message"].get("text", "") or "Incidente gestionado", reply_markup=new_markup)
                             except Exception as e:
                                 print(f"Error procesando callback_query gestionado: {e}")
+
+                        elif callback_data and callback_data.startswith("gest_addendum_"):
+                            record_id = callback_data.split("_")[-1]
+                            try:
+                                import mysql.connector
+                                conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
+                                cursor = conn.cursor()
+                                cursor.execute("""
+                                    UPDATE registro_acciones 
+                                    SET estado = 'Terminado - Addendum', 
+                                        estado_notificacion = 'Gestionado', 
+                                        fecha_actualizacion_notificacion = NOW(),
+                                        observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Addendum]') 
+                                    WHERE id = %s
+                                """, (record_id,))
+                                conn.commit()
+                                conn.close()
+                                
+                                responder_callback(cb_id, text="Caso reclasificado como Exitoso (Addendum) 📝")
+                                new_markup = {"inline_keyboard": [[{"text": "📝 Reclasificado: Addendum ✅", "callback_data": "ya_gestionado"}]]}
+                                editar_mensaje(chat_id, msg_id, callback_query["message"].get("text", "") or "Incidente reclasificado", reply_markup=new_markup)
+                            except Exception as e:
+                                print(f"Error procesando callback_query addendum: {e}")
+
+                        elif callback_data and callback_data.startswith("gest_ya_ingresado_"):
+                            record_id = callback_data.split("_")[-1]
+                            try:
+                                import mysql.connector
+                                conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
+                                cursor = conn.cursor()
+                                cursor.execute("""
+                                    UPDATE registro_acciones 
+                                    SET estado = 'Terminado - Ya Ingresado', 
+                                        estado_notificacion = 'Gestionado', 
+                                        fecha_actualizacion_notificacion = NOW(),
+                                        observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Ya Ingresado]') 
+                                    WHERE id = %s
+                                """, (record_id,))
+                                conn.commit()
+                                conn.close()
+                                
+                                responder_callback(cb_id, text="Caso reclasificado como Exitoso (Ya Ingresado) 🔁")
+                                new_markup = {"inline_keyboard": [[{"text": "🔁 Reclasificado: Ya Ingresado ✅", "callback_data": "ya_gestionado"}]]}
+                                editar_mensaje(chat_id, msg_id, callback_query["message"].get("text", "") or "Incidente reclasificado", reply_markup=new_markup)
+                            except Exception as e:
+                                print(f"Error procesando callback_query ya ingresado: {e}")
                                 
                         elif callback_data == "ya_gestionado":
-                            responder_callback(cb_id, text="Este incidente ya fue marcado como gestionado ✅", show_alert=False)
+                            responder_callback(cb_id, text="Este incidente ya fue gestionado / clasificado ✅", show_alert=False)
                             
                         elif callback_data and callback_data.startswith("loop_v2_"):
                             responder_callback(cb_id, text="Procesando...")
