@@ -626,19 +626,22 @@ class WorkflowPanelFinal(QWidget):
             else:
                 return
                 
-        if not os.path.exists("workflows"):
-            os.makedirs("workflows", exist_ok=True)
-            
-        filepath = f"workflows/{name}.json"
+        existing_path = self._find_workflow_file(name)
+        if not existing_path:
+            from utils.paths import WORKFLOWS_DIR
+            WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+            filepath = WORKFLOWS_DIR / f"{name}.json"
+        else:
+            filepath = existing_path
         
-        if os.path.exists(filepath) and self.current_workflow.id == "workflow_nuevo":
+        if filepath.exists() and self.current_workflow.id == "workflow_nuevo":
             ret = QMessageBox.question(self, "Sobrescribir", f"El archivo '{name}.json' ya existe. ¿Desea sobrescribirlo?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if ret == QMessageBox.StandardButton.No:
                 return
                 
         try:
-            self.current_workflow.to_json(filepath)
+            self.current_workflow.to_json(str(filepath))
             self.set_dirty(False)
             self.append_log(f"Workflow guardado en: {filepath}", "SUCCESS")
             self.load_workflow_list()
@@ -668,10 +671,10 @@ class WorkflowPanelFinal(QWidget):
                 self.workflow_selector.blockSignals(False)
                 return
                 
-        path = f"workflows/{name}.json"
-        if os.path.exists(path):
+        target_path = self._find_workflow_file(name)
+        if target_path and target_path.exists():
             try:
-                self.current_workflow = Workflow.from_json(path)
+                self.current_workflow = Workflow.from_json(str(target_path))
                 self.canvas.load_workflow(self.current_workflow)
                 self.properties_panel.hide()
                 self.undo_stack.clear()
@@ -682,6 +685,21 @@ class WorkflowPanelFinal(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Error cargando el workflow:\n{e}")
 
+    def _get_workflow_dirs(self):
+        from utils.paths import WORKFLOWS_DIR
+        dirs = [WORKFLOWS_DIR]
+        for p in [Path("rpa_framework/workflows"), Path("workflows")]:
+            if p.exists() and p.resolve() not in [d.resolve() for d in dirs]:
+                dirs.append(p)
+        return dirs
+
+    def _find_workflow_file(self, name):
+        for d in self._get_workflow_dirs():
+            candidate = d / f"{name}.json"
+            if candidate.exists():
+                return candidate
+        return None
+
     def load_workflow_list(self):
         self._loading_workflow_list = True
         self.workflow_selector.clear()
@@ -689,12 +707,14 @@ class WorkflowPanelFinal(QWidget):
         
         active_index = 0
         try:
-            if not os.path.exists("workflows"):
-                os.makedirs("workflows")
-                
-            files = sorted([f for f in os.listdir("workflows") if f.endswith(".json")])
-            for i, f in enumerate(files):
-                wf_name = f.replace(".json", "")
+            found_files = {}
+            for d in self._get_workflow_dirs():
+                if d.exists():
+                    for f in d.glob("*.json"):
+                        if f.stem not in found_files:
+                            found_files[f.stem] = f
+                            
+            for i, wf_name in enumerate(sorted(found_files.keys(), key=lambda s: s.lower())):
                 self.workflow_selector.addItem(f"📄 {wf_name}")
                 if self.current_workflow and self.current_workflow.name == wf_name:
                     active_index = i + 1
@@ -733,12 +753,17 @@ class WorkflowPanelFinal(QWidget):
             new_name = new_name.strip()
             import shutil
             try:
-                shutil.copy(f"workflows/{name}.json", f"workflows/{new_name}.json")
-                dup_wf = Workflow.from_json(f"workflows/{new_name}.json")
+                src_path = self._find_workflow_file(name)
+                if not src_path:
+                    raise FileNotFoundError(f"No se encontró el workflow original '{name}.json'")
+                from utils.paths import WORKFLOWS_DIR
+                dst_path = WORKFLOWS_DIR / f"{new_name}.json"
+                shutil.copy(str(src_path), str(dst_path))
+                dup_wf = Workflow.from_json(str(dst_path))
                 dup_wf.name = new_name
                 import re
                 dup_wf.id = re.sub(r'[^a-zA-Z0-9]', '_', new_name.lower())
-                dup_wf.to_json(f"workflows/{new_name}.json")
+                dup_wf.to_json(str(dst_path))
                 
                 self.load_workflow_list()
                 self.append_log(f"Workflow duplicado como '{new_name}'", "SUCCESS")
@@ -751,7 +776,9 @@ class WorkflowPanelFinal(QWidget):
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if ret == QMessageBox.StandardButton.Yes:
             try:
-                os.remove(f"workflows/{name}.json")
+                found_path = self._find_workflow_file(name)
+                if found_path and found_path.exists():
+                    os.remove(str(found_path))
                 if self.current_workflow and self.current_workflow.name == name:
                     self.current_workflow = None
                     self.canvas.scene.clear()
@@ -859,9 +886,46 @@ class WorkflowPanelFinal(QWidget):
         self.act_stop.setEnabled(True)
 
     def stop_workflow(self):
-        if self.worker:
-            self.worker.stop()
-            self.append_log("🛑 Detención solicitada.", "WARNING")
+        if not (hasattr(self, 'worker') and self.worker and self.worker.isRunning()):
+            return
+
+        is_loop = False
+        if hasattr(self.worker, 'is_loop_running'):
+            is_loop = self.worker.is_loop_running()
+        elif self.current_workflow:
+            is_loop = any(getattr(n, 'type', None) in ('loop', 'LoopNode') or str(getattr(n, 'type', '')).lower() == 'loop' for n in getattr(self.current_workflow, 'nodes', [])) or "loop" in getattr(self.current_workflow, 'name', '').lower()
+
+        if is_loop:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Detener Flujo en Loop")
+            msg_box.setText("<h3>¿Cómo desea detener el flujo en bucle?</h3>")
+            msg_box.setInformativeText(
+                "Se detectó que hay un workflow ejecutándose en bucle (Loop).\n\n"
+                "• <b>A la siguiente ejecución:</b> Permite terminar el caso actual y detiene el flujo antes del siguiente ciclo.\n"
+                "• <b>En este mismo instante:</b> Fuerza la detención inmediata interrumpiendo el proceso actual."
+            )
+            msg_box.setIcon(QMessageBox.Icon.Question)
+
+            btn_siguiente = msg_box.addButton("⏳ A la siguiente ejecución", QMessageBox.ButtonRole.ActionRole)
+            btn_inmediato = msg_box.addButton("🛑 En este mismo instante", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancelar = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+            msg_box.setDefaultButton(btn_siguiente)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancelar:
+                return
+            elif clicked == btn_siguiente:
+                if hasattr(self.worker, 'stop_after_current_case'):
+                    self.worker.stop_after_current_case()
+                self.act_stop.setEnabled(False)
+                self.append_log("⏳ Solicitud registrada: se detendrá el bucle al finalizar el caso actual.", "WARNING")
+                return
+
+        self.worker.stop()
+        self.act_stop.setEnabled(False)
+        self.append_log("🛑 Detención inmediata solicitada.", "WARNING")
 
     def on_execution_finished(self, result):
         self.progress_bar.setVisible(False)

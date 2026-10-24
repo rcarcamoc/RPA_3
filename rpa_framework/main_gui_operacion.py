@@ -135,7 +135,7 @@ class OperacionesPanel(QWidget):
         layout.addSpacing(30)
         
         # Boton 4: Detener Todo
-        self.btn_stop = QPushButton("🛑 Detener Ejecución")
+        self.btn_stop = QPushButton("🛑 Detener Flujo")
         self.btn_stop.setMinimumHeight(60)
         self.btn_stop.setStyleSheet("""
             QPushButton {
@@ -388,15 +388,73 @@ class OperacionesPanel(QWidget):
         self.worker = None
         self.btn_stop.setEnabled(False) # Desactivar boton detener
 
-    def detiene_todo(self):
-        """Detiene la ejecución actual del worker local o del servicio en background."""
+    def is_loop_running(self) -> bool:
+        """Verifica si actualmente se encuentra en ejecución un flujo en loop (local o background)."""
+        if self.worker and self.worker.isRunning():
+            if hasattr(self.worker, 'is_loop_running') and self.worker.is_loop_running():
+                return True
+            wf = getattr(self.worker, 'workflow', None)
+            if wf:
+                if "loop" in getattr(wf, 'name', '').lower():
+                    return True
+                for n in getattr(wf, 'nodes', []):
+                    if getattr(n, 'type', None) in ('loop', 'LoopNode') or str(getattr(n, 'type', '')).lower() == 'loop':
+                        return True
+
+        config_dir = Path(__file__).resolve().parent / "config"
+        state_file = config_dir / "execution_state.json"
+        if state_file.exists():
+            try:
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                if state.get("is_running", False):
+                    if state.get("is_loop", False):
+                        return True
+                    wf_name = state.get("workflow", "").lower()
+                    if "loop" in wf_name:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def detener_a_siguiente_ejecucion(self):
+        """Solicita detener el bucle de manera segura al finalizar el caso/iteración actual."""
+        config_dir = Path(__file__).resolve().parent / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.worker and self.worker.isRunning():
+            if hasattr(self.worker, 'stop_after_current_case'):
+                self.worker.stop_after_current_case()
+            elif hasattr(self.worker, 'executor') and self.worker.executor:
+                self.worker.executor.stop_after_current_case()
+
+        try:
+            stop_after_file = config_dir / "stop_after_case.txt"
+            with open(stop_after_file, "w", encoding="utf-8") as f:
+                f.write("stop_after_case")
+        except Exception as e:
+            print(f"Error escribiendo stop_after_case.txt: {e}")
+
+        self.append_log("⏳ Solicitud registrada: el bucle se detendrá al finalizar el caso actual.", "WARNING")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setText("⏳ Deteniendo tras caso actual...")
+
+    def detener_inmediatamente(self):
+        """Detiene de forma inmediata el worker local o el servicio en background."""
         config_dir = Path(__file__).resolve().parent / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.append_log("🛑 Solicitando detención de worker local...", "WARNING")
+            self.append_log("🛑 Solicitando detención inmediata de worker local...", "WARNING")
             self.btn_stop.setEnabled(False)
-            
+
+        try:
+            stop_after_file = config_dir / "stop_after_case.txt"
+            if stop_after_file.exists():
+                stop_after_file.unlink()
+        except Exception:
+            pass
+
         try:
             with open(config_dir / "stop_signal.txt", "w", encoding="utf-8") as f:
                 f.write("stop")
@@ -404,6 +462,50 @@ class OperacionesPanel(QWidget):
             self.btn_stop.setEnabled(False)
         except Exception as e:
             print(f"Error escribiendo stop_signal.txt: {e}")
+
+    def detiene_todo(self):
+        """Detiene la ejecución actual. Si hay un loop corriendo, pregunta si se desea
+        detenerlo a la siguiente ejecución o en este mismo instante."""
+        is_busy = bool(self.is_bg_running or (self.worker and self.worker.isRunning()))
+        if not is_busy:
+            config_dir = Path(__file__).resolve().parent / "config"
+            state_file = config_dir / "execution_state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r', encoding='utf-8') as f:
+                        is_busy = json.load(f).get("is_running", False)
+                except Exception:
+                    pass
+
+        if not is_busy:
+            return
+
+        if self.is_loop_running():
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Detener Flujo en Loop")
+            msg_box.setText("<h3>¿Cómo desea detener el flujo en bucle?</h3>")
+            msg_box.setInformativeText(
+                "Se detectó que hay un workflow ejecutándose en bucle (Loop).\n\n"
+                "• <b>A la siguiente ejecución:</b> Permite terminar el caso actual y detiene el flujo antes del siguiente ciclo.\n"
+                "• <b>En este mismo instante:</b> Fuerza la detención inmediata interrumpiendo el proceso actual."
+            )
+            msg_box.setIcon(QMessageBox.Icon.Question)
+
+            btn_siguiente = msg_box.addButton("⏳ A la siguiente ejecución", QMessageBox.ButtonRole.ActionRole)
+            btn_inmediato = msg_box.addButton("🛑 En este mismo instante", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancelar = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+            msg_box.setDefaultButton(btn_siguiente)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancelar:
+                return
+            elif clicked == btn_siguiente:
+                self.detener_a_siguiente_ejecucion()
+                return
+
+        self.detener_inmediatamente()
 
     def append_log(self, message, level="INFO"):
         print(f"[{level}] {message}")
@@ -423,7 +525,9 @@ class OperacionesPanel(QWidget):
             # Subconsulta utilizada para prevenir el error 1093 de MySQL (actualizar la misma tabla de la que se selecciona)
             query = """
             UPDATE ris.registro_acciones 
-            SET estado = 'En Proceso' 
+            SET estado = 'En Proceso',
+                inicio = NOW(),
+                `update` = NOW() 
             WHERE id = (SELECT max_id FROM (SELECT MAX(id) as max_id FROM ris.registro_acciones) as t)
             """
             cursor.execute(query)

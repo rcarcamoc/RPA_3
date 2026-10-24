@@ -62,7 +62,13 @@ class IngresaUserPacsV2:
                 return result[0].strip(), result[1].strip()
 
             # Fallback a médico activo
-            cursor.execute("SELECT user, pass FROM medicos WHERE activo = 1 LIMIT 1")
+            cursor.execute("""
+                SELECT usuario_integra, clave_integra 
+                FROM ris.medicos 
+                WHERE (estado = 'Activo' OR estado IS NULL) 
+                  AND usuario_integra IS NOT NULL AND TRIM(usuario_integra) != ''
+                LIMIT 1
+            """)
             res_medico = cursor.fetchone()
             conn.close()
             if res_medico:

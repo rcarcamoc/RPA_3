@@ -118,6 +118,24 @@ class WorkflowExecutorWorker(QThread):
         if self.executor:
             self.executor.stop()
 
+    def stop_after_current_case(self):
+        """Solicita detener el bucle de manera segura una vez que finalice la iteración/caso actual."""
+        if self.executor:
+            self.executor.stop_after_current_case()
+
+    def is_loop_running(self) -> bool:
+        """Indica si el worker está ejecutando un flujo con bucle (Loop)."""
+        if self.executor and hasattr(self.executor, 'is_loop_workflow'):
+            if self.executor.is_loop_workflow():
+                return True
+        if self.workflow and getattr(self.workflow, 'nodes', None):
+            for node in self.workflow.nodes:
+                if getattr(node, 'type', None) in ('loop', 'LoopNode') or str(getattr(node, 'type', '')).lower() == 'loop':
+                    return True
+        if self.workflow and "loop" in getattr(self.workflow, 'name', '').lower():
+            return True
+        return False
+
 
 
 class PortItem(QGraphicsEllipseItem):
@@ -1753,9 +1771,47 @@ class WorkflowPanel(QWidget):
     
     def stop_workflow(self):
         """Detiene la ejecucion del workflow."""
-        if self.worker:
-            self.worker.stop()
-            self.log("Deteniendo ejecucion...")
+        if not (self.worker and self.worker.isRunning()):
+            return
+
+        is_loop = False
+        if hasattr(self.worker, 'is_loop_running'):
+            is_loop = self.worker.is_loop_running()
+        elif self.current_workflow:
+            is_loop = any(getattr(n, 'type', None) in ('loop', 'LoopNode') or str(getattr(n, 'type', '')).lower() == 'loop' for n in getattr(self.current_workflow, 'nodes', [])) or "loop" in getattr(self.current_workflow, 'name', '').lower()
+
+        if is_loop:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Detener Flujo en Loop")
+            msg_box.setText("<h3>¿Cómo desea detener el flujo en bucle?</h3>")
+            msg_box.setInformativeText(
+                "Se detectó que hay un workflow ejecutándose en bucle (Loop).\n\n"
+                "• <b>A la siguiente ejecución:</b> Permite terminar el caso actual y detiene el flujo antes del siguiente ciclo.\n"
+                "• <b>En este mismo instante:</b> Fuerza la detención inmediata interrumpiendo el proceso actual."
+            )
+            msg_box.setIcon(QMessageBox.Icon.Question)
+
+            btn_siguiente = msg_box.addButton("⏳ A la siguiente ejecución", QMessageBox.ButtonRole.ActionRole)
+            btn_inmediato = msg_box.addButton("🛑 En este mismo instante", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancelar = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+            msg_box.setDefaultButton(btn_siguiente)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancelar:
+                return
+            elif clicked == btn_siguiente:
+                self.worker.stop_after_current_case()
+                self.btn_stop.setEnabled(False)
+                self.status_label.setText("Estado: Deteniendo tras caso actual...")
+                self.log("⏳ Solicitud registrada: se detendrá el bucle al finalizar el caso actual.")
+                return
+
+        self.worker.stop()
+        self.btn_stop.setEnabled(False)
+        self.status_label.setText("Estado: Deteniendo...")
+        self.log("🛑 Solicitando detención inmediata de la ejecución...")
     
     
     def on_log_update(self, message: str):

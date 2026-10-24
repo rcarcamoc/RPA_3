@@ -31,6 +31,15 @@ from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger("watchdog_supervisor")
+try:
+    _log_dir = Path(__file__).resolve().parent.parent / "logs"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _fh = logging.FileHandler(_log_dir / "rpa.log", encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
+    logger.addHandler(_fh)
+    logger.setLevel(logging.INFO)
+except Exception:
+    pass
 
 DB_CONFIG = dict(
     host='localhost',
@@ -54,6 +63,7 @@ _start_wf_callback: Optional[Callable[..., bool]] = None
 _stop_wf_callback: Optional[Callable[..., Any]] = None
 _is_running_callback: Optional[Callable[[], bool]] = None
 _get_loop_params_callback: Optional[Callable[[], Dict[str, Any]]] = None
+_get_loop_wf_callback: Optional[Callable[[], str]] = None
 
 
 def is_watchdog_recovering() -> bool:
@@ -65,14 +75,16 @@ def set_watchdog_callbacks(
     start_wf_func: Callable[..., bool],
     stop_wf_func: Callable[..., Any],
     is_running_func: Callable[[], bool],
-    get_loop_params_func: Optional[Callable[[], Dict[str, Any]]] = None
+    get_loop_params_func: Optional[Callable[[], Dict[str, Any]]] = None,
+    get_loop_wf_func: Optional[Callable[[], str]] = None
 ):
     """Configura las funciones del orquestador necesarias para la auto-recuperación."""
-    global _start_wf_callback, _stop_wf_callback, _is_running_callback, _get_loop_params_callback
+    global _start_wf_callback, _stop_wf_callback, _is_running_callback, _get_loop_params_callback, _get_loop_wf_callback
     _start_wf_callback = start_wf_func
     _stop_wf_callback = stop_wf_func
     _is_running_callback = is_running_func
     _get_loop_params_callback = get_loop_params_func
+    _get_loop_wf_callback = get_loop_wf_func
 
 
 def _notificar_telegram(mensaje: str, record_id: Optional[int] = None):
@@ -156,14 +168,23 @@ def _retomar_bucle_principal():
     if not loop_params:
         loop_params = {"tipo": "infinite", "valor": "9999"}
 
+    loop_wf = "loop_v2.json"
+    if _get_loop_wf_callback:
+        try:
+            w = _get_loop_wf_callback()
+            if w:
+                loop_wf = w
+        except Exception:
+            pass
+
     if _start_wf_callback:
         iniciado = False
         for intento in range(5):
-            if _start_wf_callback("loop.json", loop_params):
+            if _start_wf_callback(loop_wf, loop_params):
                 iniciado = True
                 _notificar_telegram(
                     "🚀 <b>WATCHDOG: Bucle principal retomado exitosamente.</b>\n"
-                    f"Modo: <code>{loop_params.get('tipo', 'infinite')}</code>\n"
+                    f"Workflow: <code>{loop_wf}</code> | Modo: <code>{loop_params.get('tipo', 'infinite')}</code>\n"
                     "El bot continúa gestionando la cola de casos."
                 )
                 break
@@ -453,10 +474,18 @@ def _watchdog_loop():
             segs_totales = rec.get('segs_totales') or 0
 
             # Criterio de congelamiento:
-            # 1. Inactividad en el nodo actual >= 12 minutos (TIMEOUT_SECONDS = 720s) -> congelamiento real
+            # 1. Inactividad severa: Sin avance en ningún nodo por >= 12 minutos (TIMEOUT_SECONDS = 720s).
             # O
-            # 2. Duración total del caso >= 20 minutos (1200s) -> tope máximo de seguridad por caso
-            es_congelado = (segs_inactividad >= TIMEOUT_SECONDS) or (segs_totales >= 1200)
+            # 2. Tope máximo de seguridad: Caso que excede 25 minutos (1500s) Y lleva al menos 4 minutos (240s) sin actualizar.
+            # NOTA CRÍTICA: Si el bot actualizó la BD hace menos de 4 minutos (segs_inactividad < 240s), está activamente
+            # progresando (escribiendo, OCR, navegando o reprocesando) y NUNCA debe ser interrumpido por el Watchdog.
+            logger.debug(
+                f"[Watchdog] Supervisando caso #{rec['id']}: inactividad={segs_inactividad}s, "
+                f"total={segs_totales}s, nodo='{rec.get('ultimo_nodo')}'"
+            )
+            es_inactivo_severo = (segs_inactividad >= TIMEOUT_SECONDS)
+            es_tope_maximo = (segs_totales >= 1500 and segs_inactividad >= 240)
+            es_congelado = es_inactivo_severo or es_tope_maximo
 
             if es_congelado:
                 with _recovering_lock:
@@ -488,11 +517,12 @@ def start_watchdog_supervisor(
     start_wf_func: Callable[..., bool],
     stop_wf_func: Callable[..., Any],
     is_running_func: Callable[[], bool],
-    get_loop_params_func: Optional[Callable[[], Dict[str, Any]]] = None
+    get_loop_params_func: Optional[Callable[[], Dict[str, Any]]] = None,
+    get_loop_wf_func: Optional[Callable[[], str]] = None
 ):
     """Inicia el hilo supervisor del Watchdog en segundo plano."""
     global _watchdog_thread
-    set_watchdog_callbacks(start_wf_func, stop_wf_func, is_running_func, get_loop_params_func)
+    set_watchdog_callbacks(start_wf_func, stop_wf_func, is_running_func, get_loop_params_func, get_loop_wf_func)
     
     if _watchdog_thread and _watchdog_thread.is_alive():
         logger.info("[Watchdog] El supervisor ya está activo.")

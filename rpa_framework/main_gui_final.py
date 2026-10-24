@@ -522,6 +522,7 @@ class ModernOperacionesPanel(QWidget):
         self.config = config or {}
         self.worker = None
         self.is_bg_running = False
+        self._current_is_loop = False
         self.start_time = None
         
         self.init_ui()
@@ -904,7 +905,7 @@ class ModernOperacionesPanel(QWidget):
         layout_telemetry.addWidget(self.progress_bar)
         
         # Botón de Parada de Emergencia
-        self.btn_stop = QPushButton("🛑  Detener Ejecución Actual")
+        self.btn_stop = QPushButton("🛑  Detener Flujo")
         self.btn_stop.setObjectName("btn_action_stop")
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_stop.setMinimumHeight(40)
@@ -1106,6 +1107,7 @@ class ModernOperacionesPanel(QWidget):
         self.btn_rehabilitar.setEnabled(not is_busy)
         
         # Habilitar stop si hay algo corriendo
+        self.btn_stop.setText("🛑  Detener Flujo")
         self.btn_stop.setEnabled(is_busy)
 
     def ejecutar_loop_reiteraciones(self, tg_params=None):
@@ -1171,12 +1173,15 @@ class ModernOperacionesPanel(QWidget):
             if not found:
                 print("⚠️ No se encontró ningún nodo de tipo Loop en loop.json")
 
-            # Limpiar stop_signal previo si quedó rezagado
+            # Limpiar stop_signal y stop_after_case previos si quedaron rezagados
             cfg_dir = Path(__file__).resolve().parent / "config"
             stop_file = cfg_dir / "stop_signal.txt"
+            stop_after_file = cfg_dir / "stop_after_case.txt"
             try:
                 if stop_file.exists():
                     stop_file.unlink()
+                if stop_after_file.exists():
+                    stop_after_file.unlink()
             except Exception:
                 pass
 
@@ -1200,8 +1205,9 @@ class ModernOperacionesPanel(QWidget):
             self.badge_system.setText("● Ejecutando")
             self.badge_system.setStyleSheet("background-color: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; border-radius: 12px; padding: 4px 12px; font-size: 9pt; font-weight: 700;")
             
+            self._current_is_loop = True
             self.worker.start()
-            self._set_local_execution_state(True, "loop.json")
+            self._set_local_execution_state(True, "loop.json", is_loop=True)
             self._update_buttons_state()
             
         except Exception as e:
@@ -1222,12 +1228,15 @@ class ModernOperacionesPanel(QWidget):
             workflow = Workflow.from_json(wf_path)
             wf_name = os.path.basename(wf_path)
 
-            # Limpiar stop_signal previo si quedó rezagado
+            # Limpiar stop_signal y stop_after_case previos si quedaron rezagados
             cfg_dir = Path(__file__).resolve().parent / "config"
             stop_file = cfg_dir / "stop_signal.txt"
+            stop_after_file = cfg_dir / "stop_after_case.txt"
             try:
                 if stop_file.exists():
                     stop_file.unlink()
+                if stop_after_file.exists():
+                    stop_after_file.unlink()
             except Exception:
                 pass
 
@@ -1251,8 +1260,10 @@ class ModernOperacionesPanel(QWidget):
             self.badge_system.setText("● Ejecutando")
             self.badge_system.setStyleSheet("background-color: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; border-radius: 12px; padding: 4px 12px; font-size: 9pt; font-weight: 700;")
             
+            has_loop = any(getattr(n, 'type', None) in ('loop', 'LoopNode') or str(getattr(n, 'type', '')).lower() == 'loop' for n in getattr(workflow, 'nodes', [])) or "loop" in wf_name.lower()
+            self._current_is_loop = has_loop
             self.worker.start()
-            self._set_local_execution_state(True, wf_name)
+            self._set_local_execution_state(True, wf_name, is_loop=has_loop)
             self._update_buttons_state()
             
         except Exception as e:
@@ -1264,7 +1275,7 @@ class ModernOperacionesPanel(QWidget):
         print(f"[WORKFLOW]: {msg}")
         self.add_log(msg)
 
-    def _set_local_execution_state(self, is_running, wf_name=""):
+    def _set_local_execution_state(self, is_running, wf_name="", is_loop=False):
         try:
             cfg_dir = Path(__file__).resolve().parent / "config"
             cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -1272,6 +1283,7 @@ class ModernOperacionesPanel(QWidget):
                 json.dump({
                     "is_running": is_running,
                     "workflow": wf_name,
+                    "is_loop": is_loop,
                     "updated_at": time.time()
                 }, f)
         except Exception:
@@ -1305,20 +1317,115 @@ class ModernOperacionesPanel(QWidget):
         if "loop" in prev_wf.lower():
             self.add_log("📊 Ciclo en bucle finalizado. Notificación y resumen de gestión del día enviados a Telegram.", level="info")
             
+        self._current_is_loop = False
+        cfg_dir = Path(__file__).resolve().parent / "config"
+        try:
+            stop_after_file = cfg_dir / "stop_after_case.txt"
+            if stop_after_file.exists():
+                stop_after_file.unlink()
+        except Exception:
+            pass
         self.worker = None
         self._set_local_execution_state(False)
         self._update_buttons_state()
 
-    def detiene_todo(self):
-        """Detiene la ejecución actual del worker local o del servicio en background."""
+    def is_loop_running(self) -> bool:
+        """Verifica si actualmente se encuentra en ejecución un flujo en loop (local o en segundo plano)."""
+        # 1. Comprobar flag directo de la UI
+        if getattr(self, '_current_is_loop', False):
+            return True
+
+        # 2. Comprobar worker local
+        if self.worker and self.worker.isRunning():
+            if hasattr(self.worker, 'is_loop_running') and self.worker.is_loop_running():
+                return True
+            wf = getattr(self.worker, 'workflow', None)
+            if wf:
+                if "loop" in getattr(wf, 'name', '').lower():
+                    return True
+                for n in getattr(wf, 'nodes', []):
+                    if getattr(n, 'type', None) in ('loop', 'LoopNode') or str(getattr(n, 'type', '')).lower() == 'loop':
+                        return True
+            if hasattr(self.worker, 'executor') and self.worker.executor:
+                if getattr(self.worker.executor, 'is_in_loop', False):
+                    return True
+                if hasattr(self.worker.executor, 'is_loop_workflow') and self.worker.executor.is_loop_workflow():
+                    return True
+
+        # 3. Comprobar ejecución en segundo plano (state.json / execution_state.json)
+        config_dir = Path(__file__).resolve().parent / "config"
+        state_file = config_dir / "execution_state.json"
+        if state_file.exists():
+            try:
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                if state.get("is_running", False):
+                    if state.get("is_loop", False):
+                        return True
+                    wf_name = state.get("workflow", "").lower()
+                    if "loop" in wf_name:
+                        return True
+                    wf_candidate = Path(__file__).resolve().parent / "workflows" / state.get("workflow", "")
+                    if not wf_candidate.exists():
+                        wf_candidate = wf_candidate.with_suffix(".json")
+                    if wf_candidate.exists():
+                        try:
+                            with open(wf_candidate, 'r', encoding='utf-8') as wf_f:
+                                wf_data = json.load(wf_f)
+                            for node_data in wf_data.get("nodes", []):
+                                if node_data.get("type") == "loop":
+                                    return True
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        return False
+
+    def detener_a_siguiente_ejecucion(self):
+        """Solicita detener el bucle de manera segura al finalizar el caso actual."""
         config_dir = Path(__file__).resolve().parent / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # 1. Notificar al worker local si existe
+        if self.worker and self.worker.isRunning():
+            if hasattr(self.worker, 'stop_after_current_case'):
+                self.worker.stop_after_current_case()
+            elif hasattr(self.worker, 'executor') and self.worker.executor:
+                self.worker.executor.stop_after_current_case()
+
+        # 2. Escribir stop_after_case.txt para background / telegram / subprocesos
+        try:
+            stop_after_file = config_dir / "stop_after_case.txt"
+            with open(stop_after_file, "w", encoding="utf-8") as f:
+                f.write("stop_after_case")
+        except Exception as e:
+            print(f"Error escribiendo stop_after_case.txt: {e}")
+
+        self.add_log("⏳ Solicitud registrada: el bucle se detendrá al finalizar el caso actual.", level="warn")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setText("⏳ Deteniendo tras caso actual...")
+        self.lbl_status_icon.setText("🟡")
+        self.lbl_status_val.setText("Deteniendo tras caso...")
+
+    def detener_inmediatamente(self):
+        """Detiene la ejecución actual del worker local o del servicio en background de forma inmediata."""
+        config_dir = Path(__file__).resolve().parent / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.add_log("🛑 Solicitando detención de worker local...", level="warn")
+            self.add_log("⏹️ Solicitando detención inmediata de worker local...", level="warn")
             self.btn_stop.setEnabled(False)
-            
+
+        # Limpiar stop_after_case si existía
+        try:
+            stop_after_file = config_dir / "stop_after_case.txt"
+            if stop_after_file.exists():
+                stop_after_file.unlink()
+        except Exception:
+            pass
+
         # Señalizar stop_signal.txt siempre para abarcar background/telegram/tray
         try:
             with open(config_dir / "stop_signal.txt", "w", encoding="utf-8") as f:
@@ -1327,6 +1434,54 @@ class ModernOperacionesPanel(QWidget):
             self.btn_stop.setEnabled(False)
         except Exception as e:
             print(f"Error escribiendo stop_signal.txt: {e}")
+
+    def detiene_todo(self):
+        """Detiene la ejecución actual. Si hay un loop corriendo, pregunta si se desea
+        detenerlo a la siguiente ejecución o en este mismo instante."""
+        # Verificar si hay algo corriendo
+        is_busy = bool(self.is_bg_running or (self.worker and self.worker.isRunning()))
+        if not is_busy:
+            config_dir = Path(__file__).resolve().parent / "config"
+            state_file = config_dir / "execution_state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r', encoding='utf-8') as f:
+                        is_busy = json.load(f).get("is_running", False)
+                except Exception:
+                    pass
+
+        if not is_busy:
+            return
+
+        # Verificar si está corriendo en bucle (loop)
+        if self.is_loop_running():
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Detener Flujo en Loop")
+            msg_box.setText("<h3>¿Cómo desea detener el flujo en bucle?</h3>")
+            msg_box.setInformativeText(
+                "Se detectó que hay un workflow ejecutándose en bucle (Loop).\n\n"
+                "• <b>A la siguiente ejecución:</b> Permite terminar el caso actual y detiene el flujo antes del siguiente ciclo.\n"
+                "• <b>En este mismo instante:</b> Fuerza la detención inmediata interrumpiendo el proceso actual."
+            )
+            msg_box.setIcon(QMessageBox.Icon.Question)
+
+            btn_siguiente = msg_box.addButton("⏳ A la siguiente ejecución", QMessageBox.ButtonRole.ActionRole)
+            btn_inmediato = msg_box.addButton("🛑 En este mismo instante", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancelar = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+            msg_box.setDefaultButton(btn_siguiente)
+            msg_box.exec()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_cancelar:
+                return
+            elif clicked == btn_siguiente:
+                self.detener_a_siguiente_ejecucion()
+                return
+            # Si eligió "En este mismo instante", continúa a la detención inmediata
+
+        # Detención inmediata
+        self.detener_inmediatamente()
 
     def rehabilitar_ultimo_registro(self):
         # CONFIRMACIÓN PREVIA

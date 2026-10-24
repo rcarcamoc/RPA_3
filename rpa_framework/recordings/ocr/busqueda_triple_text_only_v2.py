@@ -108,15 +108,16 @@ time.sleep(0.1) # Pausa mínima v2
 
 class BusquedaTextOnly:
     def __init__(self):
-        # Inicializar motor OCR (sin preproceso interno para hacerlo manualmente y tener control total)
+        # Motor OCR principal: PaddleOCR en GPU (máxima precisión y rapidez ~200ms)
         self.ocr_engine = OCREngine(
-            engine='tesseract', 
-            language='spa', 
-            use_gpu=False, 
-            confidence_threshold=0.0,
-            preprocess=False, # Lo haremos manualmente
-            custom_config='--psm 6'
+            engine='paddleocr', 
+            language='es', 
+            use_gpu=True, 
+            confidence_threshold=0.3,
+            preprocess=False
         )
+        self._paddle_engine = self.ocr_engine
+        self._tesseract_engine = None
         # Región ajustada: Comienza en (180, 180) y llega hasta (1900, 1000)
         # Formato: (left, top, width, height)
         self.region = (188, 93, 1720, 900)
@@ -363,18 +364,18 @@ class BusquedaTextOnly:
 
         der_tokens = {'derecho', 'derecha', 'der', 'dcha', 'dcho'}
         izq_tokens = {'izquierdo', 'izquierda', 'izq', 'izda'}
-        bilat_tokens = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat', 'eell', 'ee11', 'ee55'}
+        bilat_tokens = {'bilateral', 'ambos', 'ambas', 'eeii', 'eess', 'bilat', 'bilater', 'eell', 'ee11', 'ee55'}
 
         target_words = set(target_norm.split())
         ocr_words = set(ocr_norm.split())
 
         target_has_der = bool(target_words & der_tokens)
         target_has_izq = bool(target_words & izq_tokens)
-        target_has_bilat = bool(target_words & bilat_tokens) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', target_norm)) or bool(re.search(r'\bamb(?:os|as)\b', target_norm))
+        target_has_bilat = bool(target_words & bilat_tokens) or any(w.startswith('bilat') for w in target_words) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', target_norm)) or bool(re.search(r'\bamb(?:os|as)\b', target_norm))
 
         ocr_has_der = bool(ocr_words & der_tokens)
         ocr_has_izq = bool(ocr_words & izq_tokens)
-        ocr_has_bilat = bool(ocr_words & bilat_tokens) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', ocr_norm)) or bool(re.search(r'\bamb(?:os|as)\b', ocr_norm))
+        ocr_has_bilat = bool(ocr_words & bilat_tokens) or any(w.startswith('bilat') for w in ocr_words) or bool(re.search(r'\bee\s*(?:ii|ll|11|li|il|ss|55)\b', ocr_norm)) or bool(re.search(r'\bamb(?:os|as)\b', ocr_norm))
 
         # Caso Bilateral
         if target_has_bilat:
@@ -412,15 +413,22 @@ class BusquedaTextOnly:
         t = texto.lower()
         t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
         reemplazos = [
+            # Separar prefijo rx pegado a palabras (rxabdomen -> radiografia abdomen, rxtorax -> radiografia torax)
+            (r'\brx[\s\-_]?([a-z]+)\b', r'radiografia \1'),
             (r'\br\s*x\b', 'radiografia'),
             (r'\bradiografias\b', 'radiografia'),
-            (r'\bap\s*-\s*lat\b', 'ap lateral'),
-            (r'\bap\s*lat\b', 'ap lateral'),
-            (r'\bpa\s*-\s*lat\b', 'ap lateral'),
-            (r'\bpa\s*lat\b', 'ap lateral'),
-            (r'\bap-lat\b', 'ap lateral'),
-            (r'\bpa-lat\b', 'ap lateral'),
+            
+            # Proyecciones radiologicas: (f-o), f - o, f-o:, frente u oblicua, frontal -> front oblicua
+            (r'\(?\bf[\s\-_/]*o\b\)?\:?', 'front oblicua'),
+            (r'\b(?:frente|frontal|front)\s*(?:y\s*)?oblicua\b', 'front oblicua'),
+            
+            # Abdomen proyecciones
+            (r'\bap\s*-\s*l\b|\bap\s*-\s*lat\b|\bap\s*lat\b|\bpa\s*-\s*lat\b|\bpa\s*lat\b|\bap-lat\b|\bpa-lat\b', 'ap lateral'),
             (r'\b(?:pa|ap)\s*y\s*lat(?:eral)?\b', 'ap lateral'),
+            (r'\bsimple\s+ap\s+decubito\b', 'ap lateral simple'),
+            (r'\bdecubito(?:\s+supino)?\b', 'ap'),
+            
+            # Modalidades
             (r'\br\s*m\b', 'resonancia magnetica'),
             (r'\brmn\b', 'resonancia magnetica'),
             (r'\brnm\b', 'resonancia magnetica'),
@@ -435,9 +443,30 @@ class BusquedaTextOnly:
             (r'\becoo\b', 'ecotomografia'),
             (r'\beoo\b', 'ecotomografia'),
             (r'\b(?:coppler|eoppler|dopler|doopler|oppler|cappler|goppler|toppler)\b', 'doppler'),
+            
+            # Aberraciones mamografia / mamaria
+            (r'\b(?:kiamograf\w*|hiamograf\w*|kamograf\w*|kmamograf\w*|iamograf\w*|hamograf\w*|hamog\w*|xamograf\w*|mamogratia|marnografia)\b', 'mamografia'),
+            (r'\b(?:kiamari\w*|hiamari\w*|liamari\w*|kamari\w*|iamari\w*|hamari\w*|marnari\w*|inamari\w*)\b', 'mamaria'),
+            (r'\bmamaria\s+infantil\b', 'mamaria'),
+            (r'\beco\s+mamaria\s+infantil\b', 'ecotomografia mamaria'),
+            
+            # Proyecciones complementarias / magnificadas / focalizadas / cono de compresión de mama
+            (r'\bproyecci[oó]n(?:es)?\s+magnificad[ao]s?\b', 'proyecciones complementarias'),
+            (r'\bproyecci[oó]n(?:es)?\s+focalizad[ao]s?\b', 'proyecciones complementarias'),
+            (r'\bcono(?:s)?\s+de\s+compresi[oó]n\b', 'proyecciones complementarias'),
+            (r'\bproyecci[oó]n(?:es)?\s+tangencial(?:es)?\b', 'proyecciones complementarias'),
+            (r'\bproyecci[oó]n(?:es)?\s+adicional(?:es)?\b', 'proyecciones complementarias'),
+
+            # Region Periauricular / Preauricular / Retroauricular / Parotidea <-> Cara / Cuello
+            (r'\bpartes\s+blandas\s+(?:de\s+)?(?:cara\s+y\s+cuello|cara|cuello)\b', 'partes blandas cara'),
+            (r'\b(?:partes\s+blandas\s+(?:de\s+)?)?(?:periauricular|preauricular|retroauricular|parotidea|parotida)\b', 'partes blandas cara'),
+            
+            # Urotac / Pielografia / Colangio
             (r'\b(?:urolac|urotac|uro-tac)\b', 'urotac'),
             (r'\b(?:pielotc|pielotac|pielo-tc|pielografia)\b', 'pielografia'),
             (r'\bcolangio\s*rm\b|\bcolangiorm\b|\bcolangioresonancia\b', 'colangioresonancia'),
+            
+            # Extremidades
             (r'\bee\s*(?:ii|ll|11|li|il)\b', 'extremidades inferiores'),
             (r'\b(?:eeii|eell|ee11)\b', 'extremidades inferiores'),
             (r'\bee\s*(?:ss|55)\b', 'extremidades superiores'),
@@ -447,6 +476,12 @@ class BusquedaTextOnly:
         ]
         for patron, reemplazo in reemplazos:
             t = re.sub(patron, reemplazo, t)
+
+        # Protocolo clinico: si es estudio mamario (ecotomografia mamaria o mamografia) y no especifica
+        # lado unilateral (derecha/izquierda/der/izq/unilateral), se asume bilateral por protocolo
+        if ('mamografia' in t or 'mamaria' in t) and not any(w in t for w in ['derecha', 'derecho', 'der', 'izquierda', 'izquierdo', 'izq', 'unilateral', 'bilateral']):
+            t = t + ' bilateral'
+
         t = re.sub(r'[^a-z0-9\s]', ' ', t)
         return re.sub(r'\s+', ' ', t).strip()
 
@@ -547,6 +582,20 @@ class BusquedaTextOnly:
             logger.error(f"Error en OCR Basic (Manual Preprocess): {e}")
             return ""
 
+    def _get_tesseract_engine(self):
+        """Retorna motor Tesseract (instanciado bajo demanda como fallback)."""
+        if self._tesseract_engine is None:
+            logger.info("🔧 Inicializando motor Tesseract (Fallback)...")
+            self._tesseract_engine = OCREngine(
+                engine='tesseract',
+                language='spa',
+                use_gpu=False,
+                confidence_threshold=0.0,
+                preprocess=False,
+                custom_config='--psm 6'
+            )
+        return self._tesseract_engine
+
     def execute_ocr_data(self, img_bgr, use_preprocessing=True, mode='high_fidelity'):
         """
         Devuelve datos estructurados de OCR.
@@ -560,7 +609,7 @@ class BusquedaTextOnly:
             # Fallback o falta de utils: OCR directo
             logger.info("ℹ️ Ejecutando OCR en imagen RAW (Sin Preprocesamiento 3X)...")
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            return self.ocr_engine.extract_text_with_location(img_rgb)
+            return self._get_tesseract_engine().extract_text_with_location(img_rgb)
 
         try:
             # 1. Preprocesar la imagen ANTES del OCR
@@ -592,7 +641,7 @@ class BusquedaTextOnly:
             # Como la imagen ya está preprocesada, le decimos al motor que no lo haga de nuevo
             processed_np = np.array(processed_pil)
             # El motor espera RGB si le pasamos numpy
-            results_scaled = self.ocr_engine.extract_text_with_location(processed_np)
+            results_scaled = self._get_tesseract_engine().extract_text_with_location(processed_np)
             
             # 4. NORMALIZAR COORDENADAS (Importante: el OCR vio 3x, necesitamos 1x)
             normalized_results = []
@@ -606,6 +655,16 @@ class BusquedaTextOnly:
         except Exception as e:
             logger.error(f"Error en execute_ocr_data (Manual): {e}")
             return []
+
+    def execute_paddle_ocr(self, img_bgr):
+        """
+        Ejecuta PaddleOCR como motor primario en GPU.
+        Utiliza el microservicio HTTP o worker de alta robustez ante fechas y acrónimos.
+        """
+        if self._paddle_engine is None:
+            self._paddle_engine = self.ocr_engine
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        return self._paddle_engine.extract_text_with_location(img_rgb)
 
     def get_crop_image(self, full_img, y_center):
         h, w = full_img.shape[:2]
@@ -703,7 +762,7 @@ class BusquedaTextOnly:
         )
         return False
 
-    def call_llm_text_verification(self, ocr_text, target_diag, id_registro=0):
+    def call_llm_text_verification(self, ocr_text, target_diag, target_fecha_str=None, id_registro=0):
         """
         Consulta al LLM si el texto encontrado coincide semánticamente con el objetivo.
         Implementa fallback entre varios modelos si falla uno.
@@ -717,12 +776,25 @@ class BusquedaTextOnly:
         # Obtener modelos ordenados por rendimiento histórico en tiempo de ejecución
         models = get_ranked_models(BASE_LLM_MODELS, contexto='busqueda_ocr')
 
-        prompt = f"""
-Eres un experto clínico en interpretación de terminología radiológica y exámenes de imagen.
-Tu tarea es determinar si el texto ENCONTRADO (puede tener errores típicos de OCR) 
-describe el mismo examen que el BUSCADO.
+        fecha_linea_buscado = f'\n- Fecha agendada objetivo: "{target_fecha_str}" (formato estándar DD-MM-YYYY: día-mes-año)' if target_fecha_str else ""
+        fecha_regla = f"""
+4. **EVALUACIÓN DE FECHA AGENDADA (CRÍTICO)**:
+   - La fecha objetivo es "{target_fecha_str}" (DD-MM-YYYY).
+   - En el visor PACS, la columna de fecha puede figurar en formato estándar DD/MM/YYYY o en formato anglosajón MM/DD/YYYY (mes/día/año, común en visores médicos con hora, ej: "10/15/2026 17:15" para el 15 de Octubre de 2026).
+   - Evalúa si la fecha visible en la línea OCR corresponde al mismo día, mes y año que la fecha objetivo.
+   - Si la fecha encontrada claramente pertenece a OTRO año, a OTRO mes o a OTRO día distinto no equivalente, responde es_match: false.
+""" if target_fecha_str else ""
 
-BUSCADO: "{target_diag}"
+        fecha_paso = """5. Comprueba si la fecha visible en la fila OCR corresponde a la fecha agendada buscada (admitiendo DD/MM/YYYY o MM/DD/YYYY). Si la fecha no coincide, responde es_match: false.\n""" if target_fecha_str else ""
+
+        prompt = f"""
+Eres un experto clínico en interpretación de terminología radiológica, exámenes de imagen y registros en sistemas PACS/RIS.
+Tu tarea es determinar si la línea ENCONTRADA en el visor PACS (puede tener errores típicos de OCR) 
+describe el mismo examen Y corresponde a la misma fecha agendada que el registro BUSCADO.
+
+BUSCADO:
+- Examen: "{target_diag}"{fecha_linea_buscado}
+
 ENCONTRADO (línea completa OCR): "{ocr_text}"
 
 ---
@@ -732,17 +804,31 @@ ENCONTRADO (línea completa OCR): "{ocr_text}"
    - RESONANCIA MAGNÉTICA ≈ RM ≈ RMNC ≈ RIM ≈ RNM ≈ RAM ≈ MRI.
    - TOMOGRAFÍA COMPUTADA ≈ TC ≈ TAC ≈ CT ≈ T.C.
    - ULTRASONIDO ≈ ECOTOMOGRAFÍA ≈ ECO ≈ US.
-   - RADIOGRAFÍA ≈ RX ≈ R-X.
+   - RADIOGRAFÍA ≈ RX ≈ R-X (incluye prefijos unidos: "RxAbdomen" ≈ "RX Abdomen", "RxTorax" ≈ "RX Tórax").
+   - MAMOGRAFÍA ≈ KIAMOGRAFÍA ≈ HIAMOGRAFÍA ≈ HAMOGRAFÍA ≈ KMAMOGRAFÍA ≈ IAMOGRAFÍA ≈ HAMOG... (aberraciones frecuentes por corte central de la letra 'M' en el PACS).
 
-2. **CORRECCIÓN OCR PERMITIDA** (errores de carácter simples):
+2. **PROYECCIONES RADIOLÓGICAS (F-O / Frente-Oblicua / Frontal / Decúbito)**:
+   - (F-O) ≈ F-O ≈ F-O: ≈ Frente y Oblicua ≈ Front y Oblicua ≈ Frente Oblicua ≈ Front Oblicua (en radiología se abrevia habitualmente 'front').
+   - AP - L ≈ AP Lateral ≈ PA - Lat ≈ PA Lateral.
+   - "Simple AP Decúbito" o "Decúbito Supino" en RX de Abdomen equivale clínicamente a "AP - L" o "Abdomen Simple".
+
+3. **EQUIVALENCIAS ANATÓMICAS Y CONVENCIONES CLÍNICAS**:
+   - **REGIÓN PERIAURICULAR / PREAURICULAR / RETROAURICULAR / PAROTÍDEA ↔ CARA / CUELLO**:
+     La región periauricular, preauricular, retroauricular o parotídea pertenece anatómicamente a partes blandas de cara/cuello. 'Ecotomografía de partes blandas periauricular' (o preauricular/parotídea) es CLÍNICAMENTE EQUIVALENTE a 'Ecotomografía partes blandas de cara' o 'partes blandas cabeza y cuello'. Si en PACS está codificado como 'Partes blandas de cara' sin lateralidad explícita, acéptalo como coincidencia válida (es_match: true).
+   - **ECOTOMOGRAFÍA MAMARIA / MAMOGRAFÍA (Protocolo Bilateral por defecto)**:
+     Por protocolo clínico institucional en centros de salud, la ecografía mamaria y la mamografía son bilaterales por defecto. Si el examen buscado es 'Ecotomografía mamaria bilateral' o 'Mamografía bilateral' y en el PACS figura simplemente 'Ecotomografía Mamaria' o 'Mamografía' (sin especificar derecha ni izquierda) o aberraciones como 'IiMamografía Bilate' / 'Mamografía Bilater..', DEBES considerarlo EQUIVALENTE (es_match: true), dado que cuando es unilateral el PACS siempre especifica expresamente el lado ('Derecha' o 'Izquierda'). NO descartes por lateralidad si ambos son mamografía bilateral o mamografía general.
+   - **PROYECCIONES COMPLEMENTARIAS DE MAMA (MAMOGRAFÍA)**:
+     En radiología mamaria, las órdenes de 'Proyecciones complementarias, en mama derecha / izquierda' o 'Proyecciones adicionales' corresponden en el PACS a estudios nombrados como 'Proyección Magnificada', 'Proyección Focalizada', 'Cono de Compresión' o 'Proyección Tangencial' con la misma lateralidad (ej. 'Proyección Magnificada Mama Derecha' == 'Proyecciones complementarias, en mama derecha'). DEBES considerarlas CLÍNICAMENTE EQUIVALENTES (es_match: true).
+
+4. **CORRECCIÓN OCR PERMITIDA** (errores de carácter simples y fechas PACS):
+   - Dígito '0' leído como '9' en meses (ej: '15-19-2026' corresponde clínicamente al 15 de Octubre '15-10-2026'). NO descartes si día y año coinciden.
    - Un carácter cambiado: "S"↔"5", "I"↔"1"↔"|", "O"↔"0", "B"↔"8".
    - Letras adicionales o faltantes al inicio/fin por segmentación (ej: "TAC" → "TAC ").
    - Acento o ñ incorrectos (ej: "Ecotomografia" ≈ "Ecotomografía").
 
-3. **REGIÓN ANATÓMICA Y LATERALIDAD ESTRICTA**:
-   - La región anatómica debe coincidir.
-   - **LATERALIDAD OBLIGATORIA Y EXCLUYENTE**: Si el examen buscado especifica DERECHO/DERECHA o IZQUIERDO/IZQUIERDA o BILATERAL, el texto ENCONTRADO DEBE coincidir con dicha lateralidad. Un examen de 'Tobillo Izquierdo' NUNCA es equivalente a 'Tobillo Derecho'. Si la lateralidad es contraria o diferente, DEBES responder es_match: false.
-
+5. **REGIÓN ANATÓMICA Y LATERALIDAD ESTRICTA**:
+   - La región anatómica debe coincidir (considerando las equivalencias de cara/cuello y mamarias descritas en punto 3).
+   - **LATERALIDAD OBLIGATORIA Y EXCLUYENTE**: Si el examen buscado especifica DERECHO/DERECHA o IZQUIERDO/IZQUIERDA o BILATERAL, el texto ENCONTRADO DEBE coincidir con dicha lateralidad (salvo la excepción del protocolo bilateral mamario y partes blandas de cara descritas en el punto 3). "Bilater.." o "Bilat" representa BILATERAL. Un examen de 'Tobillo Izquierdo' NUNCA es equivalente a 'Tobillo Derecho'. Si la lateralidad es contraria o diferente, DEBES responder es_match: false.
 ---
 ## PROHIBICIONES ESTRICTAS (estas situaciones = es_match: false)
 
@@ -760,7 +846,7 @@ ENCONTRADO (línea completa OCR): "{ocr_text}"
 2. Comprueba si la lateralidad coincide exactamente (derecho/izquierdo/bilateral). Si no coincide, es_match: false.
 3. Aplica corrección OCR MÍNIMA (≤3 caracteres). ¿Qué examen queda?
 4. ¿Ese examen equivale al BUSCADO?
-5. Si en algún paso necesitaste cambiar palabras enteras o cambiar de extremidad, responde es_match: false.
+{fecha_paso}6. Si en algún paso necesitaste cambiar palabras enteras o cambiar de extremidad o la fecha no corresponde, responde es_match: false.
 
 RESPONDE SOLO EN FORMATO JSON:
 {{
@@ -785,8 +871,8 @@ RESPONDE SOLO EN FORMATO JSON:
         # al siguiente modelo del catálogo dinámico.
         # ─────────────────────────────────────────────────────────────────────
         models_to_evaluate = models if models else get_ranked_models(contexto='busqueda_ocr')
-        LLM_OCR_MAX_TOKENS = 600
-        LLM_OCR_TIMEOUT = (3.0, 12.0)  # (connect_timeout, read_timeout)
+        LLM_OCR_MAX_TOKENS = 1500
+        LLM_OCR_TIMEOUT = (3.0, 20.0)  # (connect_timeout, read_timeout ampliado para evitar timeouts)
         CURRENT_TIME = time.time()
         CIRCUIT_BREAKER_COOLDOWN = 60  # 1 minuto (en vez de 5 min para no bloquear ciclos consecutivos)
 
@@ -847,15 +933,39 @@ RESPONDE SOLO EN FORMATO JSON:
                     content = (result["choices"][0].get("message") or {}).get("content") or ""
                     logger.info(f"[Cascada] {model_id}: {content[:160]}...")
 
-                    json_match = re.search(r"\{.*?\}", content, re.DOTALL)
+                    # Limpieza previa de bloques de razonamiento (ej: <think> de DeepSeek R1 o Nemotron)
+                    cleaned_content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                    if not cleaned_content:
+                        cleaned_content = content
+
+                    json_match = re.search(r"\{[^{}]*\"es_match\"[^{}]*\}", cleaned_content, re.DOTALL)
                     if not json_match:
+                        json_match = re.search(r"\{.*?\"es_match\".*?\}", cleaned_content, re.DOTALL)
+                    if not json_match:
+                        json_match = re.search(r"\{.*?\}", cleaned_content, re.DOTALL)
+
+                    data = None
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group(0))
+                        except Exception:
+                            data = None
+
+                    if data is not None:
+                        is_match = bool(data.get("es_match", False))
+                        confianza = float(data.get("confianza", 0.0))
+                        razonamiento = str(data.get("razonamiento", ""))
+                    elif re.search(r'"?es_match"?\s*:\s*true\b', cleaned_content, re.IGNORECASE):
+                        is_match = True
+                        confianza = 0.90
+                        razonamiento = "Extracción heurística es_match=true de respuesta estructurada"
+                    elif re.search(r'"?es_match"?\s*:\s*false\b', cleaned_content, re.IGNORECASE):
+                        is_match = False
+                        confianza = 0.90
+                        razonamiento = "Extracción heurística es_match=false de respuesta estructurada"
+                    else:
                         logger.warning(f"⚠️ [Cascada] {model_id} → Sin JSON estructurado en respuesta.")
                         continue
-
-                    data = json.loads(json_match.group(0))
-                    is_match = data.get("es_match", False)
-                    confianza = float(data.get("confianza", 0.0))
-                    razonamiento = data.get("razonamiento", "")
 
                     logger.info(
                         f"📊 [Cascada Tier {idx+1}] {model_id} ({elapsed_ms}ms) → "
@@ -928,6 +1038,37 @@ RESPONDE SOLO EN FORMATO JSON:
             row_text   = row['full_text']
             row_norm   = self.normalize_text(row_text)
 
+            # ── CHECK 0: FILTRO DE ENCABEZADOS Y METADATOS DE TABLA PACS ───────
+            # Los encabezados de columnas de PACS están fijos en Y < 115 px (ej: EXAMEN, Fecha agendada, Estado, Prioridad)
+            # Si no se filtran, la palabra "EXAMEN:" genera falso positivo con "examen hecho" (partial_ratio=78%)
+            # cuando la tabla está vacía o sin estudios técnicos del paciente.
+            if row['y_center'] < 115:
+                logger.info(f"🚫 Fila descartada por zona de encabezado PACS (Y={int(row['y_center'])} < 115): {row_text[:80]}")
+                continue
+
+            PATRONES_ENCABEZADO = [
+                r'\bfecha\s+agendada\b',
+                r'\bfacha\s+ager\b',
+                r'\bnro\.?\s*pacs\b',
+                r'\bexamen\s*:\s*(?:fecha|facha|dada|stado|estado)',
+                r'\bcexamen\b',
+                r'\bprioridad\b',
+                r'\bmodalidad\b',
+            ]
+            es_encabezado = False
+            for pat in PATRONES_ENCABEZADO:
+                if re.search(pat, row_norm):
+                    logger.info(f"🚫 Fila descartada por contener encabezado PACS '{pat}' (Y={int(row['y_center'])}): {row_text[:80]}")
+                    es_encabezado = True
+                    break
+            if es_encabezado:
+                continue
+
+            # Descartar filas espurias de 1 o 2 palabras cortas tipo "stado", "dad", etc.
+            if len(row_norm.split()) <= 2 and not any(w in row_norm for w in ['hecho', 'realizado', 'aprobado']):
+                logger.info(f"🚫 Fila descartada por ser fragmento espurio (Y={int(row['y_center'])}): {row_text[:80]}")
+                continue
+
             # ── CHECK 1: LISTA NEGRA DE ESTADOS (Anti-Falsos Positivos) ────────
             # Descartar de inmediato cualquier fila en estados no realizados, cancelados o agendados:
             # - Cancelados / Anulados (evita exámenes suspendidos)
@@ -972,11 +1113,19 @@ RESPONDE SOLO EN FORMATO JSON:
             )
             has_variante_regex = bool(REGEX_HECHO_VARIANTES.search(row_norm))
 
+            # SEGURIDAD: Exigir presencia de raíz 'hecho'/'realizado'/variante para evitar que 'EXAMEN:' aislado dé falso positivo
+            tiene_raiz_hecho = (
+                score_hecho >= 70 or 
+                score_realizado >= 70 or 
+                has_variante_regex or 
+                bool(re.search(r'\bhe[cd]h?o\b|\brealizad[ao]\b|\baprobado\b', row_norm))
+            )
+
             has_estado = (
-                (score_examen_hecho >= 70) or 
-                (score_hecho >= 70) or 
+                ((score_examen_hecho >= 75 and tiene_raiz_hecho) or 
+                (score_hecho >= 75) or 
                 (score_realizado >= 75) or 
-                has_variante_regex
+                has_variante_regex)
             )
 
             logger.debug(
@@ -984,24 +1133,25 @@ RESPONDE SOLO EN FORMATO JSON:
                 f"variante={has_variante_regex} fecha={has_date} ({motivo_fecha}) | {row_text[:80]}"
             )
 
-            if has_date and has_estado:
-                # Calcular rango vertical REAL del bloque (usando bounds de Tesseract)
+            # REGLA CLÍNICA: Si la fila tiene 'Examen Hecho' / 'Realizado', se considera candidata.
+            # La fecha se evalúa con búsqueda principal DD/MM/YYYY y fallback MM/DD/YYYY.
+            # Si la fecha provino de fallback o requiere verificación, el LLM la evaluará en Fase 2.
+            if has_estado:
                 all_y_min = [i['bounds']['y_min'] for i in row['items'] if 'bounds' in i]
                 all_y_max = [i['bounds']['y_max'] for i in row['items'] if 'bounds' in i]
                 row['y_min'] = min(all_y_min) if all_y_min else (row['y_center'] - self.CROP_HEIGHT // 2)
                 row['y_max'] = max(all_y_max) if all_y_max else (row['y_center'] + self.CROP_HEIGHT // 2)
-                # Usar y_center (promedio de centros de palabras) como punto de clic.
-                # Es más estable que (y_min + y_max)/2 porque los bounds de Tesseract
-                # sobre imagen 3x normalizada pueden incluir padding que desplaza el resultado.
                 row['y_click'] = row['y_center']
                 row['score_fecha'] = score_fecha
+                row['has_date'] = has_date
                 row['motivo_fecha'] = motivo_fecha
+                row['es_fallback_fecha'] = ("fallback" in motivo_fecha.lower())
                 row['score_estado'] = max(score_examen_hecho, score_hecho, 100 if has_variante_regex else 0)
                 candidates.append(row)
                 logger.info(
-                    f"✅ Candidato (Y_center={int(row['y_center'])} | y_min={int(row['y_min'])} "
+                    f"✅ Candidato con Examen Hecho (Y_center={int(row['y_center'])} | y_min={int(row['y_min'])} "
                     f"y_max={int(row['y_max'])} y_click={int(row['y_click'])}, "
-                    f"score_fecha={score_fecha} ex_hecho={score_examen_hecho} hecho={score_hecho} "
+                    f"score_fecha={score_fecha} ({motivo_fecha}) ex_hecho={score_examen_hecho} hecho={score_hecho} "
                     f"variante={has_variante_regex}): {row_text[:120]}"
                 )
 
@@ -1153,77 +1303,67 @@ RESPONDE SOLO EN FORMATO JSON:
         candidates = []
         rows_data = [] # Para logging en caso de faloo
         
-        # --- PASO 1: OCR CON PREPROCESAMIENTO ---
-        logger.info("--- 🔄 Ejecutando OCR Paso 1: Con Preprocesamiento ---")
+        # --- PASO 1: PADDLEOCR GPU (MOTOR PRINCIPAL) ---
+        logger.info("--- ⚡ Ejecutando OCR Paso 1: PaddleOCR GPU (Motor Principal) ---")
         if self.vf:
-            self.vf.show_persistent_message("PROCESANDO OCR (HQ)...", "ocr", bg_color="#FFEB3B", fg_color="#000000")
+            self.vf.show_persistent_message("PROCESANDO OCR (PADDLE GPU)...", "ocr", bg_color="#9C27B0", fg_color="#FFFFFF")
             
         try:
-            ocr_results = self.execute_ocr_data(img_bgr, use_preprocessing=True)
-            # Estabilización activa: Si la pantalla del PACS aún está cargando o en blanco (ej. ID 595 con 0 palabras)
-            if len(ocr_results) < 3:
+            ocr_results_paddle = self.execute_paddle_ocr(img_bgr)
+            # Estabilización activa: Si la pantalla del PACS aún está cargando o en blanco
+            if len(ocr_results_paddle) < 3:
                 for wait_attempt in range(1, 4):
                     logger.warning(
-                        f"⏳ Pantalla PACS posiblemente no renderizada (solo {len(ocr_results)} palabras detectadas). "
+                        f"⏳ Pantalla PACS posiblemente no renderizada (solo {len(ocr_results_paddle)} textos detectados). "
                         f"Esperando estabilización ({wait_attempt}/3)..."
                     )
                     time.sleep(2.0)
                     screenshot = pyautogui.screenshot(region=self.region)
                     img_np = np.array(screenshot)
                     img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-                    ocr_results = self.execute_ocr_data(img_bgr, use_preprocessing=True)
-                    if len(ocr_results) >= 3:
-                        logger.info(f"✅ Pantalla PACS estabilizada: {len(ocr_results)} palabras detectadas.")
+                    ocr_results_paddle = self.execute_paddle_ocr(img_bgr)
+                    if len(ocr_results_paddle) >= 3:
+                        logger.info(f"✅ Pantalla PACS estabilizada: {len(ocr_results_paddle)} textos detectados.")
                         break
 
-            candidates, rows_data = self._analyze_candidates(ocr_results, target_fecha_str)
+            candidates_paddle, rows_data_paddle = self._analyze_candidates(ocr_results_paddle, target_fecha_str)
+
+            if candidates_paddle:
+                logger.info(f"✅ PaddleOCR GPU detectó {len(candidates_paddle)} candidatos con Fecha y Estado Hecho.")
+                candidates = candidates_paddle
+                rows_data = rows_data_paddle
+            else:
+                logger.warning("⚠️ PaddleOCR GPU no encontró candidatos con Fecha y Estado Hecho.")
+                rows_data = rows_data_paddle
+        except Exception as e:
+            logger.error(f"Error ejecutando PaddleOCR GPU: {e}")
+            rows_data = []
         finally:
             if self.vf:
                 self.vf.hide_persistent_message("ocr")
                 
-        # --- PASO 2: OCR RAW (FALLBACK) ---
+        # --- PASO 2: TESSERACT (FALLBACK SECUNDARIO SI PADDLE NO OBTUVO CANDIDATOS) ---
         if not candidates:
-            logger.warning("⚠️ Paso 1 sin candidatos. Ejecutando Paso 2: OCR RAW (Fallback)...")
+            logger.warning("⚠️ Paso 1 (PaddleOCR GPU) sin candidatos. Ejecutando Paso 2: Tesseract (Fallback con Preprocesamiento)...")
             
             if self.vf:
-                self.vf.show_persistent_message("PROCESANDO OCR (RAW)...", "ocr", bg_color="#FF9800", fg_color="#000000")
+                self.vf.show_persistent_message("PROCESANDO OCR (TESSERACT)...", "ocr", bg_color="#FFEB3B", fg_color="#000000")
                 
             try:
-                ocr_results_raw = self.execute_ocr_data(img_bgr, use_preprocessing=False)
-                candidates_raw, rows_data_raw = self._analyze_candidates(ocr_results_raw, target_fecha_str)
+                ocr_results_tess = self.execute_ocr_data(img_bgr, use_preprocessing=True)
+                candidates_tess, rows_data_tess = self._analyze_candidates(ocr_results_tess, target_fecha_str)
                 
-                if candidates_raw:
-                     logger.info(f"✅ Fallback de OCR exitoso. Encontrados {len(candidates_raw)} candidatos.")
-                     candidates = candidates_raw
-                     rows_data = rows_data_raw
+                if candidates_tess:
+                    logger.info(f"✅ Fallback de Tesseract exitoso. Encontrados {len(candidates_tess)} candidatos.")
+                    candidates = candidates_tess
+                    rows_data = rows_data_tess
                 else:
-                     logger.warning("❌ Paso 2 también sin candidatos.")
-                     rows_data = rows_data_raw 
+                    logger.warning("❌ Paso 2 (Tesseract) también sin candidatos.")
+            except Exception as e:
+                logger.error(f"Error en fallback Tesseract: {e}")
             finally:
                 if self.vf:
-                     self.vf.hide_persistent_message("ocr")
-
-        # --- PASO 3: PREPROCESO ALTERNATIVO (REMOVE BLUE BACKGROUND) ---
-        if not candidates:
-            logger.warning("⚠️ Paso 2 sin candidatos. Ejecutando Paso 3: Remover Fondo Azul (Fallback 2)...")
-            
-            if self.vf:
-                self.vf.show_persistent_message("PROCESANDO OCR (NO-BLUE)...", "ocr", bg_color="#2196F3", fg_color="#FFFFFF")
-                
-            try:
-                ocr_results_blue = self.execute_ocr_data(img_bgr, use_preprocessing=True, mode='remove_blue')
-                candidates_blue, rows_data_blue = self._analyze_candidates(ocr_results_blue, target_fecha_str)
-                
-                if candidates_blue:
-                     logger.info(f"✅ Fallback 2 de OCR exitoso. Encontrados {len(candidates_blue)} candidatos.")
-                     candidates = candidates_blue
-                     rows_data = rows_data_blue
-                else:
-                     logger.warning("❌ Paso 3 también sin candidatos.")
-                     rows_data = rows_data_blue
-            finally:
-                if self.vf:
-                     self.vf.hide_persistent_message("ocr")
+                    self.vf.hide_persistent_message("ocr")
 
         logger.info(f"Total Candidatos Finales: {len(candidates)}")
 
@@ -1272,6 +1412,17 @@ RESPONDE SOLO EN FORMATO JSON:
             y_click = cand.get('y_click', y_center)
             ocr_text_candidate = cand.get('full_text', "")
 
+            # En Fase 1 (clic local rápido), SOLO permitimos clic directo si la fecha fue validada
+            # estrictamente por la búsqueda principal DD/MM/YYYY (score_fecha >= 95 y no fallback).
+            # Si la fecha provino del fallback MM/DD/YYYY o requiere evaluación, SE DERIVA A FASE 2 (LLM).
+            score_f = cand.get('score_fecha', 0)
+            if score_f < 80 or cand.get('es_fallback_fecha', False) or not cand.get('has_date', False):
+                logger.info(
+                    f"ℹ️ [Fase 1] Candidato #{idx+1} tiene 'Examen Hecho' pero la fecha requiere validación "
+                    f"({cand.get('motivo_fecha', '')}, score={score_f}). Se deriva a FASE 2 (LLM)."
+                )
+                continue
+
             # Verificación estricta de lateralidad clínica
             if not self.verificar_lateralidad(target_diag, ocr_text_candidate):
                 logger.info(f"🚫 [Fase 1] Candidato #{idx+1} descartado por lateralidad anatómica incompatible: '{ocr_text_candidate[:60]}'")
@@ -1304,11 +1455,18 @@ RESPONDE SOLO EN FORMATO JSON:
                             logger.warning(f"🛡️ [AUDITOR RECHAZA] Candidato por Sinónimo BD descartado: {razon}")
                             continue
 
-                    # 🤖 CHECK OBLIGATORIO DE SEGURIDAD CON LLM ANTES DE CLIC
-                    logger.info("🤖 [CHECK FINAL LLM] Ejecutando validación semántica obligatoria con LLM antes de hacer clic (Sinónimo BD)...")
+                    score_sin = max(score_sin_partial, score_sin_token)
+                    # Si el sinónimo tiene alta concordancia (>=90%) y el Auditor Clínico aprobó: Clic directo sin esperar LLM
+                    if score_sin >= 90:
+                        logger.info(f"✅ MATCH POR SINÓNIMO BD ALTA CERTEZA + AUDITOR (Fase 1, score={score_sin} >= 90%) → clic directo en Y={int(y_click)}")
+                        self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
+                        return True, ''
+
+                    # Para sinónimos intermedios (72-89%), verificación semántica con LLM
+                    logger.info(f"🤖 [CHECK LLM INTERMEDIO] Ejecutando validación semántica con LLM antes de hacer clic (Sinónimo BD={score_sin})...")
                     if self.vf:
                         self.vf.show_persistent_message("🤖 VALIDACIÓN FINAL LLM ANTES DE CLIC...", "llm", bg_color="#2196F3", fg_color="#FFFFFF")
-                    is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
+                    is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, target_fecha_str=target_fecha_str, id_registro=id_registro)
                     if not is_match_llm:
                         logger.warning(f"🚫 [CHECK FINAL LLM RECHAZADO] LLM rechazó el candidato de Sinónimo BD '{ocr_text_candidate[:50]}'. Descartando fila...")
                         continue
@@ -1362,13 +1520,20 @@ RESPONDE SOLO EN FORMATO JSON:
                         motivos_descarte.append(f"Auditor rechazó: {razon}")
                         continue
 
-                # 🤖 CHECK OBLIGATORIO DE SEGURIDAD CON LLM ANTES DE CLIC
-                logger.info(f"🤖 [CHECK FINAL LLM] Ejecutando validación semántica obligatoria con LLM antes de hacer clic ({metodo_match}={score_utilizado})...")
+                # Si la coincidencia médica local o fuzzy es de muy alta certeza (>=90%) y el Auditor Clínico ya aprobó:
+                # Se ejecuta clic directo sin depender de LLMs externos (evita demoras y caídas por timeout o APIs saturadas).
+                if score_utilizado >= 90:
+                    logger.info(f"✅ MATCH LOCAL DE ALTA FIDELIDAD + AUDITOR CONFIRMADO (Fase 1, {metodo_match}={score_utilizado} >= 90%) → clic directo en Y={int(y_click)}")
+                    self.click_target(y_click, img_bgr=img_bgr, log_dir=log_dir, base_name=_log_base_name)
+                    return True, ''
+
+                # Para coincidencias intermedias (75-89%), verificación semántica con LLM
+                logger.info(f"🤖 [CHECK LLM INTERMEDIO] Ejecutando validación semántica con LLM antes de hacer clic ({metodo_match}={score_utilizado})...")
                 if self.vf:
                     self.vf.show_persistent_message("🤖 VALIDACIÓN FINAL LLM ANTES DE CLIC...", "llm", bg_color="#2196F3", fg_color="#FFFFFF")
-                is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
+                is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, target_fecha_str=target_fecha_str, id_registro=id_registro)
                 if not is_match_llm:
-                    logger.warning(f"🚫 [CHECK FINAL LLM RECHAZADO] LLM rechazó el candidato local ({metodo_match}) '{ocr_text_candidate[:50]}'. Descartando fila...")
+                    logger.warning(f"🚫 [CHECK LLM RECHAZADO] LLM rechazó el candidato local ({metodo_match}) '{ocr_text_candidate[:50]}'. Descartando fila...")
                     motivos_descarte.append(f"LLM rechazó coincidencia semántica con '{ocr_text_candidate[:50]}'")
                     continue
 
@@ -1414,7 +1579,7 @@ RESPONDE SOLO EN FORMATO JSON:
                 f"--- [LLM] Verificando Candidato #{idx+1} (Score={cand.get('_fuzzy_score', 0)} | "
                 f"Y_center={int(y_center)} | Y_click={int(y_click)}) ---"
             )
-            is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, id_registro=id_registro)
+            is_match_llm = self.call_llm_text_verification(ocr_text_candidate, target_diag, target_fecha_str=target_fecha_str, id_registro=id_registro)
             if is_match_llm:
                 # 🛡️ AUDITORÍA PRE-CLIC (LLM Match)
                 if self.auditor:

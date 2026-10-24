@@ -47,6 +47,11 @@ def get_llm_request_params(model_id):
     except Exception:
         pass
 
+    # 1. Detección de proveedor local Ollama
+    if model_id == "qwen2.5:3b" or model_id.startswith("ollama/") or model_id.startswith("local/"):
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        return f"{ollama_url}/v1", "ollama", "ollama"
+
     nvidia_key = os.getenv("NVIDIA_API_KEY", "")
     if nvidia_key and not model_id.endswith(":free"):
         nvidia_prefixes = (
@@ -66,21 +71,20 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "cohere/north-mini-code:free",                            # Primario — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 1 — Validado OK
-   "nvidia/nemotron-3.5-lightning:free",                     # Fallback 2 — Validado OK
+   "minimaxai/minimax-m3.1-flash",                           # Primario — Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 1 — Validado OK
+   "openrouter/free",                                        # Fallback 2 — Validado OK
    "dots-studio/dots-3-note-preview:free",                   # Fallback 3 — Validado OK
-   "openrouter/free",                                        # Fallback 4 — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 5 — Validado OK
-   "minimax/minimax-m3.1-flash:free",                        # Fallback 6 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
-OCR_DEFAULT_MODELS = list(BASE_LLM_MODELS)
+OCR_DEFAULT_MODELS = ['qwen2.5:3b'] + list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
     "dots-studio/dots-3-note-preview:free",
+    "openrouter/free",
 ]
 
 # Alias de compatibilidad estática (para scripts que aún no usan get_ranked_models)
@@ -159,6 +163,10 @@ def get_models_for_context(contexto: str = 'busqueda_ocr') -> list:
                 if m not in seen:
                     seen.add(m)
                     dedup.append(m)
+            if contexto == "busqueda_ocr":
+                if "qwen2.5:3b" in dedup:
+                    dedup.remove("qwen2.5:3b")
+                dedup.insert(0, "qwen2.5:3b")
             return dedup
     except Exception as e:
         logger.debug(f"[llm_config] No se pudo consultar catalogo_modelos_llm ({e}), usando fallback.")
@@ -240,7 +248,18 @@ def get_ranked_models(base_list=None, contexto='busqueda_ocr'):
 
     def _score(model_id):
         base_url, target_key, provider = get_llm_request_params(model_id)
-        provider_priority = 0 if provider == "nvidia" else 1
+        if provider == "ollama":
+            # Máxima prioridad para inferencia local en GPU GTX 1070
+            try:
+                from utils.ollama_auto_starter import is_ollama_running
+                is_broken = 0 if is_ollama_running(timeout=0.4) else 1
+            except Exception:
+                is_broken = 0
+            return (is_broken, -1, -1.0, 500.0)
+        elif provider == "nvidia":
+            provider_priority = 0
+        else:
+            provider_priority = 1
 
         if model_id not in stats:
             # Modelo sin historial: score neutro (50%), tiempo asumido 5s
@@ -302,6 +321,13 @@ def log_llm_result(
         contexto:          Tipo de tarea ('busqueda_ocr', 'deteccion_patologia', etc.)
         proveedor:         API que sirvió la consulta ('openrouter', 'nvidia', etc.)
     """
+    if proveedor == "openrouter" and modelo:
+        try:
+            _, _, prov = get_llm_request_params(modelo)
+            proveedor = prov
+        except Exception:
+            pass
+
     try:
         import mysql.connector
         conn = mysql.connector.connect(**_DB_CONFIG)

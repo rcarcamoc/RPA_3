@@ -166,7 +166,7 @@ def get_db_connection():
     )
 
 def obtener_datos(fecha_inicio, fecha_fin):
-    """Obtiene los registros de la base de datos entre dos fechas, excluyendo tareas utilitarias (conteo RIS y validación PACS)."""
+    """Obtiene los registros de la base de datos entre dos fechas, excluyendo tareas utilitarias (conteo RIS, validación PACS y VPN)."""
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
@@ -175,10 +175,11 @@ def obtener_datos(fecha_inicio, fecha_fin):
     FROM registro_acciones 
     WHERE inicio >= %s AND inicio <= %s
       AND (
-          (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS'))
+          (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS', 'Verifica VPN', 'verifica_vpn', 'Comprueba VPN', 'comprueba vpn'))
           OR numero_documento IS NOT NULL
       )
-      AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%') OR numero_documento IS NOT NULL)
+      AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%' AND observacion NOT LIKE '%VPN%' AND observacion NOT LIKE '%vpn%') OR numero_documento IS NOT NULL)
+      AND (estado != 'sin registros para trabajar' OR numero_documento IS NOT NULL)
     """
     cursor.execute(query, (fecha_inicio, fecha_fin))
     datos = cursor.fetchall()
@@ -207,7 +208,7 @@ def is_success(e):
 
 def is_error(e):
     st = str(e).lower()
-    return any(k in st for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e) and not is_addendum(e) and not is_ya_ingresado(e)
+    return any(k in st for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e) and not is_addendum(e) and not is_ya_ingresado(e) and not any(k in st for k in ['sin registros', 'vpn'])
 
 def is_in_progress(e):
     return any(k in str(e).lower() for k in ['proceso'])

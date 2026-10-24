@@ -320,6 +320,56 @@ class BuscadorBaseDatos:
             if conn and conn.is_connected():
                 conn.close()
 
+    @staticmethod
+    def calcular_similitud_medico(nombre_web: str, nombre_bd: str) -> float:
+        """
+        Calcula similitud inteligente entre el nombre extraído de la web/PDF y el nombre en la BD.
+        Utiliza:
+        1. Normalización de tildes y eliminación de títulos honoríficos (Dr., Dra., MD, Radiólogo).
+        2. Token Set Ratio: valida si los tokens de la BD forman parte del nombre web o viceversa.
+        3. Token Sort Ratio: tolera orden invertido de nombres/apellidos.
+        4. SequenceMatcher: evalúa proximidad secuencial de apoyo.
+        """
+        import unicodedata
+        try:
+            from rapidfuzz import fuzz
+        except ImportError:
+            try:
+                from fuzzywuzzy import fuzz
+            except ImportError:
+                fuzz = None
+
+        def _norm(t):
+            if not t:
+                return ""
+            t = t.lower()
+            t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+            t = re.sub(r'\b(?:dr|dra|md|radiologo|medico)\b\.?', '', t)
+            t = re.sub(r'[^a-z0-9\s]', ' ', t)
+            return re.sub(r'\s+', ' ', t).strip()
+
+        w = _norm(nombre_web)
+        b = _norm(nombre_bd)
+        if not w or not b:
+            return 0.0
+
+        if w == b:
+            return 1.0
+
+        seq = SequenceMatcher(None, w, b).ratio()
+
+        if fuzz:
+            t_set = fuzz.token_set_ratio(w, b) / 100.0
+            t_sort = fuzz.token_sort_ratio(w, b) / 100.0
+            score = (t_set * 0.60) + (t_sort * 0.25) + (seq * 0.15)
+            return score
+        else:
+            tokens_w = set(w.split())
+            tokens_b = set(b.split())
+            overlap = len(tokens_w.intersection(tokens_b))
+            token_ratio = overlap / max(len(tokens_b), 1)
+            return (token_ratio * 0.70) + (seq * 0.30)
+
     def buscar_credenciales(self, nombre_buscado):
         """
         Busca el nombre más parecido en la tabla medicos y retorna sus credenciales.
@@ -330,7 +380,7 @@ class BuscadorBaseDatos:
             cursor = conn.cursor(dictionary=True)
             
             # Obtener todos los médicos (nombre y credenciales)
-            query = "SELECT nombre_completo, usuario_integra, clave_integra FROM medicos"
+            query = "SELECT nombre_completo, usuario_integra, clave_integra FROM medicos WHERE (estado = 'Activo' OR estado IS NULL)"
             cursor.execute(query)
             resultados = cursor.fetchall()
             
@@ -338,21 +388,17 @@ class BuscadorBaseDatos:
                 print("La tabla de médicos está vacía.")
                 return None
                 
-            # Búsqueda difusa (Fuzzy Matching)
+            # Búsqueda difusa tokenizada inteligente
             mejor_match = None
             mejor_ratio = 0.0
-            
-            nombre_buscado_norm = nombre_buscado.lower()
             
             for medico in resultados:
                 nombre_bd = medico['nombre_completo']
                 if not nombre_bd:
                     continue
-                    
-                nombre_bd_norm = nombre_bd.lower()
                 
-                # Calcular similitud
-                ratio = SequenceMatcher(None, nombre_buscado_norm, nombre_bd_norm).ratio()
+                # Calcular similitud inteligente
+                ratio = self.calcular_similitud_medico(nombre_buscado, nombre_bd)
                 
                 # Guardar si es el mejor hasta ahora
                 if ratio > mejor_ratio:

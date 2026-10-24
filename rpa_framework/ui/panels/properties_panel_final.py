@@ -109,9 +109,17 @@ class PropertiesPanelFinal(QWidget):
         self.prop_script.setPlaceholderText("Seleccionar o escribir script Python...")
         script_layout.addWidget(self.prop_script)
         
+        btn_refresh_script = QPushButton()
+        btn_refresh_script.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        btn_refresh_script.setFixedWidth(30)
+        btn_refresh_script.setToolTip("Actualizar lista de scripts")
+        btn_refresh_script.clicked.connect(self.load_scripts)
+        script_layout.addWidget(btn_refresh_script)
+        
         btn_browse = QPushButton()
         btn_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         btn_browse.setFixedWidth(30)
+        btn_browse.setToolTip("Examinar archivo de script...")
         btn_browse.clicked.connect(self.browse_script)
         script_layout.addWidget(btn_browse)
         
@@ -487,7 +495,8 @@ class PropertiesPanelFinal(QWidget):
                 self.update_command_fields()
             else:
                  self._show_field(self.script_container)
-                 if hasattr(node, 'script'):
+                 self.load_scripts()
+                 if hasattr(node, 'script') and node.script:
                     self.prop_script.setCurrentText(node.script)
             
             if t == NodeType.ACTION:
@@ -679,9 +688,11 @@ class PropertiesPanelFinal(QWidget):
 
     def browse_script(self):
         """Abre buscador de archivos para scripts Python"""
-        start_dir = "recordings"
-        if not os.path.exists(start_dir):
-            os.makedirs(start_dir, exist_ok=True)
+        try:
+            from utils.paths import RECORDINGS_DIR, UI_RECORDINGS_DIR
+            start_dir = str(UI_RECORDINGS_DIR if UI_RECORDINGS_DIR.exists() else RECORDINGS_DIR)
+        except Exception:
+            start_dir = "rpa_framework/recordings/ui" if os.path.exists("rpa_framework/recordings/ui") else "recordings"
             
         filename, _ = QFileDialog.getOpenFileName(
             self, "Seleccionar Script Python", start_dir, "Scripts Python (*.py)"
@@ -698,9 +709,11 @@ class PropertiesPanelFinal(QWidget):
 
     def browse_workflow(self):
         """Abre buscador de archivos para sub-workflows"""
-        start_dir = "workflows"
-        if not os.path.exists(start_dir):
-            os.makedirs(start_dir, exist_ok=True)
+        try:
+            from utils.paths import WORKFLOWS_DIR
+            start_dir = str(WORKFLOWS_DIR if WORKFLOWS_DIR.exists() else "workflows")
+        except Exception:
+            start_dir = "rpa_framework/workflows" if os.path.exists("rpa_framework/workflows") else "workflows"
             
         filename, _ = QFileDialog.getOpenFileName(
             self, "Seleccionar Workflow", start_dir, "Workflow Files (*.json)"
@@ -724,19 +737,29 @@ class PropertiesPanelFinal(QWidget):
             self.prop_program_path_edit.setText(filename)
 
     def load_scripts(self):
-        """Escanea la carpeta recordings recursivamente buscando scripts"""
+        """Escanea todas las carpetas de grabaciones y scripts recursivamente"""
+        current_val = self.prop_script.currentText()
         self.prop_script.clear()
+        found_scripts = []
         try:
-            path = Path("recordings")
-            if path.exists():
-                for file in path.glob("**/*.py"):
-                    try:
-                        rel = file.relative_to(Path.cwd())
-                        self.prop_script.addItem(str(rel))
-                    except:
-                        self.prop_script.addItem(str(file))
+            from utils.paths import get_all_scripts
+            found_scripts = get_all_scripts(include_subdirs=True)
         except Exception:
-            pass
+            folders = ["recordings", "rpa_framework/recordings", "scripts", "rpa_framework/scripts"]
+            for f in folders:
+                p = Path(f)
+                if p.exists():
+                    found_scripts.extend(list(p.glob("**/*.py")))
+                    
+        for file in found_scripts:
+            try:
+                rel = file.relative_to(Path.cwd())
+                self.prop_script.addItem(str(rel))
+            except Exception:
+                self.prop_script.addItem(str(file))
+                
+        if current_val:
+            self.prop_script.setCurrentText(current_val)
 
     def load_workflows(self):
         """Carga los workflows JSON disponibles"""

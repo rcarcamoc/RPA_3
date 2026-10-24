@@ -84,10 +84,10 @@ def consultar_datos_periodo(fecha_inicio, fecha_fin):
     FROM registro_acciones
     WHERE inicio >= %s AND inicio <= %s
       AND (
-          (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS'))
+          (ultimo_nodo IS NULL OR ultimo_nodo NOT IN ('Validación PACS', 'valida_pacs', 'seleccion int casos pendientes', 'casos_pendientes', 'Inicia RIS', 'Verifica VPN', 'verifica_vpn', 'Comprueba VPN', 'comprueba vpn'))
           OR numero_documento IS NOT NULL
       )
-      AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%') OR numero_documento IS NOT NULL)
+      AND (observacion IS NULL OR (observacion NOT LIKE '%validación PACS%' AND observacion NOT LIKE '%validacion PACS%' AND observacion NOT LIKE '%VPN%' AND observacion NOT LIKE '%vpn%') OR numero_documento IS NOT NULL)
       AND (estado != 'sin registros para trabajar' OR numero_documento IS NOT NULL)
     ORDER BY id ASC
     """

@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).parent.parent
 
 OCR_CONFIG = {
     # Motor OCR principal: 'easyocr', 'tesseract', 'paddleocr'
-    'engine': 'easyocr',
+    'engine': 'paddleocr',
     
     # Idioma por defecto
     'language': 'es',
@@ -41,7 +41,7 @@ OCR_CONFIG = {
             'path_macos': '/usr/local/bin/tesseract',
         },
         'paddleocr': {
-            'use_gpu': False,
+            'use_gpu': True,
             'enable_mkldnn': True,
         }
     },
