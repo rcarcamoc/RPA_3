@@ -1,0 +1,222 @@
+{
+  "metadata": {
+    "created_at": "2026-10-22T11:28:53.403756",
+    "screen_resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "total_actions": 14,
+    "total_actions_optimized": 14,
+    "duration_seconds": 79.527754,
+    "optimization_stats": {
+      "removed_count": 0,
+      "consolidated_count": 0
+    }
+  },
+  "actions": [
+    {
+      "type": "click",
+      "timestamp": "2026-10-22T11:27:17.749288",
+      "position": {
+        "x": 1679,
+        "y": 1058
+      },
+      "selector": {
+        "automation_id": "NotifyItemIcon"
+      },
+      "app_context": {
+        "title": "Desktop",
+        "class_name": "#32769"
+      },
+      "modifiers": {
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "win": false
+      },
+      "element_info": {
+        "name": "Desconectado",
+        "automation_id": "NotifyItemIcon",
+        "class_name": "SystemTray.NormalButton",
+        "control_type": "Button"
+      }
+    },
+    {
+      "type": "click",
+      "timestamp": "2026-10-22T11:27:21.243473",
+      "position": {
+        "x": 1749,
+        "y": 1008
+      },
+      "selector": {
+        "name": "Conectar",
+        "control_type": "Button"
+      },
+      "app_context": {
+        "title": "Desktop",
+        "class_name": "#32769"
+      },
+      "modifiers": {
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "win": false
+      },
+      "element_info": {
+        "name": "Conectar",
+        "automation_id": "1160",
+        "class_name": "Button",
+        "control_type": "Button"
+      }
+    },
+    {
+      "type": "click",
+      "timestamp": "2026-10-22T11:27:24.726237",
+      "position": {
+        "x": 1807,
+        "y": 860
+      },
+      "selector": {
+        "name": "Password",
+        "control_type": "Edit"
+      },
+      "app_context": {
+        "title": "Desktop",
+        "class_name": "#32769"
+      },
+      "modifiers": {
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "win": false
+      },
+      "element_info": {
+        "name": "Password",
+        "automation_id": "1166",
+        "class_name": "Edit",
+        "control_type": "Edit"
+      }
+    },
+    {
+      "type": "type_text",
+      "timestamp": "2026-10-22T11:27:27.133696",
+      "text": "\u0001",
+      "selector": {
+        "name": "Password",
+        "control_type": "Edit"
+      },
+      "position": null
+    },
+    {
+      "type": "key",
+      "timestamp": "2026-10-22T11:27:27.134229",
+      "key_code": "DELETE",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "type_text",
+      "timestamp": "2026-10-22T11:27:32.705125",
+      "text": "Ricardo.Carcamo",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "key",
+      "timestamp": "2026-10-22T11:27:32.705428",
+      "key_code": "TAB",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "type_text",
+      "timestamp": "2026-10-22T11:27:44.220452",
+      "text": "Min#",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "key",
+      "timestamp": "2026-10-22T11:27:44.220859",
+      "key_code": "ENTER",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "type_text",
+      "timestamp": "2026-10-22T11:27:56.713655",
+      "text": "Mim#",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "key",
+      "timestamp": "2026-10-22T11:27:56.714079",
+      "key_code": "ENTER",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "click",
+      "timestamp": "2026-10-22T11:28:04.186875",
+      "position": {
+        "x": 1749,
+        "y": 910
+      },
+      "selector": {
+        "name": "Enter Your Microsoft verification code",
+        "control_type": "Edit"
+      },
+      "app_context": {
+        "title": "Desktop",
+        "class_name": "#32769"
+      },
+      "modifiers": {
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "win": false
+      },
+      "element_info": {
+        "name": "Enter Your Microsoft verification code",
+        "automation_id": "1167",
+        "class_name": "Edit",
+        "control_type": "Edit"
+      }
+    },
+    {
+      "type": "key",
+      "timestamp": "2026-10-22T11:28:22.450185",
+      "key_code": "ENTER",
+      "selector": null,
+      "position": null
+    },
+    {
+      "type": "click",
+      "timestamp": "2026-10-22T11:28:37.277042",
+      "position": {
+        "x": 1024,
+        "y": 428
+      },
+      "selector": {
+        "automation_id": "QApplication.DesktopFloatingControlWindow.QPushButton"
+      },
+      "app_context": {
+        "title": "Desktop",
+        "class_name": "#32769"
+      },
+      "modifiers": {
+        "ctrl": false,
+        "shift": false,
+        "alt": false,
+        "win": false
+      },
+      "element_info": {
+        "name": "⏹ Terminar",
+        "automation_id": "QApplication.DesktopFloatingControlWindow.QPushButton",
+        "class_name": "QPushButton",
+        "control_type": "Button"
+      }
+    }
+  ]
+}

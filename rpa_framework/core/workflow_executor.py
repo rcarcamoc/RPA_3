@@ -98,6 +98,8 @@ class WorkflowExecutor:
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
         self._external_stop = False  # True solo cuando stop() es llamado por el usuario
+        self.stop_after_iteration = False  # True para detener loop tras caso actual
+        self.is_in_loop = False  # True mientras se ejecuta activamente un LoopNode
         self.no_records_found = False  # True cuando un script o sub-workflow termina con código 2 (sin registros)
         self.active_process = None
         self.nested_executor = None
@@ -259,6 +261,25 @@ class WorkflowExecutor:
                 keep_awake_cm.__enter__()
             except Exception as ka_e:
                 self.logger.log(f"⚠️ No se pudo inicializar Keep-Alive: {ka_e}")
+
+            # ── Validación Pre-Flujo: Servicios Críticos (MySQL y Ollama) ──
+            try:
+                from utils.mysql_auto_starter import ensure_mysql_running
+                ensure_mysql_running()
+            except Exception as e_mysql:
+                self.logger.log(f"⚠️ [Validación Pre-Flujo] Error verificando MySQL: {e_mysql}")
+
+            try:
+                from utils.ollama_auto_starter import ensure_ollama_running, verify_model_available
+                ollama_ok, ollama_msg = ensure_ollama_running(max_wait_seconds=6)
+                if ollama_ok:
+                    has_model = verify_model_available("qwen2.5:3b")
+                    modelo_str = "qwen2.5:3b" if has_model else "alerta: modelo no descargado"
+                    self.logger.log(f"🧠 [Validación Pre-Flujo] Ollama local ACTIVO ({modelo_str}) en GPU GTX 1070: {ollama_msg}")
+                else:
+                    self.logger.log(f"⚠️ [Validación Pre-Flujo] Ollama no disponible: {ollama_msg}. Flujo operará con fallback a LLM Cloud.")
+            except Exception as e_ollama:
+                self.logger.log(f"⚠️ [Validación Pre-Flujo] Error validando Ollama: {e_ollama}")
 
         recorder = None
         if self.enable_recording and not self.is_sub_workflow:
@@ -441,6 +462,32 @@ class WorkflowExecutor:
         if hasattr(self, 'pause_event') and self.pause_event:
             self.pause_event.set()
         self.logger.log("▶️ Workflow reanudado")
+
+    def stop_after_current_case(self):
+        """Solicita detener el bucle de manera segura una vez que finalice el caso en curso."""
+        self.stop_after_iteration = True
+        self.logger.log("⏳ Solicitud recibida: se detendrá el bucle al finalizar el caso actual.")
+        if getattr(self, 'nested_executor', None):
+            try:
+                self.nested_executor.stop_after_iteration = True
+            except Exception:
+                pass
+        if hasattr(self, 'pause_event') and not self.pause_event.is_set():
+            self.pause_event.set()
+
+    def is_loop_workflow(self) -> bool:
+        """Determina si el workflow actual es o contiene un bucle (LoopNode)."""
+        if getattr(self, 'is_in_loop', False):
+            return True
+        if self.nested_executor and getattr(self.nested_executor, 'is_loop_workflow', lambda: False)():
+            return True
+        if self.workflow and getattr(self.workflow, 'nodes', None):
+            for node in self.workflow.nodes:
+                if getattr(node, 'type', None) in ('loop', NodeType.LOOP) or str(getattr(node, 'type', '')).lower() == 'loop':
+                    return True
+        if self.workflow and "loop" in getattr(self.workflow, 'name', '').lower():
+            return True
+        return False
 
     def stop(self):
         """Detiene la ejecución del workflow"""
@@ -648,8 +695,8 @@ class WorkflowExecutor:
                                           self.logger.log(f"   🪟 Ventana(s) de RIS/PACS maximizada(s) ({max_w})")
                                   except Exception as max_err:
                                       self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
-                elif returncode == 2:
-                     self.logger.log(f"ℹ️ Comando finalizado (código 2): Sin registros para trabajar. Deteniendo flujo de forma limpia.")
+                elif returncode == 2 or any(k in str(node.label).lower() for k in ["vpn"]):
+                     self.logger.log(f"ℹ️ Comando finalizado (código {returncode}): Tratando como sin registros para trabajar / espera VPN. Deteniendo flujo de forma limpia.")
                      self.no_records_found = True
                      self.should_stop = True
                      return None
@@ -874,6 +921,25 @@ class WorkflowExecutor:
                 self.no_records_found = True
                 self.should_stop = True
                 return None
+            elif any(k in str(node.label).lower() for k in ["vpn"]) or any(k in str(node.script).lower() for k in ["vpn"]):
+                self.logger.log(f"ℹ️ Verificación VPN finalizada sin conexión (código {returncode}). Tratando como 'sin registros para trabajar'. Deteniendo flujo de forma limpia.")
+                try:
+                    conn_chk = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=3)
+                    cur_chk = conn_chk.cursor(dictionary=True)
+                    cur_chk.execute("SELECT id FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
+                    rec_chk = cur_chk.fetchone()
+                    if rec_chk:
+                        rec_id = rec_chk['id']
+                        cur_chk.execute("UPDATE ris.registro_acciones SET estado = 'sin registros para trabajar', observacion = %s, `update` = NOW() WHERE id = %s",
+                                        (f"[{node.label}] VPN no conectada o espera activa agotada", rec_id))
+                        conn_chk.commit()
+                    cur_chk.close()
+                    conn_chk.close()
+                except Exception as chk_e:
+                    self.logger.log(f"⚠️ Error actualizando registro VPN a sin registros: {chk_e}")
+                self.no_records_found = True
+                self.should_stop = True
+                return None
             else:
                 self.logger.log(f"❌ Error en script (código {returncode})")
                 
@@ -954,6 +1020,7 @@ class WorkflowExecutor:
         """
         import time
 
+        self.is_in_loop = True
         loop_type = getattr(node, 'loop_type', 'count')
         self.logger.log(f"🔁 Iniciando loop ({loop_type}) — Aislamiento total activado")
 
@@ -1036,6 +1103,20 @@ class WorkflowExecutor:
 
             # Solo se respeta el stop EXTERNO (botón Stop del usuario).
             # Se verifica ANTES de la iteración, nunca durante.
+            # Verificar si se solicitó detener el bucle tras el caso previo
+            stop_after_file = Path(__file__).resolve().parent.parent / "config" / "stop_after_case.txt"
+            if getattr(self, 'stop_after_iteration', False) or stop_after_file.exists():
+                motivo_fin = "detenido_tras_caso"
+                self.logger.log("⏹️ Loop detenido antes de iniciar nueva iteración (solicitud de reprocesamiento/parada suave).")
+                self.should_stop = True
+                self._external_stop = True
+                try:
+                    if stop_after_file.exists():
+                        stop_after_file.unlink()
+                except Exception:
+                    pass
+                break
+
             if self.should_stop:
                 motivo_fin = "detenido"
                 self.logger.log("⏹️ Loop detenido por señal externa del usuario.")
@@ -1201,12 +1282,27 @@ class WorkflowExecutor:
                         self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
                         self.should_stop = False
 
+            # Verificar detención suave tras finalizar el caso actual
+            stop_after_file = Path(__file__).resolve().parent.parent / "config" / "stop_after_case.txt"
+            if getattr(self, 'stop_after_iteration', False) or stop_after_file.exists():
+                motivo_fin = "detenido_tras_caso"
+                self.logger.log("⏹️ Loop detenido tras completar el caso actual sin interrumpirlo (solicitud de reprocesamiento/parada suave).")
+                self.should_stop = True
+                self._external_stop = True
+                try:
+                    if stop_after_file.exists():
+                        stop_after_file.unlink()
+                except Exception:
+                    pass
+                break
+
             if self.should_stop:
                 motivo_fin = "detenido"
                 break
 
             idx += 1
 
+        self.is_in_loop = False
         self.logger.log(f"✅ Loop finalizado ({idx} iteraciones ejecutadas)")
         if is_root_loop:
             duracion_total = time.time() - start_loop_ts

@@ -151,14 +151,14 @@ def get_menu_loop_v2_markup():
 def get_menu_revalidar_markup(registros):
     """
     Genera el teclado inline para seleccionar cuál de los registros en error
-    debe quedar en estado 'En Proceso'.
+    debe quedar en estado 'En Proceso' y reprocesarse en PACS.
     """
     keyboard = []
     for reg in registros:
         r_id = reg.get("id")
         doc = str(reg.get("numero_documento") or "--").strip()
-        btn_text = f"🔄 #{r_id} • Doc: {doc}"
-        keyboard.append([{"text": btn_text, "callback_data": f"reval_set_{r_id}"}])
+        btn_text = f"🔄 Reprocesar #{r_id} (Doc: {doc})"
+        keyboard.append([{"text": btn_text, "callback_data": f"reproc_pacs_{r_id}"}])
     
     keyboard.append([
         {"text": "⬅️ Volver a Ejecuciones", "callback_data": "sec_ejecucion"},
@@ -170,6 +170,7 @@ def get_menu_post_revalidar_markup(registro_id):
     """Submenú ofrecido tras marcar un registro como 'En Proceso'."""
     return {
         "inline_keyboard": [
+            [{"text": "🔄 Reprocesar en PACS (Solo Carga)", "callback_data": f"reproc_pacs_{registro_id}"}],
             [
                 {"text": "⚡ Ejecutar con V2 (Rápido)", "callback_data": "cmd_inicio_v2"},
                 {"text": "▶️ Ejecutar con V1", "callback_data": "cmd_inicio"}
@@ -380,6 +381,9 @@ def enviar_alerta_todos(mensaje, record_id=None):
         reply_markup = {
             "inline_keyboard": [
                 [
+                    {"text": "🔄 Reprocesar Caso", "callback_data": f"reproc_pacs_{record_id}"}
+                ],
+                [
                     {"text": "✅ Marcar Gestionado", "callback_data": f"gest_normal_{record_id}"}
                 ],
                 [
@@ -432,14 +436,14 @@ def notificar_loop_pausado(ultimo_error: str = "", workflow_name: str = "Loop", 
     ])
     mensaje = "\n".join(lineas)
 
-    markup = {
-        "inline_keyboard": [
-            [
-                {"text": "▶️ Reanudar Loop", "callback_data": "loop_reanudar"},
-                {"text": "⏹️ Detener definitivamente", "callback_data": "loop_detener"}
-            ]
-        ]
-    }
+    inline_k = []
+    if record_id:
+        inline_k.append([{"text": f"🔄 Reprocesar #{record_id} en PACS", "callback_data": f"reproc_pacs_{record_id}"}])
+    inline_k.append([
+        {"text": "▶️ Reanudar Loop", "callback_data": "loop_reanudar"},
+        {"text": "⏹️ Detener definitivamente", "callback_data": "loop_detener"}
+    ])
+    markup = {"inline_keyboard": inline_k}
 
     print(f"Enviando alerta de Loop Pausado a {len(usuarios)} usuarios...")
     for chat_id in usuarios:

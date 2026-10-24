@@ -270,7 +270,7 @@ class DesktopFloatingControlWindow(QWidget):
                 # Generar JSON e inicializar UIScriptGeneratorFinal
                 json_path = self.recorder.save(script_name)
                 generator = UIScriptGeneratorFinal(self.recorder.actions, script_name)
-                py_path = generator.generate()
+                py_path = str(generator.generate())
                 
                 self.last_script_path = py_path
                 self.btn_play_test.setEnabled(True)

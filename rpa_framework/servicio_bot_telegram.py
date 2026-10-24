@@ -116,10 +116,11 @@ def mostrar_notificacion_tray(mensaje: str, titulo: str = "🤖 Bot RPA - Atrys"
         except Exception as e:
             print(f"Error mostrando alerta tray: {e}")
 
-def set_execution_state(is_running, workflow_name=""):
+def set_execution_state(is_running, workflow_name="", is_loop=False):
     state = {
         "is_running": is_running,
         "workflow": workflow_name,
+        "is_loop": is_loop,
         "updated_at": time.time()
     }
     try:
@@ -274,7 +275,8 @@ def run_workflow(wf_path, params=None, on_finish=None):
             from core.workflow_executor import WorkflowExecutor
 
         active_executor = WorkflowExecutor(wf)
-        set_execution_state(True, wf.name)
+        is_loop = getattr(active_executor, 'is_loop_workflow', lambda: False)() or any(getattr(n, 'type', '') == 'loop' for n in getattr(wf, 'nodes', [])) or "loop" in getattr(wf, 'name', '').lower()
+        set_execution_state(True, wf.name, is_loop=is_loop)
         
         result = active_executor.execute()
         print(f"✅ Flujo finalizado con estado: {result.get('status') if isinstance(result, dict) else result}")
@@ -1635,7 +1637,45 @@ def telegram_polling_loop():
                             
                         elif callback_data == "cmd_detener":
                             responder_callback(cb_id)
-                            detener_ejecucion_actual(chat_id=chat_id, source="Telegram Botón")
+                            is_loop = False
+                            if active_executor and getattr(active_executor, 'is_loop_workflow', lambda: False)():
+                                is_loop = True
+                            elif "loop" in get_current_running_name().lower():
+                                is_loop = True
+                            
+                            if is_loop and (active_executor or is_any_workflow_running()):
+                                msg_text = "🔁 <b>Flujo en Bucle (Loop) Detectado</b>\n\n¿Deseas detenerlo a la siguiente ejecución (terminando el caso actual) o en este mismo instante?"
+                                enviar_mensaje(
+                                    chat_id,
+                                    msg_text,
+                                    reply_markup={"inline_keyboard": [
+                                        [{"text": "⏳ A la siguiente ejecución", "callback_data": "cmd_detener_next"}],
+                                        [{"text": "🛑 En este mismo instante", "callback_data": "cmd_detener_now"}]
+                                    ]}
+                                )
+                            else:
+                                detener_ejecucion_actual(chat_id=chat_id, source="Telegram Botón")
+
+                        elif callback_data == "cmd_detener_next":
+                            responder_callback(cb_id, text="Detención programada tras caso actual...")
+                            if active_executor:
+                                try:
+                                    active_executor.stop_after_current_case()
+                                except Exception:
+                                    active_executor.stop_after_iteration = True
+                            stop_after_file = CONFIG_DIR / "stop_after_case.txt"
+                            try:
+                                stop_after_file.parent.mkdir(parents=True, exist_ok=True)
+                                with open(stop_after_file, "w", encoding="utf-8") as f:
+                                    f.write("stop_after_case")
+                            except Exception:
+                                pass
+                            editar_mensaje(chat_id, msg_id, "⏳ <b>Detención programada:</b> El bucle finalizará de forma limpia cuando concluya el caso en curso.")
+
+                        elif callback_data == "cmd_detener_now":
+                            responder_callback(cb_id, text="Deteniendo proceso de inmediato...")
+                            detener_ejecucion_actual(chat_id=chat_id, source="Telegram Inmediato")
+                            editar_mensaje(chat_id, msg_id, "🛑 <b>Proceso detenido inmediatamente por el usuario.</b>")
 
                         elif callback_data == "loop_reanudar":
                             responder_callback(cb_id, text="Reanudando loop...")
@@ -2006,7 +2046,24 @@ def telegram_polling_loop():
                         mostrar_menu_revalidar(chat_id)
                             
                     elif comando == "/detener":
-                        detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
+                        is_loop = False
+                        if active_executor and getattr(active_executor, 'is_loop_workflow', lambda: False)():
+                            is_loop = True
+                        elif "loop" in get_current_running_name().lower():
+                            is_loop = True
+                        
+                        if is_loop and (active_executor or is_any_workflow_running()):
+                            msg_text = "🔁 <b>Flujo en Bucle (Loop) Detectado</b>\n\n¿Deseas detenerlo a la siguiente ejecución (terminando el caso actual) o en este mismo instante?"
+                            enviar_mensaje(
+                                chat_id,
+                                msg_text,
+                                reply_markup={"inline_keyboard": [
+                                    [{"text": "⏳ A la siguiente ejecución", "callback_data": "cmd_detener_next"}],
+                                    [{"text": "🛑 En este mismo instante", "callback_data": "cmd_detener_now"}]
+                                ]}
+                            )
+                        else:
+                            detener_ejecucion_actual(chat_id=chat_id, source="Telegram Comando")
 
                     elif comando in ["/reanudar", "/reanudar_loop", "/continuar"]:
                         if active_executor and getattr(active_executor, "is_paused", False):

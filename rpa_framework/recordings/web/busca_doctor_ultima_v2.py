@@ -124,13 +124,63 @@ class BuscadorDoctorSeleniumV2:
             logger.error(f"Error click_vinculo_doctor: {e}")
             return False
 
+    @staticmethod
+    def calcular_similitud_medico(nombre_web: str, nombre_bd: str) -> float:
+        """
+        Calcula similitud inteligente entre el nombre extraído de la web/PDF y el nombre en la BD.
+        Utiliza:
+        1. Normalización de tildes y eliminación de títulos honoríficos (Dr., Dra., MD, Radiólogo).
+        2. Token Set Ratio: valida si los tokens de la BD forman parte del nombre web o viceversa.
+        3. Token Sort Ratio: tolera orden invertido de nombres/apellidos.
+        4. SequenceMatcher: evalúa proximidad secuencial de apoyo.
+        """
+        import unicodedata
+        try:
+            from rapidfuzz import fuzz
+        except ImportError:
+            try:
+                from fuzzywuzzy import fuzz
+            except ImportError:
+                fuzz = None
+
+        def _norm(t):
+            if not t:
+                return ""
+            t = t.lower()
+            t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+            t = re.sub(r'\b(?:dr|dra|md|radiologo|medico)\b\.?', '', t)
+            t = re.sub(r'[^a-z0-9\s]', ' ', t)
+            return re.sub(r'\s+', ' ', t).strip()
+
+        w = _norm(nombre_web)
+        b = _norm(nombre_bd)
+        if not w or not b:
+            return 0.0
+
+        if w == b:
+            return 1.0
+
+        seq = SequenceMatcher(None, w, b).ratio()
+
+        if fuzz:
+            t_set = fuzz.token_set_ratio(w, b) / 100.0
+            t_sort = fuzz.token_sort_ratio(w, b) / 100.0
+            score = (t_set * 0.60) + (t_sort * 0.25) + (seq * 0.15)
+            return score
+        else:
+            tokens_w = set(w.split())
+            tokens_b = set(b.split())
+            overlap = len(tokens_w.intersection(tokens_b))
+            token_ratio = overlap / max(len(tokens_b), 1)
+            return (token_ratio * 0.70) + (seq * 0.30)
+
     def buscar_medico_en_bd(self, nombre_medico_web: str):
         if not HAS_MYSQL:
-            return None
+            return None, 0.0
         try:
             conn = self._get_conn()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT nombre, user, pass FROM medicos WHERE activo = 1")
+            cursor.execute("SELECT nombre_completo, usuario_integra, clave_integra FROM medicos WHERE estado = 'Activo' OR estado IS NULL")
             medicos = cursor.fetchall()
             conn.close()
 
@@ -138,7 +188,10 @@ class BuscadorDoctorSeleniumV2:
             mejor_score = 0.0
 
             for m in medicos:
-                score = SequenceMatcher(None, nombre_medico_web.lower(), m['nombre'].lower()).ratio()
+                nom = m.get('nombre_completo', '')
+                if not nom:
+                    continue
+                score = self.calcular_similitud_medico(nombre_medico_web, nom)
                 if score > mejor_score:
                     mejor_score = score
                     mejor_match = m
@@ -231,9 +284,9 @@ class BuscadorDoctorSeleniumV2:
         logger.info(f"Médico Web detectado: {nombre_medico}")
         medico_bd, score = self.buscar_medico_en_bd(nombre_medico)
         
-        user = medico_bd['user'] if medico_bd else "desconocido"
-        clave = medico_bd['pass'] if medico_bd else "desconocido"
-        logger.info(f"Coincidencia BD: {medico_bd['nombre'] if medico_bd else 'N/A'} ({score*100:.1f}%) -> Usuario: {user}")
+        user = medico_bd['usuario_integra'] if medico_bd else "desconocido"
+        clave = medico_bd['clave_integra'] if medico_bd else "desconocido"
+        logger.info(f"Coincidencia BD: {medico_bd['nombre_completo'] if medico_bd else 'N/A'} ({score*100:.1f}%) -> Usuario: {user}")
 
         self.actualizar_registro_acciones(nombre_medico, user, clave)
         self.click_vinculo_doctor()

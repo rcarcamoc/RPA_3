@@ -111,12 +111,12 @@ def db_update(estado, observacion=None):
             # Inicio del script: actualiza el nodo actual y el timestamp
             query = "UPDATE registro_acciones SET `update` = NOW(), ultimo_nodo = %s, estado = %s WHERE estado = 'En Proceso'"
             cursor.execute(query, (NODO_ACTUAL, estado))
-        elif estado == 'Error':
-            # Cierre por error: registra el estado y la observación corta
-            query = "UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE estado = 'En Proceso'"
-            # Limitamos la observación a un largo razonable
+        elif estado in ['sin registros para trabajar', 'Error']:
+            # No marcar VPN como Error; tratarlo como sin datos / sin registros para trabajar
+            nuevo_estado = 'sin registros para trabajar'
+            query = "UPDATE ris.registro_acciones SET estado = %s, observacion = %s, `update` = NOW() WHERE estado = 'En Proceso'"
             msg_corto = (observacion[:250] + '...') if observacion and len(observacion) > 250 else observacion
-            cursor.execute(query, (msg_corto,))
+            cursor.execute(query, (nuevo_estado, msg_corto))
             
         conn.commit()
         cursor.close()
@@ -161,9 +161,11 @@ def abrir_globalprotect():
     else:
         print("No se encontró PanGPA.exe")
 
-def mostrar_popup_vpn():
+def mostrar_popup_vpn(timeout_segundos=60):
     """
     Muestra una ventana llamativa que pide al usuario conectar la VPN.
+    Incluye temporizador para cerrar limpiamente como 'sin registros para trabajar'
+    si no hay interacción en ejecuciones automáticas/desatendidas.
     """
     enviar_alerta_todos("🚨 <b>ASISTENCIA REQUERIDA</b> 🚨\nLa VPN se encuentra desconectada. El proceso está pausado esperando conexión.")
     
@@ -174,7 +176,7 @@ def mostrar_popup_vpn():
     root.attributes("-topmost", True)
     
     # Dimensiones y posición central
-    w, h = 500, 450
+    w, h = 500, 480
     ws = root.winfo_screenwidth()
     hs = root.winfo_screenheight()
     x = (ws/2) - (w/2)
@@ -189,47 +191,70 @@ def mostrar_popup_vpn():
     btn_font = tkfont.Font(family="Segoe UI", size=11, weight="bold")
 
     # Contenedor principal
-    frame = tk.Frame(root, bg="#1a1a1a", padx=30, pady=30)
+    frame = tk.Frame(root, bg="#1a1a1a", padx=30, pady=25)
     frame.pack(expand=True, fill="both")
 
     # Ícono/Título
-    lbl_icon = tk.Label(frame, text="🔒", font=("Segoe UI", 48), bg="#1a1a1a", fg="#e74c3c")
+    lbl_icon = tk.Label(frame, text="🔒", font=("Segoe UI", 44), bg="#1a1a1a", fg="#e74c3c")
     lbl_icon.pack()
 
     lbl_titulo = tk.Label(frame, text="VPN DESCONECTADA", font=title_font, bg="#1a1a1a", fg="#ffffff")
-    lbl_titulo.pack(pady=(0, 10))
+    lbl_titulo.pack(pady=(0, 8))
 
     lbl_msg = tk.Label(frame, 
                        text="El sistema está esperando a que inicie la VPN.\nPor favor, conéctese para continuar con el proceso.", 
                        font=msg_font, bg="#1a1a1a", fg="#bdc3c7", justify="center")
-    lbl_msg.pack(pady=(0, 25))
+    lbl_msg.pack(pady=(0, 15))
+
+    lbl_timer = tk.Label(frame, text=f"Auto-espera limpia en: {timeout_segundos}s", font=("Segoe UI", 10, "italic"), bg="#1a1a1a", fg="#f39c12")
+    lbl_timer.pack(pady=(0, 15))
 
     # Botones con estilo
     btn_gp = tk.Button(frame, text="🚀 RE-INICIAR GLOBALPROTECT", command=abrir_globalprotect,
                       font=btn_font, bg="#3498db", fg="white", activebackground="#2980b9",
-                      relief="flat", cursor="hand2", width=25, pady=8)
-    btn_gp.pack(pady=5)
+                      relief="flat", cursor="hand2", width=25, pady=7)
+    btn_gp.pack(pady=4)
 
     def check_done():
-        root.destroy()
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
     btn_ok = tk.Button(frame, text="✅ YA ESTOY CONECTADO", command=check_done,
                       font=btn_font, bg="#27ae60", fg="white", activebackground="#219150",
-                      relief="flat", cursor="hand2", width=25, pady=8)
-    btn_ok.pack(pady=5)
+                      relief="flat", cursor="hand2", width=25, pady=7)
+    btn_ok.pack(pady=4)
 
-    def cancelar():
-        msg = "El usuario canceló la espera de VPN."
-        print(msg)
-        # Gestionar error de negocio deteniendo el workflow
-        root.destroy()
-        handle_error_and_exit("verifica_vpn.py", msg)
+    def cancelar(por_timeout=False):
+        msg = "Tiempo de espera agotado sin conexión VPN." if por_timeout else "El usuario canceló la espera de VPN."
+        print(f"[VPN] {msg} -> Tratando como sin datos / sin registros para trabajar.")
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        db_update('sin registros para trabajar', msg)
+        sys.exit(2)
 
-    btn_cancel = tk.Button(frame, text="❌ CANCELAR PROCESO", command=cancelar,
+    btn_cancel = tk.Button(frame, text="❌ CANCELAR PROCESO", command=lambda: cancelar(False),
                           font=btn_font, bg="#c0392b", fg="white", activebackground="#a93226",
-                          relief="flat", cursor="hand2", width=25, pady=8)
-    btn_cancel.pack(pady=5)
+                          relief="flat", cursor="hand2", width=25, pady=7)
+    btn_cancel.pack(pady=4)
 
+    # Cuenta regresiva para desatendido
+    segundos_restantes = [timeout_segundos]
+    def actualizar_cuenta():
+        segundos_restantes[0] -= 1
+        if segundos_restantes[0] <= 0:
+            cancelar(por_timeout=True)
+        else:
+            try:
+                lbl_timer.config(text=f"Auto-espera limpia en: {segundos_restantes[0]}s")
+                root.after(1000, actualizar_cuenta)
+            except Exception:
+                pass
+
+    root.after(1000, actualizar_cuenta)
     root.mainloop()
 
 def main():
@@ -238,22 +263,36 @@ def main():
         db_update('En Proceso')
         
         # 2. Lógica del script: Verificar VPN
-        # Usamos un loop para esperar hasta que la VPN esté activa
-        while not vpn_conectada_palo_alto():
-            # Siempre intentamos abrir el programa automáticamente si no hay conexión
+        max_intentos = 2
+        for intento in range(max_intentos):
+            if vpn_conectada_palo_alto():
+                break
+            print(f"Intento {intento+1}/{max_intentos} de conexión VPN...")
             abrir_globalprotect()
-            # Intentamos automatizar la conexión con los clics de ksy.py
             ejecutar_clics_vpn()
+            if vpn_conectada_palo_alto():
+                break
             # Si después de los clics sigue desconectada, mostramos el popup para ayuda manual
-            if not vpn_conectada_palo_alto():
-                mostrar_popup_vpn()
+            mostrar_popup_vpn(timeout_segundos=60)
+
+        # Si aún no está conectada, salir limpiamente con código 2 sin marcar error
+        if not vpn_conectada_palo_alto():
+            msg = "VPN no conectada. Finalizando ciclo limpiamente (sin registros para trabajar)."
+            print(f"[VPN] {msg}")
+            db_update('sin registros para trabajar', msg)
+            sys.exit(2)
         
         print("VPN OK. Procediendo...")
+        sys.exit(0)
         
+    except SystemExit as se:
+        sys.exit(se.code)
     except Exception as e:
-        # Flujo de Cierre para errores:
-        desc_falla = str(e)
-        handle_error_and_exit("verifica_vpn.py", desc_falla)
+        # Los errores de verificación de VPN se tratan como sin datos (código 2)
+        desc_falla = f"Verificación VPN: {str(e)}"
+        print(f"[VPN] {desc_falla} -> Tratando como sin datos / sin registros para trabajar.")
+        db_update('sin registros para trabajar', desc_falla)
+        sys.exit(2)
 
 if __name__ == "__main__":
     main()

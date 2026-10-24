@@ -161,8 +161,8 @@ def _marcar_error(script_name, error_description, record_id=None):
         logger.error(f"Error actualizando estado en BD: {e}")
 
 
-def _formatear_mensaje(script_name, error_description, record_data):
-    """Genera el texto del mensaje Telegram con formato HTML incluyendo resolución de pantalla."""
+def _formatear_mensaje(script_name, error_description, record_data, ocr_info=None):
+    """Genera el texto del mensaje Telegram con formato HTML incluyendo resolución de pantalla y comparativa OCR si aplica."""
     rec_id = record_data.get("id") if (record_data and isinstance(record_data, dict)) else None
     id_header = f" (Fila #{rec_id})" if rec_id else ""
     lineas = [
@@ -172,6 +172,35 @@ def _formatear_mensaje(script_name, error_description, record_data):
         f"{error_description}",
         "",
     ]
+
+    # Si se pasa información detallada de OCR (Tesseract vs PaddleOCR)
+    if ocr_info:
+        lineas.append("🔎 <b>Comparativa Detección OCR:</b>")
+        if isinstance(ocr_info, dict):
+            tess = ocr_info.get("tesseract") or ocr_info.get("Tesseract")
+            padd = ocr_info.get("paddle") or ocr_info.get("PaddleOCR") or ocr_info.get("Paddle")
+            if tess:
+                lineas.append("<b>🔍 Tesseract detectó:</b>")
+                if isinstance(tess, list):
+                    for t in tess[:5]:
+                        t_str = str(t)[:120].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        lineas.append(f"  • <code>{t_str}</code>")
+                else:
+                    t_str = str(tess)[:250].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    lineas.append(f"  <code>{t_str}</code>")
+                lineas.append("")
+            if padd:
+                lineas.append("<b>⚡ PaddleOCR detectó:</b>")
+                if isinstance(padd, list):
+                    for p in padd[:5]:
+                        p_str = str(p)[:120].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        lineas.append(f"  • <code>{p_str}</code>")
+                else:
+                    p_str = str(padd)[:250].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    lineas.append(f"  <code>{p_str}</code>")
+                lineas.append("")
+        elif isinstance(ocr_info, str):
+            lineas.append(f"{ocr_info}\n")
 
     # Obtener resolución actual como fallback si no está en BD
     resolucion_actual = None
@@ -293,14 +322,14 @@ def notificar_aprobacion_pendiente(script_name: str, descripcion: str, record_id
     return True
 
 
-def handle_error_and_exit(script_name: str, error_description: str, record_id: int = None):
+def handle_error_and_exit(script_name: str, error_description: str, record_id: int = None, ocr_info: dict = None):
     """
     Punto de entrada único para errores críticos en el workflow PACS.
 
     Pasos:
       1. Toma screenshot completo
       2. Consulta datos del registro en BD (incluyendo ID de fila)
-      3. Envía mensaje de texto a Telegram (descripción + datos del registro)
+      3. Envía mensaje de texto a Telegram (descripción + comparativa OCR si existe + datos del registro)
       4. Envía el screenshot a Telegram
       5. Marca el registro como 'Error' en BD
       6. sys.exit(1)
@@ -316,8 +345,8 @@ def handle_error_and_exit(script_name: str, error_description: str, record_id: i
     print(f"\n[ERROR_HANDLER] ERROR CRÍTICO en '{script_name}'{id_log}: {error_description}", flush=True)
     logger.error(f"❌ [{script_name}]{id_log} {error_description}")
 
-    # 3. Mensaje de texto
-    mensaje = _formatear_mensaje(script_name, error_description, record_data)
+    # 3. Mensaje de texto (incluyendo comparativa OCR)
+    mensaje = _formatear_mensaje(script_name, error_description, record_data, ocr_info=ocr_info)
 
     # 4. Enviar a Telegram
     enviar_alerta_todos, enviar_foto_todos = _get_telegram()

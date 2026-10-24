@@ -127,12 +127,16 @@ class AuditorClinico:
         t_dia, t_mes, t_anio = parts[0].zfill(2), parts[1].zfill(2), parts[2]
         t_anio_short = t_anio[-2:] if len(t_anio) == 4 else t_anio
 
-        # 1. Búsqueda exacta literal
+        # 1. Búsqueda exacta literal (incluye DD/MM/YYYY y formato PACS MM/DD/YYYY)
         exact_patterns = [
             f"{t_dia}-{t_mes}-{t_anio}",
             f"{t_dia}/{t_mes}/{t_anio}",
             f"{t_dia}-{t_mes}-{t_anio_short}",
             f"{t_dia}/{t_mes}/{t_anio_short}",
+            f"{t_mes}/{t_dia}/{t_anio}",
+            f"{t_mes}-{t_dia}-{t_anio}",
+            f"{t_mes}/{t_dia}/{t_anio_short}",
+            f"{t_mes}-{t_dia}-{t_anio_short}",
         ]
         for p in exact_patterns:
             if p in ocr_text:
@@ -152,7 +156,7 @@ class AuditorClinico:
                 if a_str != t_anio_short:
                     continue
 
-                # Caso 1: Mes exacto
+                # Caso 1: Mes exacto (Formato DD/MM/YYYY)
                 if m_str == t_mes:
                     # Si día coincide exacto
                     if d_str == t_dia:
@@ -169,6 +173,11 @@ class AuditorClinico:
                 # SEGURIDAD CLÍNICA: Solo se tolera si el mes leído es inválido en calendario
                 # (ej. 99, 89, 00) y difiere en 1 dígito del mes objetivo. Si es un mes válido (1 a 12),
                 # se rechaza para no confundir meses clínicos reales distintos (ej. Junio vs Septiembre).
+                # Caso 2: Formato PACS MM/DD/YYYY (ej. 10/22/2026 para 22 de Octubre)
+                elif (d_str == t_mes and m_str == t_dia) or (m_str == t_dia and sum(1 for c1, c2 in zip(d_str, t_mes) if c1 != c2) <= 1):
+                    return True, f"Fecha coincidente formato PACS (MM/DD/YYYY): {d_str}/{m_str}/{a_str}", 95
+
+                # Caso 3: Tolerancia OCR en el MES solo si DÍA y AÑO son IDÉNTICOS
                 elif d_str == t_dia:
                     if m_str.isdigit() and not (1 <= int(m_str) <= 12):
                         month_diff_chars = sum(1 for c1, c2 in zip(m_str, t_mes) if c1 != c2)
@@ -183,10 +192,16 @@ class AuditorClinico:
         digits_target_short = f"{t_dia}{t_mes}{t_anio_short}"
         row_digits = "".join(filter(str.isdigit, ocr_text))
 
+        digits_target_mmdd = f"{t_mes}{t_dia}{t_anio}"
+        digits_target_mmdd_short = f"{t_mes}{t_dia}{t_anio_short}"
         if digits_target in row_digits:
             return True, f"Secuencia de dígitos de fecha completa encontrada: {digits_target}", 95
         if digits_target_short in row_digits:
             return True, f"Secuencia de dígitos de fecha corta encontrada: {digits_target_short}", 90
+        if digits_target_mmdd in row_digits:
+            return True, f"Secuencia de dígitos PACS (MM/DD) encontrada: {digits_target_mmdd}", 95
+        if digits_target_mmdd_short in row_digits:
+            return True, f"Secuencia de dígitos PACS (MM/DD) corta encontrada: {digits_target_mmdd_short}", 90
 
         return False, f"Fecha objetivo {target_fecha_str} no encontrada en la fila", 0
 
@@ -200,6 +215,17 @@ class AuditorClinico:
             return ""
         texto = texto.lower()
         texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+        texto = re.sub(r'\b(?:kiamograf\w*|hiamograf\w*|kamograf\w*|kmamograf\w*|iamograf\w*|hamograf\w*|mamogratia|marnografia)\b', 'mamografia', texto)
+        texto = re.sub(r'\b(?:kiamari\w*|hiamari\w*|liamari\w*|kamari\w*|iamari\w*|hamari\w*|marnari\w*|inamari\w*)\b', 'mamaria', texto)
+        texto = re.sub(r'\bmamaria\s+infantil\b', 'mamaria', texto)
+        texto = re.sub(r'\bproyecci[oó]n(?:es)?\s+magnificad[ao]s?\b', 'proyecciones complementarias', texto)
+        texto = re.sub(r'\bproyecci[oó]n(?:es)?\s+focalizad[ao]s?\b', 'proyecciones complementarias', texto)
+        texto = re.sub(r'\bcono(?:s)?\s+de\s+compresi[oó]n\b', 'proyecciones complementarias', texto)
+        texto = re.sub(r'\brx[\s\-_]?([a-z]+)\b', r'radiografia \1', texto)
+        texto = re.sub(r'\(?\bf[\s\-_/]*o\b\)?\:?', 'front oblicua', texto)
+        texto = re.sub(r'\b(?:frente|frontal|front)\s*(?:y\s*)?oblicua\b', 'front oblicua', texto)
+        texto = re.sub(r'\b(?:partes\s+blandas\s+(?:de\s+)?)?(?:periauricular|preauricular|retroauricular|parotidea|parotida)\b', 'partes blandas cara', texto)
+        texto = re.sub(r'\bsimple\s+ap\s+decubito\b', 'ap lateral simple', texto)
         texto = re.sub(r'[^a-z0-9\s]', ' ', texto)
         return ' '.join(texto.split())
 
@@ -228,7 +254,11 @@ class AuditorClinico:
         # Caso Bilateral
         if t_has_bilat:
             if not o_has_bilat and not (o_has_der and o_has_izq):
-                return False, "Target es BILATERAL pero candidato es unilateral"
+                es_estudio_mamario = any(w in t_norm or w in o_norm for w in ['mamaria', 'mamario', 'mamografia', 'mama', 'mamas'])
+                if es_estudio_mamario and not (o_has_der or o_has_izq):
+                    pass  # Compatible por convención clínica (bilateral por defecto en mama)
+                else:
+                    return False, "Target es BILATERAL pero candidato es unilateral"
         elif o_has_bilat:
             if (t_has_der or t_has_izq) and not (t_has_der and t_has_izq):
                 return False, "Candidato es BILATERAL pero target es unilateral"
@@ -442,6 +472,8 @@ class AuditorClinico:
             res['cabeza_cuello'].add('senos_cara')
         if bool(words & {'atm', 'temporomandibular'}):
             res['cabeza_cuello'].add('atm')
+        if bool(words & {'cara', 'facial', 'periauricular', 'preauricular', 'retroauricular', 'parotidea', 'parotida', 'parotideo', 'submandibular'}):
+            res['cabeza_cuello'].add('cara')
 
         return res
 
