@@ -36,3 +36,35 @@ rpa_framework/config/llm_verification_log.json
 *.session-journal
 *backup*.py
 scratch/*.json
+
+
+# --- Datos de pacientes y documentos ---
+*.pdf
+*.xlsx
+*.xls
+*.docx
+!documentacion/*.docx
+
+# --- Contenido generado ---
+graphify-out/
+.backup_cleanup/
+scratch/
+rpa_framework/scratch/
+
+# --- Estado de ejecución (cambia en cada corrida) ---
+rpa_framework/config/execution_state.json
+rpa_framework/config/last_workflow_execution.json
+rpa_framework/config/telegram_last_update.json
+rpa_framework/utils/usuarios.json
+
+# --- Entorno GPU ---
+venv_gpu/
+
+# --- Grabaciones y capturas de ejecución ---
+rpa_framework/recordings/error_recordings/
+rpa_framework/log/
+
+# --- Excepciones: archivos que SÍ deben subirse ---
+!rpa_framework/requirements.txt
+!rpa_framework/utils/*.png
+!rpa_framework/recordings/ui/captura/*.png
