@@ -121,6 +121,10 @@ class BusquedaTextOnly:
         # Región ajustada: Comienza en (180, 180) y llega hasta (1900, 1000)
         # Formato: (left, top, width, height)
         self.region = (188, 93, 1720, 900)
+        # Límite inferior (Y, en coordenadas de la región capturada) de la zona de encabezados.
+        # Con region top=93: títulos de columna en Y≈14 y fila de filtros en Y≈32;
+        # la primera fila de datos empieza en Y≈50. Si cambias self.region, revisa este valor.
+        self.HEADER_MAX_Y = 42
         self.ROW_TOLERANCE = 8  # Tolerancia estricta (15px) para no mezclar filas adyacentes y dar un click preciso
         self.CROP_HEIGHT = 22  # Altura de recorte para cubrir fila (px en imagen original)
         self.OFFSET_X = 50
@@ -670,8 +674,9 @@ class BusquedaTextOnly:
         """
         if self._paddle_engine is None:
             self._paddle_engine = self.ocr_engine
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        return self._paddle_engine.extract_text_with_location(img_rgb)
+        # PaddleOCR (worker GPU vía cv2.imwrite y motor local) trabaja en BGR.
+        # Pasarle RGB invertía los canales: las franjas rojas llegaban como azules.
+        return self._paddle_engine.extract_text_with_location(img_bgr)
 
     def get_crop_image(self, full_img, y_center):
         h, w = full_img.shape[:2]
@@ -1053,11 +1058,11 @@ RESPONDE SOLO EN FORMATO JSON:
             row_norm   = self.normalize_text(row_text)
 
             # ── CHECK 0: FILTRO DE ENCABEZADOS Y METADATOS DE TABLA PACS ───────
-            # Los encabezados de columnas de PACS están fijos en Y < 115 px (ej: EXAMEN, Fecha agendada, Estado, Prioridad)
+            # Los encabezados de columnas de PACS están fijos en Y < HEADER_MAX_Y (ej: EXAMEN, Fecha agendada, Estado, Prioridad)
             # Si no se filtran, la palabra "EXAMEN:" genera falso positivo con "examen hecho" (partial_ratio=78%)
             # cuando la tabla está vacía o sin estudios técnicos del paciente.
-            if row['y_center'] < 115:
-                logger.info(f"🚫 Fila descartada por zona de encabezado PACS (Y={int(row['y_center'])} < 115): {row_text[:80]}")
+            if row['y_center'] < self.HEADER_MAX_Y:
+                logger.info(f"🚫 Fila descartada por zona de encabezado PACS (Y={int(row['y_center'])} < {self.HEADER_MAX_Y}): {row_text[:80]}")
                 continue
 
             PATRONES_ENCABEZADO = [
