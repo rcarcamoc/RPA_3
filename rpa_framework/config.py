@@ -43,6 +43,8 @@ OCR_CONFIG = {
         'paddleocr': {
             'use_gpu': True,
             'enable_mkldnn': True,
+            'det_limit_side_len': 1440,
+            'det_limit_type': 'max',
         }
     },
     

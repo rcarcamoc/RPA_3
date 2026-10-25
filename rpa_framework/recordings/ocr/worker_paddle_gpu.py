@@ -37,6 +37,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("PaddleGPUWorker")
 
+DET_LIMIT_SIDE_LEN = int(os.environ.get("PADDLE_DET_LIMIT_SIDE_LEN", 1440))
+DET_LIMIT_TYPE = os.environ.get("PADDLE_DET_LIMIT_TYPE", "max")
+
 _OCR_INSTANCE = None
 
 def get_ocr_engine():
@@ -53,7 +56,9 @@ def get_ocr_engine():
                 use_angle_cls=False,
                 lang='es',
                 use_gpu=has_cuda,
-                show_log=False
+                show_log=False,
+                det_limit_side_len=DET_LIMIT_SIDE_LEN,
+                det_limit_type=DET_LIMIT_TYPE
             )
             logger.info(f"PaddleOCR inicializado exitosamente (use_gpu={has_cuda}).")
         except Exception as e:
@@ -63,7 +68,9 @@ def get_ocr_engine():
                     use_angle_cls=False,
                     lang='es',
                     use_gpu=False,
-                    show_log=False
+                    show_log=False,
+                    det_limit_side_len=DET_LIMIT_SIDE_LEN,
+                    det_limit_type=DET_LIMIT_TYPE
                 )
                 logger.info("PaddleOCR inicializado exitosamente en modo CPU.")
             else:
@@ -87,7 +94,7 @@ def process_image(img_path: str, confidence_threshold: float = 0.5):
     except Exception as e:
         logger.warning(f"Error en inferencia ({e}). Reintentando con motor de respaldo CPU...")
         from paddleocr import PaddleOCR
-        cpu_ocr = PaddleOCR(use_angle_cls=False, lang='es', use_gpu=False, show_log=False)
+        cpu_ocr = PaddleOCR(use_angle_cls=False, lang='es', use_gpu=False, show_log=False, det_limit_side_len=DET_LIMIT_SIDE_LEN, det_limit_type=DET_LIMIT_TYPE)
         t0 = time.perf_counter()
         res = cpu_ocr.ocr(img_path, cls=False)
         elapsed = time.perf_counter() - t0

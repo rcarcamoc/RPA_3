@@ -93,6 +93,10 @@ class BusquedaTextOnly(
         self._paddle_engine = None
         self._tesseract_engine = None
         self.region = (188, 93, 1720, 900)
+        # Límite inferior (Y, en coordenadas de la región capturada) de la zona de encabezados.
+        # Con region top=93: títulos de columna en Y≈14 y fila de filtros en Y≈32;
+        # la primera fila de datos empieza en Y≈50.
+        self.HEADER_MAX_Y = 42
         self.ROW_TOLERANCE = 8
         self.CROP_HEIGHT = 22
         self.OFFSET_X = 50

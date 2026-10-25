@@ -77,11 +77,14 @@ class OCREngineBackendsMixin:
         try:
             from paddleocr import PaddleOCR
             lang = 'es' if self.language in ['es', 'spa'] else self.language
+            det_limit = getattr(self, 'det_limit_side_len', 1440)
             self.paddle_ocr = PaddleOCR(
                 lang=lang,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
-                use_textline_orientation=False
+                use_textline_orientation=False,
+                det_limit_side_len=det_limit,
+                det_limit_type='max'
             )
             logger.info("PaddleOCR (local) inicializado correctamente")
         except ImportError:

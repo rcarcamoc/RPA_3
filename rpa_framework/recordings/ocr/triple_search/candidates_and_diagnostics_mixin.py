@@ -37,8 +37,9 @@ class TripleSearchCandidatesMixin:
             row_norm   = self.normalize_text(row_text)
 
             # ── CHECK 0: FILTRO DE ENCABEZADOS Y METADATOS DE TABLA PACS ───────
-            if row['y_center'] < 115:
-                logger.info(f"🚫 Fila descartada por zona de encabezado PACS (Y={int(row['y_center'])} < 115): {row_text[:80]}")
+            header_max_y = getattr(self, 'HEADER_MAX_Y', 42)
+            if row['y_center'] < header_max_y:
+                logger.info(f"🚫 Fila descartada por zona de encabezado PACS (Y={int(row['y_center'])} < {header_max_y}): {row_text[:80]}")
                 continue
 
             PATRONES_ENCABEZADO = [
@@ -212,8 +213,9 @@ class TripleSearchCandidatesMixin:
             'aprobado', 'aprobada', 'preliminar', 'informado', 'informada'
         ]
 
+        header_max_y = getattr(self, 'HEADER_MAX_Y', 42)
         for r in combined_rows:
-            if r.get('y_center', 200) < 115:
+            if r.get('y_center', 200) < header_max_y:
                 continue
             r_text = r.get('full_text', '')
             r_norm = self.normalize_text(r_text)

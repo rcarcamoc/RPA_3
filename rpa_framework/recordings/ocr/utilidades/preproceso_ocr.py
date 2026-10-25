@@ -227,15 +227,16 @@ def normalize_colored_backgrounds(img_rgb: np.ndarray) -> np.ndarray:
 
     result = img_rgb.copy()
 
-    # Usamos el canal V pero lo oscurecemos suavemente restándole 60.
-    # El fondo azul oscuro tiene V ≈ 80-150. Al restar 60, queda en 20-90.
-    # El texto blanco tiene V ≈ 200-255. Al restar 60, queda en 140-195.
-    # Luego, en preprocess_high_fidelity, THRESH_TOZERO con floor=100 eliminará el fondo (<100 -> 0),
-    # dejando solo el texto sobre fondo negro, manteniendo los bordes suaves del anti-aliasing.
-    # Finalmente, el bitwise_not invertirá esto a texto negro sobre fondo blanco.
-    v_shifted = cv2.subtract(v, 60)
-    v_3channel = cv2.merge([v_shifted, v_shifted, v_shifted])
-    result[colored_mask] = v_3channel[colored_mask]
+    # Usamos el canal MÍNIMO min(R,G,B) en vez del brillo V.
+    # Un fondo saturado tiene al menos un canal bajo (rojo de fila "Examen Hecho"
+    # ≈ RGB(211,72,79) → 72; azul oscuro ≈ RGB(30,32,55) → 30), mientras que el
+    # texto blanco tiene los tres canales altos (→ ≈255). Así el fondo cae bajo el
+    # threshold_floor=100 y el texto queda nítido, sea cual sea el color de la franja.
+    # (El método anterior, V-60, dejaba el rojo en ≈150 y Otsu convertía la fila
+    # roja completa en un bloque negro ilegible.)
+    min_channel = np.min(img_rgb, axis=2)
+    min_3channel = cv2.merge([min_channel, min_channel, min_channel])
+    result[colored_mask] = min_3channel[colored_mask]
 
     return result
 

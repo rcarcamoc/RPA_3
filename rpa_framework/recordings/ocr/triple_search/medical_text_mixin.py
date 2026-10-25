@@ -311,8 +311,9 @@ class TripleSearchMedicalTextMixin:
         """
         if self._paddle_engine is None:
             self._paddle_engine = self.ocr_engine
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        return self._paddle_engine.extract_text_with_location(img_rgb)
+        # PaddleOCR (worker GPU vía cv2.imwrite y motor local) trabaja en BGR.
+        # Pasarle RGB invertía los canales: las franjas rojas llegaban como azules.
+        return self._paddle_engine.extract_text_with_location(img_bgr)
 
     def get_crop_image(self, full_img, y_center):
         h, w = full_img.shape[:2]
