@@ -65,6 +65,7 @@ rpa_framework/recordings/error_recordings/
 rpa_framework/log/
 
 # --- Excepciones: archivos que SÍ deben subirse ---
+!requirements.txt
 !rpa_framework/requirements.txt
 !rpa_framework/utils/*.png
 !rpa_framework/recordings/ui/captura/*.png
