@@ -35,3 +35,4 @@ rpa_framework/config/llm_verification_log.json
 *.session
 *.session-journal
 *backup*.py
+scratch/*.json

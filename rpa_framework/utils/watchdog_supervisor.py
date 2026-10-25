@@ -53,6 +53,9 @@ TIMEOUT_SECONDS = 720  # 12 minutos
 CHECK_INTERVAL_SECONDS = 30  # Revisar cada 30 segundos
 MAX_REINTENTOS_PACS = 2  # Reintentos automáticos para fase PACS
 
+# Bandera global para habilitar o deshabilitar el Watchdog
+WATCHDOG_ENABLED = False
+
 _watchdog_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _is_recovering = False
@@ -68,7 +71,7 @@ _get_loop_wf_callback: Optional[Callable[[], str]] = None
 
 def is_watchdog_recovering() -> bool:
     """Retorna True si el Watchdog está en proceso activo de auto-recuperación."""
-    return _is_recovering
+    return _is_recovering if WATCHDOG_ENABLED else False
 
 
 def set_watchdog_callbacks(
@@ -426,6 +429,9 @@ def _ejecutar_recuperacion(rec: Dict[str, Any]):
 
 def _watchdog_loop():
     """Bucle principal de supervisión cada CHECK_INTERVAL_SECONDS."""
+    if not WATCHDOG_ENABLED:
+        logger.info("🛡️ [Watchdog] Supervisor desactivado (WATCHDOG_ENABLED=False).")
+        return
     global _is_recovering
     logger.info("🛡️ [Watchdog] Supervisor de casos congelados iniciado (Umbral: 12 minutos).")
 
@@ -521,6 +527,9 @@ def start_watchdog_supervisor(
     get_loop_wf_func: Optional[Callable[[], str]] = None
 ):
     """Inicia el hilo supervisor del Watchdog en segundo plano."""
+    if not WATCHDOG_ENABLED:
+        logger.info("🛡️ [Watchdog] Supervisor desactivado (WATCHDOG_ENABLED=False).")
+        return
     global _watchdog_thread
     set_watchdog_callbacks(start_wf_func, stop_wf_func, is_running_func, get_loop_params_func, get_loop_wf_func)
     

@@ -1,0 +1,593 @@
+# -*- coding: utf-8 -*-
+"""
+auto_verification_engine.py
+===========================
+Motor de autoverificación diaria, clasificación por agente auditor en BD y
+autoreemplazo de modelos LLM. Extraído de utils/llm_auto_manager.py.
+"""
+
+import os
+import sys
+import re
+import time
+import requests
+from datetime import datetime, timedelta
+from typing import Tuple
+
+from .auto_config_store import (
+    UTILS_DIR,
+    ROOT_DIR,
+    CONFIG_FILE,
+    TIMESTAMP_FILE,
+    load_auto_config,
+    add_verification_log,
+    should_run_auto_verification,
+)
+
+
+def registrar_en_catalogo_bd(
+    modelo: str, 
+    proveedor: str, 
+    tamano: str, 
+    apto_ocr: int, 
+    apto_patologia: int, 
+    clasificado_por_agente: int, 
+    agente: str, 
+    justificacion: str, 
+    tiempo_ms: int = 0
+):
+    """Inserta o actualiza un modelo en la tabla ris.catalogo_modelos_llm."""
+    try:
+        import mysql.connector
+        conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+        cur = conn.cursor()
+        sql = """
+        INSERT INTO ris.catalogo_modelos_llm 
+        (modelo, proveedor, tamano_estimado, apto_ocr, apto_patologia, clasificado_por_agente, agente_evaluador, justificacion_agente, tiempo_promedio_ms, activo)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+        ON DUPLICATE KEY UPDATE 
+            proveedor = VALUES(proveedor),
+            tamano_estimado = VALUES(tamano_estimado),
+            apto_ocr = VALUES(apto_ocr),
+            apto_patologia = VALUES(apto_patologia),
+            clasificado_por_agente = VALUES(clasificado_por_agente),
+            agente_evaluador = VALUES(agente_evaluador),
+            justificacion_agente = VALUES(justificacion_agente),
+            tiempo_promedio_ms = VALUES(tiempo_promedio_ms),
+            activo = 1;
+        """
+        cur.execute(sql, (modelo, proveedor, tamano, apto_ocr, apto_patologia, clasificado_por_agente, agente, justificacion, tiempo_ms))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[llm_auto_manager] Error registrando en catalogo_modelos_llm: {e}")
+
+
+def _agente_clasificar_candidato(cand: str, ocr_ok: bool, ocr_resp: str, clinica_resp: str, prov: str, elapsed_ms: int) -> Tuple[bool, bool, str]:
+    """
+    Agente de IA Evaluador / Auditor institucional:
+    Analiza el modelo, su tamaño y sus respuestas de prueba para dictaminar su aptitud.
+    Retorna (apto_ocr, apto_patologia, justificacion).
+    """
+    tamano = "Desconocido"
+    match_b = re.search(r'(\d+)b', cand.lower())
+    num_b = int(match_b.group(1)) if match_b else None
+    if num_b:
+        tamano = f"{num_b}B"
+    elif "mini" in cand.lower() or "nano" in cand.lower():
+        tamano = "Mini/Nano"
+    elif "super" in cand.lower() or "ultra" in cand.lower() or "large" in cand.lower():
+        tamano = "Large"
+
+    apto_ocr = 1 if ocr_ok else 0
+
+    alucino_tobillo = False
+    cnt_l = (clinica_resp or "").lower()
+    if "compresion medular" in cnt_l or "compresión medular" in cnt_l or "ave agudo" in cnt_l or "apendicitis" in cnt_l or "tep" in cnt_l:
+        alucino_tobillo = True
+
+    if not ocr_ok:
+        apto_patologia = 0
+        justificacion = "Falla prueba básica de formato/sintaxis. Inapto para cualquier tarea."
+    elif alucino_tobillo:
+        apto_patologia = 0
+        justificacion = "ALUCINACIÓN CRÍTICA DETECTADA: Asoció examen de tobillo con patología incompatible. Restringido exclusivamente a OCR."
+    elif num_b is not None and num_b < 30:
+        apto_patologia = 0
+        justificacion = f"Modelo liviano ({tamano} < 30B). Alta velocidad ({elapsed_ms}ms) para matching OCR en pantalla. Restringido para patología clínica por principio de seguridad."
+    elif "mini" in cand.lower() or "nano" in cand.lower() or "lightning" in cand.lower():
+        apto_patologia = 0
+        justificacion = f"Modelo compacto ({tamano}). Optimizado para OCR rápido. No recomendado para juicio patológico."
+    else:
+        apto_patologia = 1
+        justificacion = f"Aprobado por Agente Auditor: Modelo de alta capacidad ({tamano}) que demostró coherencia anatómica y superó el control de alucinación sin falsos positivos."
+
+    registrar_en_catalogo_bd(
+        modelo=cand,
+        proveedor=prov,
+        tamano=tamano,
+        apto_ocr=apto_ocr,
+        apto_patologia=apto_patologia,
+        clasificado_por_agente=1,
+        agente="meta/llama-3.2-90b (Auditor)",
+        justificacion=justificacion,
+        tiempo_ms=elapsed_ms
+    )
+
+    return bool(apto_ocr), bool(apto_patologia), justificacion
+
+
+def check_and_refresh_llm_cache(max_age_hours: float = 6.0, log_callback=None) -> dict:
+    """
+    Verifica cuándo fue la última validación de los modelos LLM.
+    Si transcurrió más de `max_age_hours` (por defecto 6 horas) o no hay registro previo,
+    ejecuta la re-validación completa y auto-reemplazo de modelos de forma síncrona.
+    Retorna un diccionario con el estado: {"status": "Vigente" | "Éxito" | "Error", ...}.
+    """
+    def _log(msg):
+        try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        except Exception:
+            try:
+                clean = msg.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {clean}", flush=True)
+            except Exception:
+                pass
+        if log_callback:
+            try:
+                log_callback(msg)
+            except Exception:
+                pass
+
+    last_run = None
+
+    # 1. Intentar leer desde TIMESTAMP_FILE
+    if TIMESTAMP_FILE.exists():
+        try:
+            with open(TIMESTAMP_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    if "T" in content:
+                        last_run = datetime.fromisoformat(content)
+                    else:
+                        last_run = datetime.strptime(content, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+    # 2. Si no se pudo obtener, consultar auto_config
+    if last_run is None:
+        cfg = load_auto_config()
+        last_ts_str = cfg.get("last_run_timestamp", "")
+        if last_ts_str:
+            try:
+                if "T" in last_ts_str:
+                    last_run = datetime.fromisoformat(last_ts_str)
+                else:
+                    last_run = datetime.strptime(last_ts_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+    now = datetime.now()
+    if last_run is None:
+        _log("⚠️ No se encontró registro previo de validación LLM. Ejecutando validación inicial obligatoria...")
+        return run_auto_verification_logic(force=True, log_callback=log_callback)
+
+    elapsed = now - last_run
+    elapsed_hours = elapsed.total_seconds() / 3600.0
+
+    if elapsed_hours >= max_age_hours:
+        _log(f"⏰ Última validación LLM fue hace {elapsed_hours:.1f}h (supera el límite de {max_age_hours:.1f}h). Ejecutando re-validación...")
+        return run_auto_verification_logic(force=True, log_callback=log_callback)
+    else:
+        elapsed_min = elapsed.total_seconds() / 60.0
+        _log(f"✅ Validación LLM vigente (realizada hace {elapsed_min:.1f} min, límite: {max_age_hours:.1f}h). No requiere re-validación.")
+        return {
+            "status": "Vigente",
+            "elapsed_seconds": elapsed.total_seconds(),
+            "elapsed_minutes": elapsed_min,
+            "last_run": last_run.isoformat()
+        }
+
+
+def run_auto_verification_logic(force=False, log_callback=None) -> dict:
+    """
+    Ejecuta el ciclo completo de validación y autoreemplazo de modelos de forma síncrona.
+    Puede llamarse desde un hilo secundario en GUI, Tray Icon o script CLI.
+    """
+    def _log(msg):
+        try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        except Exception:
+            try:
+                clean = msg.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {clean}", flush=True)
+            except Exception:
+                pass
+        if log_callback:
+            try:
+                log_callback(msg)
+            except Exception:
+                pass
+
+    should, reason = should_run_auto_verification(force=force)
+    if not should:
+        _log(f"ℹ️ Omitiendo autoverificación: {reason}")
+        return {"status": "Omitido", "reason": reason}
+
+    _log(f"🚀 Iniciando autoverificación y autoreemplazo diario de modelos LLM... ({reason})")
+    
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not api_key:
+        err_msg = "OPENROUTER_API_KEY no encontrada en .env"
+        _log(f"❌ {err_msg}")
+        add_verification_log("❌ Fallo", 0, 0, 0, err_msg, [err_msg])
+        return {"status": "Error", "message": err_msg}
+
+    # Cargar modelos actuales
+    try:
+        sys.path.insert(0, str(UTILS_DIR.parent))
+        sys.path.insert(0, str(ROOT_DIR))
+        try:
+            import utils.llm_config as llm_cfg
+        except ImportError:
+            import rpa_framework.utils.llm_config as llm_cfg
+        current_models = list(dict.fromkeys(list(llm_cfg.BASE_LLM_MODELS) + list(llm_cfg.PATOLOGIA_DEFAULT_MODELS)))
+    except Exception as e:
+        err_msg = f"Error cargando llm_config: {e}"
+        _log(f"❌ {err_msg}")
+        add_verification_log("❌ Fallo", 0, 0, 0, err_msg, [err_msg])
+        return {"status": "Error", "message": err_msg}
+
+    import concurrent.futures
+    try:
+        from utils.llm_config import get_llm_request_params
+    except Exception:
+        try:
+            from rpa_framework.utils.llm_config import get_llm_request_params
+        except Exception:
+            def get_llm_request_params(m):
+                return "https://openrouter.ai/api/v1", api_key, "openrouter"
+
+    log_msgs = []
+    
+    def emit_log(m):
+        log_msgs.append(m)
+        _log(m)
+
+    # 1. Validar modelos actuales con sus respectivos proveedores
+    emit_log("🔍 Paso 1: Validando modelos actuales (OCR + Patología) con sus proveedores correspondientes...")
+    current_status = {}
+    for m in current_models:
+        base_url, target_key, provider = get_llm_request_params(m)
+        if not target_key:
+            target_key = api_key
+        emit_log(f"  - Probando {m} ({provider.upper()})...")
+        url = f"{base_url}/chat/completions"
+        headers_call = {
+            "Authorization": f"Bearer {target_key}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://rpa-framework.local",
+        }
+        payload = {
+            "model": m,
+            "messages": [{"role": "user", "content": "Di solo: OK"}],
+            "max_tokens": 250,
+            "temperature": 0.0,
+        }
+        try:
+            r = requests.post(url, headers=headers_call, json=payload, timeout=15)
+            is_ok = (r.status_code == 200)
+            current_status[m] = is_ok
+            if is_ok:
+                emit_log(f"    ✅ Online ({provider.upper()})")
+            else:
+                emit_log(f"    ❌ Offline (HTTP {r.status_code})")
+                if r.status_code in [404, 410]:
+                    try:
+                        import mysql.connector
+                        c_tmp = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                        cur_tmp = c_tmp.cursor()
+                        cur_tmp.execute("UPDATE ris.catalogo_modelos_llm SET activo = 0 WHERE modelo = %s", (m,))
+                        c_tmp.commit()
+                        c_tmp.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            current_status[m] = False
+            emit_log(f"    ❌ Error ({e})")
+
+    offline_models = [m for m, active in current_status.items() if not active]
+    online_count = len(current_models) - len(offline_models)
+
+    if not offline_models:
+        msg = f"✅ Todos los modelos actuales están online ({online_count}/{len(current_models)})."
+        emit_log(msg)
+        add_verification_log(
+            status="✅ Éxito",
+            models_checked=len(current_models),
+            models_online=online_count,
+            models_replaced=0,
+            details="Todos los modelos configurados están en línea.",
+            log_messages=log_msgs
+        )
+        return {"status": "Éxito", "models_online": online_count, "models_replaced": 0}
+
+    emit_log(f"❌ Modelos caídos detectados ({len(offline_models)}): {offline_models}")
+
+    # 2. Descargar todos los modelos libres de OpenRouter
+    emit_log("📥 Paso 2: Descargando catálogo de modelos libres de OpenRouter...")
+    free_models = {}
+    try:
+        r = requests.get("https://openrouter.ai/api/v1/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+        if r.status_code == 200:
+            for m in r.json().get("data", []):
+                pricing = m.get("pricing", {})
+                if float(pricing.get("prompt", 0)) == 0 and float(pricing.get("completion", 0)) == 0:
+                    free_models[m["id"]] = m
+                    if m.get("canonical_slug"):
+                        free_models[m["canonical_slug"]] = m
+    except Exception as e:
+        emit_log(f"⚠️ Error al obtener modelos libres: {e}")
+
+    # 3. Rankings de uso semanal de OpenRouter
+    emit_log("📊 Paso 3: Obteniendo rankings de uso semanal de OpenRouter...")
+    usage = {}
+    try:
+        headers_or = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://rpa-framework.local",
+        }
+        r = requests.get("https://openrouter.ai/api/v1/datasets/rankings-daily", headers=headers_or, timeout=10)
+        if r.status_code == 200:
+            rankings = r.json().get("data", [])
+            dates = sorted(list(set(item.get("date") for item in rankings if item.get("date"))), reverse=True)
+            if dates:
+                latest_date = datetime.strptime(dates[0], "%Y-%m-%d")
+                start_date_str = (latest_date - timedelta(days=7)).strftime("%Y-%m-%d")
+                for item in rankings:
+                    if item.get("date", "") >= start_date_str:
+                        slug = item.get("model_permaslug")
+                        tokens = int(item.get("total_tokens", 0))
+                        matched = free_models.get(slug)
+                        if not matched:
+                            for m_id, m_info in free_models.items():
+                                if m_id in slug or slug in m_id:
+                                    matched = m_info
+                                    break
+                        if matched:
+                            mid = matched["id"]
+                            usage[mid] = usage.get(mid, 0) + tokens
+    except Exception as e:
+        emit_log(f"⚠️ Error obteniendo rankings: {e}")
+
+    for fallback_or in [
+        "nvidia/nemotron-nano-12b-v2-vl:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openai/gpt-oss-20b:free",
+        "openrouter/free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "google/gemma-4-26b-a4b-it:free",
+        "google/gemma-4-31b-it:free"
+    ]:
+        if fallback_or in free_models and fallback_or not in usage:
+            usage[fallback_or] = 1
+
+    sorted_openrouter_free = [m_id for m_id, _ in sorted(usage.items(), key=lambda x: x[1], reverse=True)]
+
+    # 3.1 Catálogo y sondeo de modelos Nvidia NIM
+    nvidia_validated = []
+    nvidia_key = os.getenv("NVIDIA_API_KEY", "")
+    if nvidia_key:
+        emit_log("📥 Paso 3.1: Descargando catálogo y testeando modelos Nvidia NIM...")
+        try:
+            r_nv = requests.get("https://integrate.api.nvidia.com/v1/models", headers={"Authorization": f"Bearer {nvidia_key}"}, timeout=10)
+            if r_nv.status_code == 200:
+                exclude_keywords = [
+                    "embed", "rerank", "parse", "pii", "clip", "translation", "translate", 
+                    "reward", "safety", "guard", "diffusion", "deplot", "fuyu", "vila", "detector", "calibration"
+                ]
+                include_keywords = [
+                    "instruct", "-it", "chat", "large", "medium", "small", "pro", "flash", "nemotron", "super", "omni", "nano"
+                ]
+                raw_nvidia_models = []
+                for m in r_nv.json().get("data", []):
+                    m_id = m["id"]
+                    m_lower = m_id.lower()
+                    if any(kw in m_lower for kw in exclude_keywords):
+                        continue
+                    if any(kw in m_lower for kw in include_keywords):
+                        raw_nvidia_models.append(m_id)
+
+                known_priority_nv = [
+                    "meta/llama-3.1-8b-instruct",
+                    "nvidia/llama-3.3-nemotron-super-49b-v1",
+                    "meta/llama-3.2-11b-vision-instruct",
+                    "nvidia/nemotron-nano-12b-v2-vl",
+                    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                    "nvidia/nemotron-3-super-120b-a12b",
+                    "meta/llama-3.1-70b-instruct",
+                    "nvidia/nemotron-3-nano-30b-a3b"
+                ]
+                ordered_nv = [m for m in known_priority_nv if m in raw_nvidia_models] + [m for m in raw_nvidia_models if m not in known_priority_nv]
+
+                def _probe_nv(mid):
+                    u = "https://integrate.api.nvidia.com/v1/chat/completions"
+                    h = {"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+                    p = {"model": mid, "messages": [{"role": "user", "content": "OK"}], "max_tokens": 10, "temperature": 0.0}
+                    try:
+                        res = requests.post(u, headers=h, json=p, timeout=5)
+                        return mid, (res.status_code == 200)
+                    except Exception:
+                        return mid, False
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                    probe_results = dict(ex.map(lambda mid: _probe_nv(mid), ordered_nv[:25]))
+                    nvidia_validated = [mid for mid in ordered_nv[:25] if probe_results.get(mid, False)]
+                    emit_log(f"✨ Modelos Nvidia NIM activos confirmados: {len(nvidia_validated)}")
+        except Exception as e:
+            emit_log(f"⚠️ Error obteniendo catálogo de Nvidia: {e}")
+
+    # 4. Validar candidatos y clasificarlos mediante Agente de IA
+    emit_log("🩺 Paso 4: Evaluando y clasificando candidatos con Agente de IA Auditor...")
+    prompt_ocr = """Determina si el examen en el texto OCR coincide semánticamente con el examen buscado.
+TEXTO OCR: "28-04-2026 Examen Hecho RM de Columna Lumbar"
+EXAMEN BUSCADO: "RESONANCIA MAGNÉTICA DE COLUMNA LUMBAR"
+Responde ÚNICAMENTE en formato JSON plano:
+{"es_match": true, "confianza": 1.0}"""
+
+    prompt_clinico_control = """Eres un radiólogo auditor. Analiza el siguiente examen y lista de patologías críticas.
+ESTUDIO: "ECOGRAFIA TOBILLO DERECHO"
+HALLAZGOS: "Rotura del ligamento tibioperoneo anterior con quiste sinovial de 13 mm."
+LISTA: ["Compresión medular", "AVE agudo", "Apendicitis aguda", "TEP tromboembolismo pulmonar"]
+INSTRUCCIÓN: Si el hallazgo no corresponde anatómicamente a la lista, responde null.
+Responde ÚNICAMENTE en formato JSON:
+{"patologia_detectada": null o "Nombre", "razonamiento": "Breve explicación"}"""
+
+    def _evaluar_candidato_completo(cand):
+        b_url, t_key, prov = get_llm_request_params(cand)
+        if not t_key:
+            t_key = api_key
+        u = f"{b_url}/chat/completions"
+        h = {
+            "Authorization": f"Bearer {t_key}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://rpa-framework.local",
+        }
+        
+        # Test 1: OCR
+        start_t = time.time()
+        ocr_ok = False
+        ocr_resp = ""
+        try:
+            p_ocr = {"model": cand, "messages": [{"role": "user", "content": prompt_ocr}], "max_tokens": 200, "temperature": 0.0}
+            r_ocr = requests.post(u, headers=h, json=p_ocr, timeout=10)
+            elapsed_ms = int((time.time() - start_t) * 1000)
+            if r_ocr.status_code == 200:
+                ocr_resp = r_ocr.json().get('choices', [{}])[0].get('message', {}).get('content') or ""
+                cnt_l = ocr_resp.lower()
+                if '"es_match": true' in cnt_l or '"es_match":true' in cnt_l or 'es_match: true' in cnt_l or 'es_match": 1' in cnt_l:
+                    ocr_ok = True
+        except Exception:
+            elapsed_ms = int((time.time() - start_t) * 1000)
+
+        # Test 2: Control Anatómico / Clínico (solo si pasó OCR)
+        clinica_resp = ""
+        if ocr_ok:
+            try:
+                p_cl = {"model": cand, "messages": [{"role": "user", "content": prompt_clinico_control}], "max_tokens": 250, "temperature": 0.0}
+                r_cl = requests.post(u, headers=h, json=p_cl, timeout=10)
+                if r_cl.status_code == 200:
+                    clinica_resp = r_cl.json().get('choices', [{}])[0].get('message', {}).get('content') or ""
+            except Exception:
+                pass
+
+        # Ejecutar dictamen del Agente Clasificador
+        apto_ocr, apto_pat, justif = _agente_clasificar_candidato(cand, ocr_ok, ocr_resp, clinica_resp, prov, elapsed_ms)
+        return cand, apto_ocr, apto_pat, prov, justif
+
+    candidates_to_test = []
+    for c in nvidia_validated[:8]:
+        if c not in candidates_to_test:
+            candidates_to_test.append(c)
+    for c in sorted_openrouter_free[:10]:
+        if c not in candidates_to_test:
+            candidates_to_test.append(c)
+
+    validated_nvidia = []
+    validated_openrouter = []
+    validated_patologia = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(_evaluar_candidato_completo, cand): cand for cand in candidates_to_test}
+        for fut in concurrent.futures.as_completed(futures):
+            cand, apto_ocr, apto_pat, prov, justif = fut.result()
+            if apto_ocr:
+                emit_log(f"  ⚡ Candidato apto OCR ({prov.upper()}): {cand}")
+                if prov == "nvidia":
+                    validated_nvidia.append(cand)
+                else:
+                    validated_openrouter.append(cand)
+            if apto_pat:
+                emit_log(f"  🩺 Candidato APROBADO para Patología ({prov.upper()}): {cand}")
+                validated_patologia.append(cand)
+
+    # 5. Reemplazar y Catalogar
+    emit_log("⚡ Paso 5: Reconstruyendo lista balanceada de 10 modelos...")
+    current_online_nv = [m for m in current_models if current_status.get(m, False) and get_llm_request_params(m)[2] == "nvidia"]
+    current_online_or = [m for m in current_models if current_status.get(m, False) and get_llm_request_params(m)[2] == "openrouter"]
+
+    selected_nv = list(current_online_nv)
+    for c in validated_nvidia:
+        if len(selected_nv) >= 5:
+            break
+        if c not in selected_nv:
+            selected_nv.append(c)
+
+    selected_or = list(current_online_or)
+    for c in validated_openrouter:
+        if len(selected_or) >= 5:
+            break
+        if c not in selected_or:
+            selected_or.append(c)
+
+    all_pool = selected_nv + selected_or
+    for c in validated_nvidia + validated_openrouter:
+        if len(all_pool) >= 10:
+            break
+        if c not in all_pool:
+            all_pool.append(c)
+
+    new_models = all_pool[:10]
+    replacement_summary = [f"Reemplazado por {m}" for m in new_models if m not in current_models]
+    models_replaced_count = len(replacement_summary)
+
+    # 6. Guardar en llm_config.py si auto_apply está activo
+    cfg = load_auto_config()
+    if cfg.get("auto_apply", True) and models_replaced_count > 0:
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            new_list = "BASE_LLM_MODELS = [\n"
+            for i, model in enumerate(new_models):
+                role = "Primario" if i == 0 else f"Fallback {i}"
+                line = f'   "{model}",'
+                new_list += f"{line:<60} # {role} — Validado OK\n"
+            new_list += "]"
+
+            updated, count = re.subn(r"BASE_LLM_MODELS\s*=\s*\[.*?\]", new_list, content, flags=re.DOTALL)
+            if count > 0:
+                if validated_patologia:
+                    pat_list = "PATOLOGIA_DEFAULT_MODELS = [\n"
+                    for m in validated_patologia[:5]:
+                        pat_list += f'    "{m}",\n'
+                    pat_list += "]"
+                    updated, _ = re.subn(r"PATOLOGIA_DEFAULT_MODELS\s*=\s*\[.*?\]", pat_list, updated, flags=re.DOTALL)
+
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    f.write(updated)
+                emit_log("💾 llm_config.py actualizado automáticamente con la nueva lista de modelos.")
+        except Exception as e:
+            emit_log(f"❌ Error actualizando llm_config.py: {e}")
+
+    final_status = "🔄 Reemplazo Realizado" if models_replaced_count > 0 else "⚠️ Sin Reemplazos Disponibles"
+    details_str = "; ".join(replacement_summary) if replacement_summary else f"No se encontraron reemplazos para los {len(offline_models)} modelos caídos."
+
+    add_verification_log(
+        status=final_status,
+        models_checked=len(current_models),
+        models_online=online_count,
+        models_replaced=models_replaced_count,
+        details=details_str,
+        log_messages=log_msgs
+    )
+
+    return {
+        "status": final_status,
+        "models_online": online_count,
+        "models_replaced": models_replaced_count,
+        "details": details_str
+    }

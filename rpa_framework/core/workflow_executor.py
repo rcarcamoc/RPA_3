@@ -3,28 +3,32 @@ Ejecutor de workflows para el RPA Framework 3.
 
 Este módulo contiene la lógica para ejecutar workflows secuencialmente,
 manejar control de flujo (IF/ELSE, LOOP) y gestionar variables compartidas.
+
+Refactorizado de forma modular hacia rpa_framework/core/executor_handlers/
+manteniendo 100% de compatibilidad hacia atrás.
 """
 
 import subprocess
-import json
 import os
 import sys
-import time
 import threading
-import queue
-from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
+
 from core.models import Workflow, Node, NodeType, ActionNode, DecisionNode, LoopNode, WorkflowNode
 from core.logger import WorkflowLogger
 from utils.telegram_manager import enviar_alerta_todos
-import mysql.connector
-from mysql.connector import Error as MySQLError
-try:
-    import win32com.client
-    import pythoncom
-except ImportError:
-    pass
+
+from core.executor_handlers import (
+    get_python_exe,
+    _get_silent_process_flags,
+    ProcessEnvMixin,
+    VideoRecorderMixin,
+    ActionNodeMixin,
+    LoopNodeMixin,
+    DatabaseNodeMixin,
+    SubworkflowNodeMixin,
+)
 
 try:
     from utils.screen_utils import get_screen_resolution
@@ -35,39 +39,17 @@ except ImportError:
         def get_screen_resolution():
             return "1920x1080"
 
-try:
-    from utils.window_utils import maximize_ris_pacs
-except ImportError:
-    try:
-        from rpa_framework.utils.window_utils import maximize_ris_pacs
-    except ImportError:
-        maximize_ris_pacs = None
 
-def get_python_exe() -> str:
-    """Retorna la ruta al ejecutable python."""
-    if os.environ.get("RPA_SHOW_CONSOLE", "0") == "1":
-        exe = sys.executable
-        if "pythonw.exe" in exe.lower():
-            cand = exe.lower().replace("pythonw.exe", "python.exe")
-            if os.path.exists(cand):
-                return cand
-        return exe
-    exe = sys.executable
-    if "pythonw.exe" in exe.lower():
-        return exe
-    cand = exe.lower().replace("python.exe", "pythonw.exe")
-    if os.path.exists(cand):
-        return cand
-    return exe
-
-def _get_silent_process_flags():
-    """Retorna creationflags y startupinfo. Por política de ejecución en primer plano, nunca oculta consolas en segundo plano."""
-    return 0, None
-
-
-class WorkflowExecutor:
+class WorkflowExecutor(
+    ProcessEnvMixin,
+    VideoRecorderMixin,
+    ActionNodeMixin,
+    LoopNodeMixin,
+    DatabaseNodeMixin,
+    SubworkflowNodeMixin,
+):
     """Ejecutor de workflows con soporte para IF/ELSE y LOOP"""
-    
+
     def __init__(self, workflow: Workflow, log_dir: str = "logs", enable_recording: bool = True, is_sub_workflow: bool = False):
         """
         Inicializa el ejecutor.
@@ -82,18 +64,19 @@ class WorkflowExecutor:
         self.enable_recording = enable_recording
         self.is_sub_workflow = is_sub_workflow
         self.screen_recorder = None
-        
+
         # Create a unique log filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Simple sanitization
         safe_name = "".join([c for c in workflow.name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
         log_filename = f"wf_{safe_name}_{timestamp}.log"
-        
+
         # Ensure log_dir is not empty/None
-        if not log_dir: log_dir = "logs"
-            
+        if not log_dir:
+            log_dir = "logs"
+
         log_path = os.path.join(log_dir, log_filename)
-        
+
         self.logger = WorkflowLogger(log_path)
         self.context: Dict[str, Any] = workflow.variables.copy()
         self.should_stop = False
@@ -103,141 +86,15 @@ class WorkflowExecutor:
         self.no_records_found = False  # True cuando un script o sub-workflow termina con código 2 (sin registros)
         self.active_process = None
         self.nested_executor = None
-        
+
         # Control de pausa/reanudación
         self.is_paused = False
-        import threading
         self.pause_event = threading.Event()
         self.pause_event.set()
-        
+
         self.logger.log(f"🚀 Workflow inicializado: {workflow.name}")
         self.logger.log(f"   Variables iniciales: {self.context}")
-        
-    def _get_subprocess_env(self) -> Dict[str, str]:
-        """Prepara el entorno para ejecutar subprocesses de forma robusta"""
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
-        
-        # Agregar project_root y rpa_framework a PYTHONPATH para asegurar importaciones robustas
-        from pathlib import Path
-        project_root = Path(__file__).parent.parent.parent.resolve()
-        rpa_framework_root = project_root / "rpa_framework"
-        
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        separator = ";" if os.name == 'nt' else ":"
-        if existing_pythonpath:
-            env["PYTHONPATH"] = f"{project_root}{separator}{rpa_framework_root}{separator}{existing_pythonpath}"
-        else:
-            env["PYTHONPATH"] = f"{project_root}{separator}{rpa_framework_root}"
-            
-        for key, value in self.context.items():
-            env[f"VAR_{key}"] = str(value)
-            
-        return env
 
-    def _sync_screen_resolution_to_db(self, resolution: str):
-        """Sincroniza la resolución de pantalla con el registro 'En Proceso' en ris.registro_acciones si no está seteada."""
-        try:
-            conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE ris.registro_acciones 
-                SET resolucion_pantalla = %s 
-                WHERE estado = 'En Proceso' AND (resolucion_pantalla IS NULL OR resolucion_pantalla = '')
-            """, (resolution,))
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            pass
-
-    def _save_and_send_error_video(self, error_desc: str, custom_prefix: Optional[str] = None) -> Optional[str]:
-        """Detiene la grabación activa, guarda el video de error y lo envía a Telegram."""
-        recorder = self.screen_recorder
-        if not recorder:
-            return None
-
-        saved_video_path = None
-        try:
-            try:
-                from utils.paths import get_error_recording_path
-            except ImportError:
-                from rpa_framework.utils.paths import get_error_recording_path
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            raw_name = custom_prefix if custom_prefix else self.workflow.name
-            safe_name = "".join([c for c in raw_name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
-            video_filename = f"error_{safe_name}_{timestamp}.mp4"
-            dest_path = get_error_recording_path(video_filename)
-
-            saved_video_path = recorder.save(str(dest_path))
-            self.screen_recorder = None
-            if saved_video_path:
-                self.logger.log(f"💾 Grabación de pantalla de error guardada en: {saved_video_path}")
-                try:
-                    try:
-                        from utils.telegram_manager import enviar_video_todos
-                    except ImportError:
-                        from rpa_framework.utils.telegram_manager import enviar_video_todos
-
-                    rec_id = None
-                    try:
-                        import mysql.connector
-                        _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
-                        _cur = _conn.cursor(dictionary=True)
-                        _cur.execute("SELECT id FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
-                        _r = _cur.fetchone()
-                        if not _r:
-                            _cur.execute("SELECT id FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
-                            _r = _cur.fetchone()
-                        if _r:
-                            rec_id = _r.get('id')
-                        _cur.close()
-                        _conn.close()
-                    except Exception:
-                        pass
-
-                    screen_res = self.context.get("screen_resolution") or get_screen_resolution()
-                    id_txt = f"\n🆔 <b>ID Fila BD:</b> <code>{rec_id}</code>" if rec_id else ""
-                    caption = f"❌ <b>Error en Workflow: {raw_name}</b>{id_txt}\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(error_desc)[:250]}"
-                    enviar_video_todos(saved_video_path, caption=caption)
-                    self.logger.log("📱 Grabación de video del error enviada a Telegram")
-                except Exception as tel_e:
-                    self.logger.log(f"⚠️ Error al enviar video por Telegram: {tel_e}")
-        except Exception as rec_err:
-            self.logger.log(f"⚠️ Error guardando grabación de pantalla: {rec_err}")
-
-        return saved_video_path
-
-    def _restart_screen_recorder(self) -> None:
-        """Reinicia el grabador de pantalla si está habilitado y no es sub-workflow."""
-        if not self.enable_recording or self.is_sub_workflow:
-            return
-
-        if self.screen_recorder:
-            try:
-                self.screen_recorder.discard()
-            except Exception:
-                pass
-            self.screen_recorder = None
-
-        try:
-            try:
-                from utils.screen_recorder import ScreenRecorder
-            except ImportError:
-                from rpa_framework.utils.screen_recorder import ScreenRecorder
-
-            recorder = ScreenRecorder(fps=6, max_width=1280, format="mp4")
-            if recorder.start():
-                self.screen_recorder = recorder
-                self.logger.log("🎥 Grabación de pantalla reiniciada en segundo plano")
-            else:
-                self.screen_recorder = None
-        except Exception as rec_e:
-            self.screen_recorder = None
-            self.logger.log(f"⚠️ No se pudo reiniciar el grabador de pantalla: {rec_e}")
-    
     def execute(self) -> Dict[str, Any]:
         """
         Ejecuta el workflow completo.
@@ -317,7 +174,7 @@ class WorkflowExecutor:
                         from utils.llm_auto_manager import check_and_refresh_llm_cache
                     except ImportError:
                         from rpa_framework.utils.llm_auto_manager import check_and_refresh_llm_cache
-                    
+
                     self.logger.log("🤖 Verificando vigencia de validación LLM (< 6h)...")
                     llm_res = check_and_refresh_llm_cache(max_age_hours=6.0, log_callback=self.logger.log)
                     if llm_res.get("status") == "Vigente":
@@ -326,7 +183,7 @@ class WorkflowExecutor:
                         self.logger.log(f"🔄 Validación/reemplazo de modelos LLM finalizada: {llm_res.get('status')}")
                 except Exception as llm_err:
                     self.logger.log(f"⚠️ Error durante verificación de vigencia LLM: {llm_err}")
-            
+
             # Verificar y desactivar Bloq Mayús si está activo
             try:
                 from utils.keyboard_utils import ensure_capslock_off
@@ -345,32 +202,32 @@ class WorkflowExecutor:
 
             # Obtener nodo inicial
             current_node = self.workflow.get_start_node()
-            
+
             if not current_node:
                 raise ValueError("No se encontró nodo de inicio")
-            
+
             # Ejecutar nodos secuencialmente
             while current_node and not self.should_stop:
                 self.logger.log(f"\n📍 Nodo actual: {current_node.label} ({current_node.type.value})")
-                
+
                 # Ejecutar nodo y obtener siguiente
                 next_node_id = self._execute_node(current_node)
-                
+
                 # Asegurar sincronización de resolución si el nodo inicializó el registro
                 if "screen_resolution" in self.context:
                     self._sync_screen_resolution_to_db(self.context["screen_resolution"])
-                
+
                 if not next_node_id:
                     self.logger.log("✅ Fin del workflow (no hay más nodos)")
                     break
-                
+
                 # Obtener siguiente nodo
                 current_node = self.workflow.get_node(next_node_id)
-                
+
                 if not current_node:
                     self.logger.log(f"⚠️ Nodo no encontrado: {next_node_id}")
                     break
-            
+
             # Resultado final
             if self.no_records_found:
                 status = "no_records"
@@ -378,12 +235,12 @@ class WorkflowExecutor:
                 status = "stopped"
             else:
                 status = "success"
-            
+
             self.logger.log("=" * 60)
             self.logger.log(f"✅ Ejecución completada: {status}")
             self.logger.log(f"   Variables finales: {self.context}")
             self.logger.log("=" * 60)
-            
+
             # Si terminó correctamente, fue detenido, o finalizó sin registros, descartar grabación
             if self.screen_recorder:
                 self.screen_recorder.discard()
@@ -406,7 +263,7 @@ class WorkflowExecutor:
                 "logs": self.logger.get_logs(),
                 "error": None
             }
-            
+
         except Exception as e:
             # Registrar estado en caso de error o parada para el notificador horario
             try:
@@ -432,7 +289,7 @@ class WorkflowExecutor:
 
             error_msg = f"Error en ejecución: {str(e)}"
             self.logger.log(f"❌ {error_msg}")
-            
+
             saved_video_path = self._save_and_send_error_video(str(e))
 
             return {
@@ -448,7 +305,7 @@ class WorkflowExecutor:
                     keep_awake_cm.__exit__(None, None, None)
                 except Exception:
                     pass
-    
+
     def pause(self):
         """Pausa la ejecución del workflow."""
         self.is_paused = True
@@ -497,7 +354,7 @@ class WorkflowExecutor:
         if hasattr(self, 'pause_event') and self.pause_event:
             self.pause_event.set()
         self.logger.log("⏹️ Deteniendo workflow...")
-        
+
         if self.screen_recorder:
             try:
                 self.screen_recorder.stop()
@@ -509,13 +366,13 @@ class WorkflowExecutor:
         if self.nested_executor:
             self.logger.log("   Propagando stop a workflow anidado...")
             self.nested_executor.stop()
-            
+
         # 2. Detener proceso activo si existe
         if self.active_process:
             try:
                 pid = self.active_process.pid
                 self.logger.log(f"   Terminando árbol de procesos activo (PID: {pid})...")
-                
+
                 # 2.1. En Windows, forzar la terminación del árbol de procesos completo
                 if sys.platform == "win32":
                     try:
@@ -526,7 +383,7 @@ class WorkflowExecutor:
                         )
                     except Exception as tk_e:
                         self.logger.log(f"   ⚠️ taskkill warning: {tk_e}")
-                
+
                 # 2.2. psutil para garantizar terminación de hijos
                 try:
                     import psutil
@@ -553,7 +410,7 @@ class WorkflowExecutor:
                 self.logger.log(f"⚠️ Error al detener proceso: {e}")
             finally:
                 self.active_process = None
-    
+
     def _execute_node(self, node: Node) -> Optional[str]:
         """
         Ejecuta un nodo individual y devuelve el ID del siguiente nodo.
@@ -562,12 +419,12 @@ class WorkflowExecutor:
         if not node.enabled:
             self.logger.log(f"🚫 Nodo deshabilitado: {node.label} (saltando)", "WARNING")
             return self.workflow.get_next_node(node.id)
-        
+
         # Skip annotation nodes (they're just for documentation)
         if node.type == NodeType.ANNOTATION:
             self.logger.log(f"📝 Anotación: {node.label} (saltando)")
             return self.workflow.get_next_node(node.id)
-        
+
         if node.type == NodeType.ACTION:
             return self._execute_action(node)
         elif node.type == NodeType.DECISION:
@@ -581,1190 +438,8 @@ class WorkflowExecutor:
         elif node.type == NodeType.WORKFLOW:
             return self._execute_workflow(node)
         elif node.type == NodeType.END:
-             self.logger.log("⏹️ Nodo Final alcanzado.")
-             return None
+            self.logger.log("⏹️ Nodo Final alcanzado.")
+            return None
         else:
             # Nodos START u otros: solo continuar al siguiente
             return self.workflow.get_next_node(node.id)
-            
-    def _execute_delay(self, node) -> Optional[str]:
-        import time
-        from core.delay_node import DelayNode
-        if isinstance(node, DelayNode):
-            sec = node.delay_seconds
-            self.logger.log(f"⏳ Pausando por {sec} segundos...")
-            end_time = time.time() + sec
-            while time.time() < end_time and not self.should_stop:
-                time.sleep(0.2)
-            if self.should_stop:
-                self.logger.log("⏹️ Pausa interrumpida por detención de workflow.")
-                return None
-        return self.workflow.get_next_node(node.id)
-    
-    def _execute_action(self, node: ActionNode) -> Optional[str]:
-        """Ejecuta un nodo de acción (script Python o comando)"""
-        
-        # 1. Ejecución de Comando de Sistema
-        if node.command:
-             # MEJORA: Detectar comando de minimizar todo y ejecutarlo nativamente para evitar conflictos de proceso
-             if 'minimizeall()' in node.command.lower():
-                 self.logger.log("💻 Ejecutando 'Minimizar Todo' nativamente...")
-                 try:
-                     # Asegurar que COM esté inicializado en este hilo (aunque el worker lo haga, doble check no duele)
-                     if 'pythoncom' in globals():
-                        pythoncom.CoInitialize()
-                     
-                     if 'win32com' in sys.modules or 'win32com' in globals():
-                        shell = win32com.client.Dispatch("Shell.Application")
-                        shell.MinimizeAll()
-                        self.logger.log("✅ Escritorio mostrado (MinimizeAll OK)")
-                        return self.workflow.get_next_node(node.id)
-                     else:
-                        raise ImportError("win32com not available")
-                 except Exception as e:
-                     self.logger.log(f"⚠️ Error en MinimizeAll nativo: {e}. Intentando vía subprocess...", "WARNING")
-                     # Si falla, continuará con la ejecución normal de subprocess
-             
-             self.logger.log(f"💻 Ejecutando comando: {node.command}")
-             try:
-                # Preparar entorno
-                env = self._get_subprocess_env()
-                
-                # MEJORA: Asegurar que los pipes se cierren correctamente con un bloque try-finally robusto
-                # Usamos shell=True por compatibilidad con comandos complejos de Windows
-                full_output = []
-                process = None
-                creationflags, startupinfo = _get_silent_process_flags()
-                try:
-                    process = subprocess.Popen(
-                        node.command,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        encoding='utf-8',
-                        env=env,
-                        bufsize=1,
-                        universal_newlines=True,
-                        errors='replace',
-                        creationflags=creationflags,
-                        startupinfo=startupinfo
-                    )
-                    self.active_process = process
-                    
-                    # Leer salida en tiempo real
-                    while True:
-                        line = process.stdout.readline()
-                        if not line and process.poll() is not None:
-                            break
-                        if line:
-                            clean_line = line.strip()
-                            if clean_line:
-                                self.logger.log(f"   [CMD] {clean_line}")
-                                full_output.append(clean_line)
-                    
-                    returncode = process.wait(timeout=10)
-                finally:
-                    # Garantizar cierre de pipes para evitar fugas de handles (causa de crashes en subsiguientes runs)
-                    if process:
-                        if process.stdout: process.stdout.close()
-                        if process.stderr: process.stderr.close()
-                    self.active_process = None
-                
-                if self.should_stop:
-                    self.logger.log("⏹️ Comando interrumpido por detención de workflow.")
-                    return None
-
-                if returncode == 0:
-                     self.logger.log(f"✅ Comando ejecutado exitosamente")
-                     if node.output_variable:
-                        output_str = "\n".join(full_output).strip()
-                        self.context[node.output_variable] = output_str
-                     
-                     cmd_str = str(node.command).lower() if node.command else ""
-                     label_str = str(node.label).lower() if node.label else ""
-                     es_cmd_excluido = any(k in cmd_str for k in ["mp.exe"]) or \
-                                       any(k in label_str for k in ["abre pacs", "abrir pacs", "ingresa user pacs"])
-                     if not es_cmd_excluido:
-                         if any(k in cmd_str for k in ["carestream ris"]) or \
-                            any(k in label_str for k in ["inicia ris", "iniciar ris"]):
-                              if maximize_ris_pacs:
-                                  try:
-                                      max_w = maximize_ris_pacs()
-                                      if max_w > 0:
-                                          self.logger.log(f"   🪟 Ventana(s) de RIS/PACS maximizada(s) ({max_w})")
-                                  except Exception as max_err:
-                                      self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
-                elif returncode == 2 or any(k in str(node.label).lower() for k in ["vpn"]):
-                     self.logger.log(f"ℹ️ Comando finalizado (código {returncode}): Tratando como sin registros para trabajar / espera VPN. Deteniendo flujo de forma limpia.")
-                     self.no_records_found = True
-                     self.should_stop = True
-                     return None
-                else:
-                     self.logger.log(f"❌ Error en comando (código {returncode})")
-                     try:
-                         ultimo_error = "\n".join(full_output[-3:]) if full_output else "Sin salida devuelta."
-                         enviar_alerta_todos(f"❌ <b>Error en Comando</b>\nNodo: {node.label}\nComando falló con código {returncode}\nDetalle:\n<code>{ultimo_error}</code>")
-                     except Exception as tel_e:
-                         self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
-
-                     if getattr(node, 'on_error', 'stop') == 'stop':
-                         raise RuntimeError(f"Comando falló con código {returncode}")
-                     
-             except Exception as e:
-                 self.logger.log(f"❌ Excepción ejecutando comando: {e}")
-                 try:
-                     enviar_alerta_todos(f"❌ <b>Excepción en Comando</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
-                 except Exception as tel_e:
-                     self.logger.log(f"⚠️ Error enviando alerta: {tel_e}")
-                 
-                 if getattr(node, 'on_error', 'stop') == 'stop':
-                     raise e
-             
-             return self.workflow.get_next_node(node.id)
-
-        # 2. Ejecución de Script Python
-        if not node.script:
-            self.logger.log("⚠️ Nodo sin script ni comando, saltando")
-            return self.workflow.get_next_node(node.id)
-        
-        self.logger.log(f"🐍 Ejecutando script: {node.script}")
-        
-        try:
-            env = self._get_subprocess_env()
-            
-            # Resolver ruta del script
-            script_path = Path(node.script)
-            
-            # Si es absoluta y existe, no hay nada que resolver
-            if script_path.is_absolute() and script_path.exists():
-                pass
-            else:
-                # Intentar buscar en ubicaciones relativas
-                # Primero, si ya tiene un prefijo de subcarpeta (ej: "ui/Abre_pacs.py")
-                possible_roots = [
-                    Path.cwd(),
-                    Path("recordings"),
-                    Path("rpa_framework/recordings"),
-                    Path("../recordings"), # Por si acaso se ejecuta desde rpa_framework/
-                    Path("recordings/web"),
-                    Path("recordings/ui"),
-                    Path("recordings/ocr")
-                ]
-                
-                found = False
-                for root in possible_roots:
-                    test_path = (root / script_path).resolve()
-                    if test_path.exists():
-                        script_path = test_path
-                        found = True
-                        break
-                
-                if not found:
-                    # Búsqueda desesperada: si solo es el nombre del archivo, buscarlo recursivamente
-                    self.logger.log(f"🔍 Buscando '{script_path}' en recordings recursivamente...")
-                    potential_recordings = [Path("recordings"), Path("rpa_framework/recordings")]
-                    for rec_dir in potential_recordings:
-                        if rec_dir.exists():
-                             matches = list(rec_dir.rglob(script_path.name))
-                             if matches:
-                                 script_path = matches[0].resolve()
-                                 found = True
-                                 self.logger.log(f"   ✨ Encontrado en: {script_path}")
-                                 break
-            
-            if not script_path.exists():
-                 self.logger.log(f"❌ Script no encontrado: {script_path}")
-                 return self.workflow.get_next_node(node.id)
-            
-            # Asegurar ruta absoluta
-            script_path = script_path.resolve()
-            self.logger.log(f"   Ruta absoluta: {script_path}")
-
-            # Ejecutar script con Popen para streaming
-            cmd = [get_python_exe(), str(script_path)]
-            self.logger.log(f"   Comando a ejecutar: {cmd}")
-            
-            # Use root directory (parent of rpa_framework) as CWD if possible
-            current_cwd = Path.cwd()
-            if current_cwd.name == "rpa_framework":
-                exec_cwd = current_cwd.parent
-            else:
-                exec_cwd = current_cwd
-
-            creationflags, startupinfo = _get_silent_process_flags()
-            process = None
-            try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace',
-                    env=env,
-                    cwd=str(exec_cwd),
-                    bufsize=1,
-                    universal_newlines=True,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo
-                )
-                self.active_process = process
-                
-                # Leer salida en tiempo real con timeout de seguridad (12 minutos)
-                import queue
-                out_queue = queue.Queue()
-                def _reader():
-                    try:
-                        for l in iter(process.stdout.readline, ''):
-                            out_queue.put(l)
-                    except Exception:
-                        pass
-                    finally:
-                        out_queue.put(None)
-
-                reader_thread = threading.Thread(target=_reader, daemon=True)
-                reader_thread.start()
-
-                full_stdout = []
-                start_script_time = time.time()
-                SCRIPT_MAX_TIMEOUT = 720  # 12 minutos
-                is_timeout = False
-
-                while True:
-                    if self.should_stop:
-                        break
-
-                    if time.time() - start_script_time > SCRIPT_MAX_TIMEOUT:
-                        is_timeout = True
-                        self.logger.log(f"🚨 TIMEOUT (12 min): Script '{node.label}' excedió el tiempo máximo permitido ({SCRIPT_MAX_TIMEOUT}s). Forzando cierre...")
-                        try:
-                            if sys.platform == "win32":
-                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, timeout=3)
-                            process.kill()
-                        except Exception:
-                            pass
-                        break
-
-                    try:
-                        line = out_queue.get(timeout=0.5)
-                        if line is None:
-                            break
-                        clean_line = line.strip()
-                        if clean_line:
-                            self.logger.log(f"   [PY] {clean_line}")
-                            full_stdout.append(clean_line)
-                    except queue.Empty:
-                        if process.poll() is not None and out_queue.empty():
-                            break
-
-                try:
-                    returncode = process.wait(timeout=5)
-                except Exception:
-                    returncode = process.poll()
-                if is_timeout:
-                    returncode = -1
-                    full_stdout.append(f"TIMEOUT: Script finalizado forzadamente tras {SCRIPT_MAX_TIMEOUT}s de inactividad.")
-            finally:
-                if process:
-                    try:
-                        if process.stdout: process.stdout.close()
-                        if process.stderr: process.stderr.close()
-                    except Exception:
-                        pass
-                self.active_process = None
-            
-            if self.should_stop:
-                self.logger.log("⏹️ Script interrumpido por detención de workflow.")
-                return None
-            
-            if returncode == 0:
-                self.logger.log(f"✅ Script ejecutado exitosamente")
-                
-                # Opción 1: Guardar salida completa en variable si se definió explícitamente
-                if node.output_variable:
-                    output_str = "".join(full_stdout).strip()
-                    self.context[node.output_variable] = output_str
-                    self.logger.log(f"   Salida guardada en '{node.output_variable}': {output_str[:50]}...")
-                
-                # Opción 2: Intentar parsear líneas JSON para actualizaciones implícitas de contexto
-                # Esto permite que scripts actualicen múltiples variables sin configurar output_variable
-                for line in reversed(full_stdout):
-                    try:
-                        output_data = json.loads(line)
-                        if isinstance(output_data, dict):
-                            self.context.update(output_data)
-                            self.logger.log(f"   Variables actualizadas (JSON): {list(output_data.keys())}")
-                            # Si encontramos un JSON válido al final, asumimos que es el resultado estructurado
-                            break
-                    except json.JSONDecodeError:
-                        continue
-                
-                # Auto-maximizar ventanas de RIS y PACS si el script o nodo abrió RIS/PACS
-                # (Deshabilitado para abre_pacs e ingresa_user_pacs)
-                script_str = str(node.script).lower() if node.script else ""
-                label_str = str(node.label).lower() if node.label else ""
-                es_excluido = any(k in script_str for k in ["abre_pacs", "ingresa_user_pacs"]) or \
-                              any(k in label_str for k in ["abre pacs", "abrir pacs", "ingresa user pacs"])
-                if not es_excluido:
-                    if any(k in script_str for k in ["inicio_ris"]) or \
-                       any(k in label_str for k in ["inicia ris", "iniciar ris"]):
-                        if maximize_ris_pacs:
-                            try:
-                                max_w = maximize_ris_pacs()
-                                if max_w > 0:
-                                    self.logger.log(f"   🪟 Ventana(s) de RIS/PACS maximizada(s) post-ejecución ({max_w})")
-                            except Exception as max_err:
-                                self.logger.log(f"   ⚠️ Aviso al auto-maximizar ventana: {max_err}")
-            elif returncode == 2:
-                self.logger.log(f"ℹ️ Script finalizado (código 2): Sin registros para trabajar. Deteniendo flujo de forma limpia.")
-                self.no_records_found = True
-                self.should_stop = True
-                return None
-            elif any(k in str(node.label).lower() for k in ["vpn"]) or any(k in str(node.script).lower() for k in ["vpn"]):
-                self.logger.log(f"ℹ️ Verificación VPN finalizada sin conexión (código {returncode}). Tratando como 'sin registros para trabajar'. Deteniendo flujo de forma limpia.")
-                try:
-                    conn_chk = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=3)
-                    cur_chk = conn_chk.cursor(dictionary=True)
-                    cur_chk.execute("SELECT id FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
-                    rec_chk = cur_chk.fetchone()
-                    if rec_chk:
-                        rec_id = rec_chk['id']
-                        cur_chk.execute("UPDATE ris.registro_acciones SET estado = 'sin registros para trabajar', observacion = %s, `update` = NOW() WHERE id = %s",
-                                        (f"[{node.label}] VPN no conectada o espera activa agotada", rec_id))
-                        conn_chk.commit()
-                    cur_chk.close()
-                    conn_chk.close()
-                except Exception as chk_e:
-                    self.logger.log(f"⚠️ Error actualizando registro VPN a sin registros: {chk_e}")
-                self.no_records_found = True
-                self.should_stop = True
-                return None
-            else:
-                self.logger.log(f"❌ Error en script (código {returncode})")
-                
-                try:
-                    ultimo_log = "\n".join(full_stdout[-3:]) if full_stdout else "Sin salida devuelta."
-                    # Respaldo: si el script crashó antes de su error_handler, asegurar notificación
-                    try:
-                        conn_chk = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=3)
-                        cur_chk = conn_chk.cursor(dictionary=True)
-                        cur_chk.execute("SELECT id, estado, estado_notificacion FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
-                        rec_chk = cur_chk.fetchone()
-                        if rec_chk and rec_chk.get('estado_notificacion') is None:
-                            rec_id = rec_chk['id']
-                            cur_chk.execute("UPDATE ris.registro_acciones SET estado = 'Error', observacion = %s WHERE id = %s", (f"[{node.label}] Error código {returncode}: {ultimo_log[:300]}", rec_id))
-                            conn_chk.commit()
-                            enviar_alerta_todos(f"🚨 <b>ERROR en {node.label}</b> (Fila #{rec_id})\n\n🆔 <b>ID Fila BD:</b> <code>{rec_id}</code>\n\n📋 <b>Problema:</b>\nScript terminó con código de error {returncode}.\n\n<code>{ultimo_log}</code>", record_id=rec_id)
-                        cur_chk.close()
-                        conn_chk.close()
-                    except Exception as chk_e:
-                        self.logger.log(f"⚠️ Error en verificación de fallback: {chk_e}")
-                except Exception as tel_e:
-                    self.logger.log(f"⚠️ Error al procesar alerta de respaldo: {tel_e}")
-                
-                if getattr(node, 'on_error', 'stop') == 'stop':
-                    raise RuntimeError(f"El asistente no pudo completar la tarea en la fase '{node.label}'.")
-                else:
-                    prefix = f"{self.workflow.name}_{node.label}"
-                    self._save_and_send_error_video(f"Script falló con código {returncode}", custom_prefix=prefix)
-                    if not self.should_stop:
-                        self._restart_screen_recorder()
-            
-        except Exception as e:
-            self.logger.log(f"❌ Error: {str(e)}")
-            
-            # Igual omitimos alerta si el nivel superior lo va a atrapar
-            # enviar_alerta_todos(f"❌ <b>Excepción en Script</b>\nNodo: {node.label}\nError: <code>{str(e)}</code>")
-                
-            if getattr(node, 'on_error', 'stop') == 'stop':
-                raise RuntimeError(f"Falla inesperada en la fase '{node.label}': {str(e)}")
-            else:
-                prefix = f"{self.workflow.name}_{node.label}"
-                self._save_and_send_error_video(f"Excepción en nodo {node.label}: {str(e)}", custom_prefix=prefix)
-                if not self.should_stop:
-                    self._restart_screen_recorder()
-        
-        return self.workflow.get_next_node(node.id)
-    
-    def _execute_decision(self, node: DecisionNode) -> Optional[str]:
-        """Ejecuta un nodo de decisión (IF/ELSE)"""
-        if not node.condition:
-            self.logger.log("⚠️ Decisión sin condición, tomando rama TRUE")
-            return node.true_path or self.workflow.get_next_node(node.id)
-        
-        self.logger.log(f"🔀 Evaluando condición: {node.condition}")
-        
-        result = self._eval_condition(node.condition)
-        
-        if result:
-            self.logger.log("   ✅ Condición TRUE")
-            return node.true_path or self.workflow.get_next_node(node.id)
-        else:
-            self.logger.log("   ❌ Condición FALSE")
-            return node.false_path or self.workflow.get_next_node(node.id)
-    
-    def _execute_loop(self, node: LoopNode) -> Optional[str]:
-        """Ejecuta un nodo de loop con AISLAMIENTO TOTAL.
-
-        Modos disponibles:
-          - count    : N iteraciones fijas
-          - list     : Iterar sobre una lista/variable del contexto
-          - while    : Mientras condición sea verdadera
-          - timed    : Ejecutar durante N horas y luego detenerse
-          - infinite : Ejecutar indefinidamente hasta Stop manual
-
-        El loop NUNCA se detiene por errores internos, excepciones ni
-        señales should_stop generadas dentro de una iteración.
-        Solo se respeta el Stop externo del usuario.
-        """
-        import time
-
-        self.is_in_loop = True
-        loop_type = getattr(node, 'loop_type', 'count')
-        self.logger.log(f"🔁 Iniciando loop ({loop_type}) — Aislamiento total activado")
-
-        # ── 1. Configurar modo ──────────────────────────────────────────
-        iterator   = []
-        is_while   = False
-        is_timed   = False
-        is_infinite = False
-        deadline   = None
-
-        if loop_type == 'count':
-            iterations = self._get_loop_count(node.iterations)
-            iterator = range(iterations)
-            self.logger.log(f"   Modo: {iterations} iteraciones fijas")
-
-        elif loop_type == 'list':
-            var_name = node.iterable
-            val = self.context.get(var_name, [])
-            if isinstance(val, (list, tuple)):
-                iterator = val
-                self.logger.log(f"   Modo: Iterar lista '{var_name}' ({len(val)} elementos)")
-            elif isinstance(val, dict):
-                iterator = list(val.items())
-                self.logger.log(f"   Modo: Iterar dict '{var_name}' ({len(val)} elementos)")
-            else:
-                self.logger.log(f"⚠️ Variable '{var_name}' no es iterable: {type(val)}")
-                iterator = []
-
-        elif loop_type == 'while':
-            is_while = True
-            self.logger.log(f"   Modo: While — condición '{node.condition}'")
-
-        elif loop_type == 'timed':
-            is_timed = True
-            hours = float(getattr(node, 'duration_hours', 1.0))
-            deadline = time.time() + (hours * 3600)
-            h_str = f"{hours:g} hora{'s' if hours != 1 else ''}"
-            self.logger.log(f"   Modo: Programado — durará {h_str}")
-
-        elif loop_type == 'infinite':
-            is_infinite = True
-            self.logger.log("   Modo: Infinito — solo se detiene con Stop manual")
-
-        # ── Notificación de Inicio a Telegram (Solo para Root Loop) ──
-        is_root_loop = (not getattr(self, 'is_sub_workflow', False)) or (str(getattr(self.workflow, 'name', '')).lower() == "loop")
-        start_loop_ts = time.time()
-        motivo_fin = "completado"
-
-        if is_root_loop:
-            detalles_str = ""
-            if loop_type == 'count':
-                detalles_str = f"{iterations} iteraciones configuradas"
-            elif loop_type == 'timed':
-                detalles_str = f"{hours:g} horas programadas"
-            elif loop_type == 'infinite':
-                detalles_str = "Continuo infinito (hasta detención manual)"
-            elif loop_type == 'while':
-                detalles_str = f"Condición: {node.condition}"
-            elif loop_type == 'list':
-                detalles_str = f"Lista: {node.iterable} ({len(iterator)} elementos)"
-
-            try:
-                try:
-                    from utils.notificador_resumen import notificar_inicio_loop
-                except ImportError:
-                    from rpa_framework.utils.notificador_resumen import notificar_inicio_loop
-                notificar_inicio_loop(modo=loop_type, detalles=detalles_str, workflow_name=self.workflow.name)
-            except Exception as e_start_notif:
-                self.logger.log(f"⚠️ Error enviando notificación de inicio de loop a Telegram: {e_start_notif}")
-
-        # ── 2. Ejecutar Loop ────────────────────────────────────────────
-        idx = 0
-        consecutive_errors = 0
-        MAX_ITER = 100_000  # Safety break para while (~83 días a 1 iter/min)
-
-        while True:
-            # Si el loop está pausado, esperar hasta reanudación o parada externa
-            while not self.pause_event.is_set() and not self.should_stop:
-                time.sleep(0.5)
-
-            # Solo se respeta el stop EXTERNO (botón Stop del usuario).
-            # Se verifica ANTES de la iteración, nunca durante.
-            # Verificar si se solicitó detener el bucle tras el caso previo
-            stop_after_file = Path(__file__).resolve().parent.parent / "config" / "stop_after_case.txt"
-            if getattr(self, 'stop_after_iteration', False) or stop_after_file.exists():
-                motivo_fin = "detenido_tras_caso"
-                self.logger.log("⏹️ Loop detenido antes de iniciar nueva iteración (solicitud de reprocesamiento/parada suave).")
-                self.should_stop = True
-                self._external_stop = True
-                try:
-                    if stop_after_file.exists():
-                        stop_after_file.unlink()
-                except Exception:
-                    pass
-                break
-
-            if self.should_stop:
-                motivo_fin = "detenido"
-                self.logger.log("⏹️ Loop detenido por señal externa del usuario.")
-                break
-
-            # ── Control de flujo según modo ──
-            current_item = None
-
-            if is_timed:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    motivo_fin = "tiempo_cumplido"
-                    hours = float(getattr(node, 'duration_hours', 1.0))
-                    self.logger.log(f"⏰ Tiempo completado ({hours:g}h). Loop finalizado.")
-                    break
-                mins_left = int(remaining / 60)
-                secs_left = int(remaining % 60)
-                self.logger.log(f"   ⏱️ Tiempo restante: {mins_left}m {secs_left}s")
-                current_item = idx
-
-            elif is_infinite:
-                current_item = idx
-
-            elif is_while:
-                if idx >= MAX_ITER:
-                    motivo_fin = "limite_seguridad"
-                    self.logger.log(f"⚠️ Límite de seguridad alcanzado ({MAX_ITER:,} iteraciones)")
-                    break
-                try:
-                    condition_result = self._eval_condition(node.condition)
-                except Exception as cond_err:
-                    self.logger.log(f"⚠️ Error evaluando condición: {cond_err} — asumiendo True")
-                    condition_result = True
-                if not condition_result:
-                    motivo_fin = "condicion_finalizada"
-                    break
-                current_item = idx
-
-            else:
-                # count / list
-                if idx >= len(iterator):
-                    motivo_fin = "completado"
-                    break
-                current_item = iterator[idx]
-
-            self.logger.log(f"   🔄 Iteración {idx + 1}")
-
-            # Asegurar que la grabación esté activa para esta iteración
-            if self.enable_recording and not self.is_sub_workflow and not self.screen_recorder:
-                self._restart_screen_recorder()
-
-            # Actualizar variables de contexto del loop
-            self.context["_loop_index"] = idx
-            self.context[node.loop_var] = current_item
-
-            # ── AISLAMIENTO: snapshot antes de ejecutar ──
-            snapshot_should_stop = self.should_stop
-
-            try:
-                if hasattr(node, 'workflow_path') and node.workflow_path:
-                    self._run_workflow_internal(node.workflow_path)
-                elif node.script:
-                    self._run_script_internal(node)
-
-                # Iteración exitosa: reiniciar contador de errores consecutivos
-                consecutive_errors = 0
-
-                # Iteración exitosa: descartar video de esta iteración y reiniciar limpio para la siguiente
-                if self.enable_recording and not self.is_sub_workflow and not self.should_stop:
-                    if self.screen_recorder:
-                        self.screen_recorder.discard()
-                        self.screen_recorder = None
-                    self._restart_screen_recorder()
-
-            except Exception as e:
-                if self.should_stop:
-                    self.logger.log("⏹️ Iteración de loop interrumpida por detención externa.")
-                    if self.screen_recorder:
-                        self.screen_recorder.discard()
-                        self.screen_recorder = None
-                    break
-                self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
-
-                # Verificar si el fallo provino de actualiza_estado o si quedó en Aprobacion_Pendiente
-                es_aprobacion_pendiente = False
-                err_str = str(e).lower()
-                if any(k in err_str for k in ["actualiza_estado", "aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado"]):
-                    es_aprobacion_pendiente = True
-                else:
-                    try:
-                        import mysql.connector
-                        _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
-                        _cur = _conn.cursor(dictionary=True)
-                        _cur.execute("SELECT id, estado, observacion FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
-                        _ultimo = _cur.fetchone()
-                        _cur.close()
-                        _conn.close()
-                        if _ultimo:
-                            est_ult = str(_ultimo.get("estado") or "").lower()
-                            obs_ult = str(_ultimo.get("observacion") or "").lower()
-                            if any(k in est_ult for k in ["aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado", "terminado"]) or "actualiza_estado" in obs_ult:
-                                es_aprobacion_pendiente = True
-                    except Exception:
-                        pass
-
-                if es_aprobacion_pendiente:
-                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente / Reclasificado (Addendum/Ya Ingresado): NO suma al contador de errores de auto-pausa.")
-                else:
-                    consecutive_errors += 1
-                    self.logger.log(f"   ⚠️ Errores consecutivos en loop: {consecutive_errors}/2")
-                    if consecutive_errors >= 2:
-                        self.logger.log("   🚨 2 errores consecutivos detectados. Pausando loop y alertando a Telegram...")
-                        self.pause()
-                        try:
-                            from utils.telegram_manager import notificar_loop_pausado
-                            rec_id_loop = _ultimo.get("id") if (_ultimo and isinstance(_ultimo, dict)) else None
-                            notificar_loop_pausado(ultimo_error=str(e), workflow_name=self.workflow.name, iteracion=idx + 1, record_id=rec_id_loop)
-                        except Exception as e_notif:
-                            self.logger.log(f"   ⚠️ Error enviando alerta de pausa a Telegram: {e_notif}")
-
-                        # Esperar respuesta del usuario desde Telegram (Reanudar o Detener)
-                        while not self.pause_event.is_set() and not self.should_stop:
-                            time.sleep(0.5)
-
-                        if self.should_stop:
-                            motivo_fin = "detenido"
-                            self.logger.log("⏹️ Loop cancelado por el usuario durante la pausa.")
-                            if self.screen_recorder:
-                                self.screen_recorder.discard()
-                                self.screen_recorder = None
-                            break
-
-                        # Al reanudar:
-                        consecutive_errors = 0
-                        self.logger.log("   ▶️ Loop reanudado por el usuario. Continuando...")
-
-                # Guardar y enviar video del error de esta iteración
-                wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
-                prefix = f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}"
-                self._save_and_send_error_video(f"Iteración {idx + 1} ({wf_sub_name}): {str(e)}", custom_prefix=prefix)
-
-                # Reiniciar grabador limpio para la siguiente iteración
-                if not self.should_stop:
-                    self._restart_screen_recorder()
-
-                delay = getattr(node, 'error_delay', 0)
-                if delay > 0:
-                    self.logger.log(f"   ⏳ Esperando {delay}s antes de reintentar...")
-                    end_d = time.time() + delay
-                    while time.time() < end_d and not self.should_stop:
-                        time.sleep(0.2)
-                    if self.should_stop:
-                        motivo_fin = "detenido"
-                        break
-
-            finally:
-                # Si algo interno puso should_stop=True, lo revertimos
-                # PERO si fue un stop externo (usuario/Telegram), lo respetamos
-                if self.should_stop and not snapshot_should_stop:
-                    if self._external_stop:
-                        self.logger.log("⏹️ Stop externo detectado dentro del loop. Respetando detención del usuario.")
-                    else:
-                        self.logger.log("🔄 Loop aislado: señal de parada interna descartada, reiniciando...")
-                        self.should_stop = False
-
-            # Verificar detención suave tras finalizar el caso actual
-            stop_after_file = Path(__file__).resolve().parent.parent / "config" / "stop_after_case.txt"
-            if getattr(self, 'stop_after_iteration', False) or stop_after_file.exists():
-                motivo_fin = "detenido_tras_caso"
-                self.logger.log("⏹️ Loop detenido tras completar el caso actual sin interrumpirlo (solicitud de reprocesamiento/parada suave).")
-                self.should_stop = True
-                self._external_stop = True
-                try:
-                    if stop_after_file.exists():
-                        stop_after_file.unlink()
-                except Exception:
-                    pass
-                break
-
-            if self.should_stop:
-                motivo_fin = "detenido"
-                break
-
-            idx += 1
-
-        self.is_in_loop = False
-        self.logger.log(f"✅ Loop finalizado ({idx} iteraciones ejecutadas)")
-        if is_root_loop:
-            duracion_total = time.time() - start_loop_ts
-            self.logger.log("📢 Enviando notificación de fin de ciclo y resumen diario a Telegram...")
-            try:
-                try:
-                    from utils.notificador_resumen import notificar_fin_loop_con_resumen
-                except ImportError:
-                    from rpa_framework.utils.notificador_resumen import notificar_fin_loop_con_resumen
-                notificar_fin_loop_con_resumen(
-                    motivo=motivo_fin,
-                    iteraciones=idx,
-                    duracion_segundos=duracion_total,
-                    workflow_name=self.workflow.name
-                )
-            except Exception as e_fin_notif:
-                self.logger.log(f"⚠️ Error enviando notificación de fin de loop a Telegram: {e_fin_notif}")
-        return self.workflow.get_next_node(node.id)
-
-    def _run_workflow_internal(self, wf_path: str):
-        """Ejecuta un workflow hijo reutilizando lógica (sin retorno de nodo)"""
-        # Resolver ruta (copiado de _execute_workflow)
-        path_obj = Path(wf_path)
-        if not path_obj.is_absolute():
-            base_dir = Path("rpa_framework/workflows")
-            if not base_dir.exists(): base_dir = Path("workflows")
-            
-            candidate = base_dir / wf_path
-            if not candidate.exists() and not candidate.suffix:
-                candidate = candidate.with_suffix(".json")
-            if candidate.exists(): path_obj = candidate
-            else: path_obj = Path(wf_path).resolve()
-
-        if not path_obj.exists():
-             raise FileNotFoundError(f"Workflow loop no encontrado: {path_obj}")
-             
-        # Cargar nested workflow
-        nested_wf = Workflow.from_json(str(path_obj))
-        nested_wf.variables.update(self.context)
-        
-        # Executor
-        self.nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir, is_sub_workflow=True)
-        
-        # Patch logs
-        original_log = self.nested_executor.logger.log
-        def bridged_log(msg, level="INFO"):
-            prefix = f"   [LOOP-WF:{nested_wf.name}]"
-            self.logger.log(f"{prefix} {msg}", level)
-        self.nested_executor.logger.log = bridged_log
-        
-        self.logger.log(f"   ▶️ Loop Running Workflow: {nested_wf.name}")
-        child_executor = self.nested_executor
-        try:
-            result = child_executor.execute()
-        finally:
-            self.nested_executor = None
-        
-        status = result.get("status") if isinstance(result, dict) else "unknown"
-        is_ext = self._external_stop or getattr(child_executor, '_external_stop', False)
-        if status == "no_records":
-            self.logger.log("   ℹ️ Iteración sin registros de pacientes. Continuando ciclo de loop...")
-            self.context.update(result.get("context", {}))
-            return
-        elif status == "stopped" or self.should_stop:
-            if is_ext:
-                self.logger.log("   Workflow anidado detenido por usuario.")
-                self.should_stop = True
-                self._external_stop = True
-            else:
-                self.logger.log("   Workflow anidado detenido internamente.")
-                self.should_stop = True
-        elif status == "error":
-            if self.should_stop or is_ext:
-                self.logger.log("   Workflow anidado detenido por usuario.")
-                self.should_stop = True
-                self._external_stop = is_ext
-            else:
-                raise RuntimeError(f"Fallo en workflow de loop: {result.get('error')}")
-        else:
-            self.context.update(result.get("context", {}))
-
-    def _run_script_internal(self, node):
-        """Helper para ejecutar script python del loop"""
-        env = self._get_subprocess_env()
-        
-        # Pasamos variables como JSON string también para estructuras complejas
-        # O confiamos en env vars simples. 
-        # Para listas/dicts complejos, el script debería leer un JSON temporal o similar si fuera robusto.
-        # Por ahora mantenemos compatibilidad simple.
-        
-        current_cwd = Path.cwd()
-        if current_cwd.name == "rpa_framework":
-            exec_cwd = current_cwd.parent
-        else:
-            exec_cwd = current_cwd
-
-        creationflags, startupinfo = _get_silent_process_flags()
-        process = None
-        full_stdout = []
-        try:
-            process = subprocess.Popen(
-                [get_python_exe(), node.script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                env=env,
-                cwd=str(exec_cwd),
-                bufsize=1,
-                universal_newlines=True,
-                creationflags=creationflags,
-                startupinfo=startupinfo
-            )
-            # Leer salida con timeout de seguridad (12 minutos)
-            import queue
-            out_queue = queue.Queue()
-            def _reader_loop():
-                try:
-                    for l in iter(process.stdout.readline, ''):
-                        out_queue.put(l)
-                except Exception:
-                    pass
-                finally:
-                    out_queue.put(None)
-
-            reader_thread = threading.Thread(target=_reader_loop, daemon=True)
-            reader_thread.start()
-
-            start_script_time = time.time()
-            SCRIPT_MAX_TIMEOUT = 720  # 12 minutos
-            is_timeout = False
-
-            while True:
-                if self.should_stop:
-                    break
-
-                if time.time() - start_script_time > SCRIPT_MAX_TIMEOUT:
-                    is_timeout = True
-                    self.logger.log(f"🚨 TIMEOUT (12 min): Script de loop '{node.script}' excedió el tiempo máximo permitido ({SCRIPT_MAX_TIMEOUT}s). Forzando cierre...")
-                    try:
-                        if sys.platform == "win32":
-                            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, timeout=3)
-                        process.kill()
-                    except Exception:
-                        pass
-                    break
-
-                try:
-                    line = out_queue.get(timeout=0.5)
-                    if line is None:
-                        break
-                    clean_line = line.strip()
-                    if clean_line:
-                        self.logger.log(f"   [LOOP-PY] {clean_line}")
-                        full_stdout.append(clean_line)
-                except queue.Empty:
-                    if process.poll() is not None and out_queue.empty():
-                        break
-
-            try:
-                returncode = process.wait(timeout=5)
-            except Exception:
-                returncode = process.poll()
-            if is_timeout:
-                returncode = -1
-                full_stdout.append(f"TIMEOUT: Script de loop finalizado forzadamente tras {SCRIPT_MAX_TIMEOUT}s de inactividad.")
-        finally:
-            if process:
-                try:
-                    if process.stdout: process.stdout.close()
-                    if process.stderr: process.stderr.close()
-                except Exception:
-                    pass
-            self.active_process = None
-        
-        if returncode == 2:
-            self.logger.log("   ℹ️ Script de loop finalizado (código 2): Sin registros para trabajar. Continuando al siguiente ciclo.")
-            return
-        elif returncode != 0:
-            if self.should_stop:
-                self.logger.log("   Script detenido por usuario.")
-                return
-            raise RuntimeError(f"Script falló con código {returncode}. Últimos logs: {full_stdout[-3:] if full_stdout else 'N/A'}")
-        else:
-             # Si el script imprime JSON, actualizamos contexto
-             for line in reversed(full_stdout):
-                 try:
-                    output_data = json.loads(line)
-                    if isinstance(output_data, dict):
-                        self.context.update(output_data)
-                        break
-                 except: pass
-    
-    def _eval_condition(self, condition: str) -> bool:
-        """
-        Evalúa una condición de forma segura.
-        
-        Args:
-            condition: Expresión a evaluar (ej: "x > 5", "status == 'ok'")
-            
-        Returns:
-            Resultado booleano de la evaluación
-        """
-        try:
-            # Crear un diccionario seguro con solo las variables del contexto
-            safe_dict = self.context.copy()
-            
-            # Agregar operadores seguros
-            safe_dict.update({
-                '__builtins__': {
-                    'True': True,
-                    'False': False,
-                    'None': None,
-                    'len': len,
-                    'str': str,
-                    'int': int,
-                    'float': float
-                }
-            })
-            
-            result = eval(condition, safe_dict, {})
-            return bool(result)
-        
-        except Exception as e:
-            self.logger.warning(f"Error evaluando condición: {e}")
-            return False
-    
-    def _get_loop_count(self, iterations: str) -> int:
-        """
-        Obtiene el número de iteraciones para un loop.
-        
-        Args:
-            iterations: Puede ser un número o nombre de variable
-            
-        Returns:
-            Número de iteraciones
-        """
-        try:
-            # Intentar convertir directamente a int
-            return int(iterations)
-        except ValueError:
-            # Es un nombre de variable
-            value = self.context.get(iterations, 1)
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                self.logger.log(f"⚠️ Iteraciones inválidas: {iterations}, usando 1")
-                return 1
-    
-    def _execute_database(self, node) -> Optional[str]:
-        """
-        Ejecuta un nodo de base de datos.
-        
-        Args:
-            node: DatabaseNode a ejecutar
-            
-        Returns:
-            ID del siguiente nodo
-        """
-        from core.database_node import DatabaseNode
-        
-        if not isinstance(node, DatabaseNode):
-            self.logger.log(f"❌ Nodo no es DatabaseNode: {node.id}")
-            return self.workflow.get_next_node(node.id)
-        
-        self.logger.log(f"🗄️ Ejecutando nodo DB: {node.label}")
-        self.logger.log(f"   Operación: {node.operation}")
-        self.logger.log(f"   Host: {node.host}:{node.port}")
-        self.logger.log(f"   Database: {node.database}")
-        
-        connection = None
-        try:
-            # Conectar a MySQL
-            connection = mysql.connector.connect(
-                host=node.host,
-                port=node.port,
-                user=node.user,
-                password=node.password,
-                database=node.database
-            )
-            
-            if connection.is_connected():
-                self.logger.log(f"✅ Conectado a MySQL")
-                
-                cursor = connection.cursor(dictionary=True)
-                
-                # Reemplazar variables en la query
-                query = node.query
-                for var_name, var_value in self.context.items():
-                    placeholder = f"{{{var_name}}}"
-                    if placeholder in query:
-                        # Escapar valores para prevenir SQL injection
-                        if isinstance(var_value, str):
-                            var_value = var_value.replace("'", "''")
-                            query = query.replace(placeholder, f"'{var_value}'")
-                        else:
-                            query = query.replace(placeholder, str(var_value))
-                
-                self.logger.log(f"   Query: {query[:100]}...")
-                
-                # Ejecutar query
-                cursor.execute(query)
-                
-                if node.operation.upper() == "SELECT":
-                    # Para SELECT, obtener resultados
-                    results = cursor.fetchall()
-                    
-                    # Inyectar resultados en contexto
-                    if results:
-                        if len(results) == 1:
-                            # Un solo resultado: dict
-                            self.context[node.result_var] = results[0]
-                            self.logger.log(f"✅ Resultado guardado en '{node.result_var}': {results[0]}")
-                        else:
-                            # Múltiples resultados: lista de dicts
-                            self.context[node.result_var] = results
-                            self.logger.log(f"✅ {len(results)} resultados guardados en '{node.result_var}'")
-                    else:
-                        self.context[node.result_var] = None
-                        self.logger.log(f"⚠️ No se encontraron resultados")
-                else:
-                    # Para INSERT/UPDATE/DELETE, hacer commit
-                    connection.commit()
-                    affected_rows = cursor.rowcount
-                    self.logger.log(f"✅ {node.operation} ejecutado. Filas afectadas: {affected_rows}")
-                    self.context[node.result_var] = {"affected_rows": affected_rows}
-                
-                cursor.close()
-                
-        except MySQLError as e:
-            error_msg = f"Error MySQL: {str(e)}"
-            self.logger.log(f"❌ {error_msg}")
-            self.context[node.result_var] = {"error": str(e)}
-            
-            if getattr(node, 'on_error', 'stop') == 'stop':
-                raise e
-            
-        except Exception as e:
-            error_msg = f"Error ejecutando DB: {str(e)}"
-            self.logger.log(f"❌ {error_msg}")
-            self.context[node.result_var] = {"error": str(e)}
-            
-            if getattr(node, 'on_error', 'stop') == 'stop':
-                raise e
-            
-        finally:
-            if connection and connection.is_connected():
-                connection.close()
-                self.logger.log(f"🔌 Conexión cerrada")
-        
-        return self.workflow.get_next_node(node.id)
-
-    def _execute_workflow(self, node) -> Optional[str]:
-        """
-        Ejecuta un workflow anidado.
-        """
-        if not isinstance(node, WorkflowNode):
-            self.logger.log(f"❌ Nodo no es WorkflowNode: {node.id}")
-            return self.workflow.get_next_node(node.id)
-            
-        wf_path = node.workflow_path
-        if not wf_path:
-            self.logger.log("⚠️ Nodo Workflow sin ruta definida")
-            return self.workflow.get_next_node(node.id)
-            
-        self.logger.log(f"🔄 Preparando ejecución de workflow anidado: {wf_path}")
-        
-        # Resolver ruta
-        path_obj = Path(wf_path)
-        if not path_obj.is_absolute():
-            # Intentar en rpa_framework/workflows
-            base_dir = Path("rpa_framework/workflows")
-            if not base_dir.exists():
-                 base_dir = Path("workflows")
-            
-            candidate = base_dir / wf_path
-            # Si tiene extensión .json bien, sino probar agregandola
-            if not candidate.exists() and not candidate.suffix:
-                candidate = candidate.with_suffix(".json")
-            
-            if candidate.exists():
-                path_obj = candidate
-            else:
-                # Fallback: intentar desde cwd
-                path_obj = Path(wf_path).resolve()
-
-        if not path_obj.exists():
-             self.logger.log(f"❌ Archivo de workflow no encontrado: {path_obj}")
-             if getattr(node, 'on_error', 'stop') == 'stop':
-                 raise FileNotFoundError(f"Workflow no encontrado: {path_obj}")
-             return self.workflow.get_next_node(node.id)
-             
-        try:
-            # Cargar nested workflow
-            nested_wf = Workflow.from_json(str(path_obj))
-            
-            # Inicializar variables con el contexto actual
-            # (Sobreescribiendo las defaults del nested)
-            nested_wf.variables.update(self.context)
-            
-            # Crear executor
-            nested_executor = WorkflowExecutor(nested_wf, self.logger.log_dir, is_sub_workflow=True)
-            self.nested_executor = nested_executor
-            
-            # --- PATCH LOGGER ---
-            # Para que los logs del hijo suban al padre (y a la UI)
-            original_child_log = nested_executor.logger.log
-            def bridged_log(msg, level="INFO"):
-                prefix = f"   [WF:{nested_wf.name}]"
-                self.logger.log(f"{prefix} {msg}", level)
-            
-            nested_executor.logger.log = bridged_log
-            # --------------------
-            
-            self.logger.log(f"▶️ Iniciando sub-workflow: {nested_wf.name}")
-            try:
-                result = nested_executor.execute()
-            finally:
-                self.nested_executor = None
-            
-            status = result.get("status") if isinstance(result, dict) else "unknown"
-            is_ext = self._external_stop or getattr(nested_executor, '_external_stop', False)
-            if status == "no_records":
-                self.logger.log("ℹ️ Sub-workflow finalizado sin registros para trabajar. Terminando flujo actual de forma limpia.")
-                self.no_records_found = True
-                self.should_stop = True
-                return None
-            elif status == "stopped" or self.should_stop:
-                if is_ext:
-                    self.logger.log("⏹️ Sub-workflow detenido por el usuario. Deteniendo padre.")
-                    self.should_stop = True
-                    self._external_stop = True
-                else:
-                    self.logger.log("⏹️ Sub-workflow detenido internamente.")
-                    self.should_stop = True
-                return None
-            elif status == "error":
-                if self.should_stop:
-                    self.logger.log("⏹️ Sub-workflow cancelado por detención.")
-                    return None
-                self.logger.log(f"❌ Error en sub-workflow: {result.get('error')}")
-                if getattr(node, 'on_error', 'stop') == 'stop':
-                     raise RuntimeError(f"Fallo en sub-workflow: {result.get('error')}")
-                else:
-                     prefix = f"{self.workflow.name}_{nested_wf.name}"
-                     self._save_and_send_error_video(f"Sub-workflow {nested_wf.name}: {result.get('error')}", custom_prefix=prefix)
-                     if not self.should_stop:
-                         self._restart_screen_recorder()
-            else:
-                self.logger.log(f"✅ Sub-workflow finalizado correctamente")
-                # Actualizar contexto padre con resultados del hijo
-                self.context.update(result.get("context", {}))
-        
-        except Exception as e:
-            self.logger.log(f"❌ Error ejecutando nodo workflow: {e}")
-            if getattr(node, 'on_error', 'stop') == 'stop':
-                raise e
-            else:
-                prefix = f"{self.workflow.name}_{node.label}"
-                self._save_and_send_error_video(f"Excepción en sub-workflow {node.label}: {e}", custom_prefix=prefix)
-                if not self.should_stop:
-                    self._restart_screen_recorder()
-                
-        return self.workflow.get_next_node(node.id)

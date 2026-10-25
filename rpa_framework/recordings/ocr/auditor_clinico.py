@@ -280,7 +280,7 @@ class AuditorClinico:
     # =========================================================================
     def detectar_modalidad(self, texto: str) -> str:
         """
-        Detecta la modalidad de imagen principal: ECO, TC, RM, RX o DESCONOCIDA.
+        Detecta la modalidad de imagen principal: ECO, TC, RM, MG, RX o DESCONOCIDA.
         """
         t = self.normalizar_texto(texto)
         words = set(t.split())
@@ -295,19 +295,26 @@ class AuditorClinico:
         if bool(words & rm_tokens) or re.search(r'\bcolangio\s*(?:rm|rmn|resonancia)\b', t) or re.search(r'\bangio\s*(?:rm|rmn)\b', t):
             return 'RM'
 
+        # ECO / Ecotomografía (evaluar antes de MG/RX para que 'Ecotomografía Mamaria' o 'bajo ecotomografía' sea ECO)
+        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'doppler', 'coppler', 'eoppler', 'dopler', 'doopler', 'oppler', 'cappler', 'goppler', 'toppler'}
+        has_eco = bool(words & eco_tokens) or any(fuzz.ratio('doppler', w) >= 70 for w in words)
+        if has_eco:
+            return 'ECO'
+
+        # MG / Mamografía (incluye proyecciones mamográficas complementarias/magnificadas)
+        mg_tokens = {'mamografia', 'mamografias', 'tomosintesis', 'mamg'}
+        es_proy_mama = ('proyecciones' in words and bool(words & {'mama', 'mamaria', 'mamario', 'mamas'}))
+        if bool(words & mg_tokens) or es_proy_mama:
+            return 'MG'
+
         # RX / Radiografía (Evaluado con prioridad ante indicadores claros de radiografía)
         rx_tokens = {'rx', 'radiografia', 'proyecciones', 'proy', 'exp', 'fluoroscopia', 'panoramica'}
         has_rx = bool(words & rx_tokens) or bool(re.search(r'\br\s*x\b', t))
         if has_rx:
             return 'RX'
 
-        # ECO / Ecotomografía
-        # 'us' solo se considera si no hay indicadores de RX para evitar falsos positivos
+        # 'us' solo se considera si no hay indicadores de RX/MG para evitar falsos positivos
         # con columnas/estados del PACS (ej: 'CRISM US N')
-        eco_tokens = {'eco', 'ecografia', 'ecotomografia', 'ultrasonido', 'doppler', 'coppler', 'eoppler', 'dopler', 'doopler', 'oppler', 'cappler', 'goppler', 'toppler'}
-        has_eco = bool(words & eco_tokens) or any(fuzz.ratio('doppler', w) >= 70 for w in words)
-        if has_eco:
-            return 'ECO'
         if 'us' in words and not has_rx:
             return 'ECO'
 
