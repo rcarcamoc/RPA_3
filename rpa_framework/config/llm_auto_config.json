@@ -3,6 +3,6 @@
     "frequency": "cada_6h",
     "scheduled_hour": 3,
     "auto_apply": true,
-    "last_run_timestamp": "2026-10-25 04:32:33",
+    "last_run_timestamp": "2026-10-26 16:34:19",
     "last_status": "✅ Éxito (5/5 online)"
 }

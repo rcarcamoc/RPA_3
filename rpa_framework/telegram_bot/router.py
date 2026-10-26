@@ -402,11 +402,21 @@ def procesar_callback_query(callback_query):
             import mysql.connector
             conn = mysql.connector.connect(host="localhost", user="root", password="", database="ris")
             cursor = conn.cursor()
-            cursor.execute("UPDATE registro_acciones SET estado_notificacion = 'Gestionado', fecha_actualizacion_notificacion = NOW() WHERE id = %s", (record_id,))
+            cursor.execute("""
+                UPDATE registro_acciones 
+                SET estado = CASE 
+                        WHEN estado = 'Error' THEN 'Aprobacion_Pendiente' 
+                        ELSE estado 
+                    END,
+                    estado_notificacion = 'Gestionado', 
+                    fecha_actualizacion_notificacion = NOW(),
+                    observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Revisado y Gestionado]')
+                WHERE id = %s
+            """, (record_id,))
             conn.commit()
             conn.close()
 
-            responder_callback(cb_id, text="Estado actualizado a gestionado ✅")
+            responder_callback(cb_id, text="Estado actualizado a gestionado (Aprobación Pendiente) ✅")
             new_markup = {"inline_keyboard": [[{"text": "Gestionado ✅", "callback_data": "ya_gestionado"}]]}
             editar_mensaje(chat_id, msg_id, callback_query["message"].get("text", "") or "Incidente gestionado", reply_markup=new_markup)
         except Exception as e:
@@ -421,7 +431,7 @@ def procesar_callback_query(callback_query):
             cursor.execute("""
                 UPDATE registro_acciones 
                 SET estado = 'Terminado - Addendum', 
-                    estado_notificacion = 'Gestionado', 
+                    estado_notificacion = 'Addendum', 
                     fecha_actualizacion_notificacion = NOW(),
                     observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Addendum]') 
                 WHERE id = %s
@@ -444,7 +454,7 @@ def procesar_callback_query(callback_query):
             cursor.execute("""
                 UPDATE registro_acciones 
                 SET estado = 'Terminado - Ya Ingresado', 
-                    estado_notificacion = 'Gestionado', 
+                    estado_notificacion = 'Ya Ingresado', 
                     fecha_actualizacion_notificacion = NOW(),
                     observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Ya Ingresado]') 
                 WHERE id = %s

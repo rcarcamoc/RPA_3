@@ -71,11 +71,11 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "minimaxai/minimax-m3.1-flash",                           # Primario — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 1 — Validado OK
-   "openrouter/free",                                        # Fallback 2 — Validado OK
-   "dots-studio/dots-3-note-preview:free",                   # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 4 — Validado OK
+   "google/gemma-4-26b-a4b-it:free",                         # Primario - Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 1 - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 - Validado OK
+   "openrouter/free",                                        # Fallback 3 - Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 4 - Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
