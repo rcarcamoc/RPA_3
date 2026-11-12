@@ -71,11 +71,13 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "google/gemma-4-26b-a4b-it:free",                         # Primario - Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 1 - Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 - Validado OK
-   "openrouter/free",                                        # Fallback 3 - Validado OK
-   "dots-studio/dots-3-note-preview:free",                   # Fallback 4 - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Primario — Validado OK
+   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 1 — Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 — Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 3 — Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 4 — Validado OK
+   "baidu/ernie-5.5-flash-preview:free",                     # Fallback 5 — Validado OK
+   "openrouter/free",                                        # Fallback 6 — Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
@@ -83,7 +85,7 @@ OCR_DEFAULT_MODELS = ['qwen2.5:3b'] + list(BASE_LLM_MODELS)
 
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
-    "dots-studio/dots-3-note-preview:free",
+    "baidu/ernie-5.5-flash-preview:free",
     "openrouter/free",
 ]
 
@@ -105,7 +107,7 @@ LLM_DEFAULT_TIMEOUT = 15  # 15s máximo para no bloquear ejecuciones en APIs ca�
 # ---------------------------------------------------------------------------
 # DB Config (local, sin contraseña — entorno de producción controlado)
 # ---------------------------------------------------------------------------
-_DB_CONFIG = dict(host='localhost', user='root', password='', database='ris',
+_DB_CONFIG = dict(host='localhost', user='root', password='', database='ris', charset='utf8mb4',
                   connect_timeout=2)
 
 

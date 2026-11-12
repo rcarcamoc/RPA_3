@@ -265,7 +265,7 @@ def enviar_reporte_excel_por_periodo(chat_id, periodo):
                 if addendums > 0:
                     caption += f"   ├ 📝 Addendum: <b>{addendums}</b>\n"
                 if ya_ingresados > 0:
-                    caption += f"   └ 🔁 Ya Ingresado: <b>{ya_ingresados}</b>\n"
+                    caption += f"   └ 🔁 Ya Aprobado: <b>{ya_ingresados}</b>\n"
             else:
                 caption += "• 🟢 <b>Exitosos (Total):</b> <b>0</b>\n"
 

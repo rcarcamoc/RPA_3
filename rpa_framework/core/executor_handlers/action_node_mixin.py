@@ -353,6 +353,11 @@ class ActionNodeMixin:
                 self.no_records_found = True
                 self.should_stop = True
                 return None
+            elif returncode == 10:
+                self.logger.log(f"ℹ️ Script finalizado (código 10): Caso informativo (Ya Aprobado / Addendum en PACS). Deteniendo flujo de forma limpia (exitoso).")
+                self.case_already_approved = True
+                self.should_stop = True
+                return None
             elif any(k in str(node.label).lower() for k in ["vpn"]) or any(k in str(node.script).lower() for k in ["vpn"]):
                 self.logger.log(f"ℹ️ Verificación VPN finalizada sin conexión (código {returncode}). Tratando como 'sin registros para trabajar'. Deteniendo flujo de forma limpia.")
                 try:

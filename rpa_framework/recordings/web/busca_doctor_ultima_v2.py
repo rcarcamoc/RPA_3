@@ -57,11 +57,17 @@ class BuscadorDoctorSeleniumV2:
 
     def conectar_navegador(self):
         try:
-            options = ChromeOptions()
-            options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
-            self.driver = webdriver.Chrome(options=options)
+            try:
+                from utils.chrome_session import connect_or_launch_rpa_chrome
+            except ImportError:
+                from rpa_framework.utils.chrome_session import connect_or_launch_rpa_chrome
+            self.driver = connect_or_launch_rpa_chrome(
+                port=9222,
+                allow_launch=False,
+                expected_url_substr="ris.chile.telemedicina.com",
+            )
             self.wait = WebDriverWait(self.driver, 8)
-            logger.info("✓ Conectado a Chrome en puerto 9222")
+            logger.info("? Conectado a Chrome en puerto 9222")
         except Exception as e:
             logger.error(f"✗ Error al conectar al navegador: {e}")
             raise

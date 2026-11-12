@@ -80,7 +80,12 @@ class SubworkflowNodeMixin:
             
             status = result.get("status") if isinstance(result, dict) else "unknown"
             is_ext = self._external_stop or getattr(nested_executor, '_external_stop', False)
-            if status == "no_records":
+            if status == "already_approved" or getattr(nested_executor, 'case_already_approved', False):
+                self.logger.log("ℹ️ Sub-workflow finalizado: Caso informativo (Ya Aprobado / Addendum). Iteración completada con éxito.")
+                self.case_already_approved = True
+                self.should_stop = True
+                return None
+            elif status == "no_records":
                 self.logger.log("ℹ️ Sub-workflow finalizado sin registros para trabajar. Terminando flujo actual de forma limpia.")
                 self.no_records_found = True
                 self.should_stop = True

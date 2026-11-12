@@ -174,6 +174,8 @@ ENCONTRADO (línea completa OCR): "{ocr_text}"
      Por protocolo clínico institucional en centros de salud, la ecografía mamaria y la mamografía son bilaterales por defecto. Si el examen buscado es 'Ecotomografía mamaria bilateral' o 'Mamografía bilateral' y en el PACS figura simplemente 'Ecotomografía Mamaria' o 'Mamografía' (sin especificar derecha ni izquierda) o aberraciones como 'IiMamografía Bilate' / 'Mamografía Bilater..', DEBES considerarlo EQUIVALENTE (es_match: true), dado que cuando es unilateral el PACS siempre especifica expresamente el lado ('Derecha' o 'Izquierda'). NO descartes por lateralidad si ambos son mamografía bilateral o mamografía general.
    - **PROYECCIONES COMPLEMENTARIAS DE MAMA (MAMOGRAFÍA)**:
      En radiología mamaria, las órdenes de 'Proyecciones complementarias, en mama derecha / izquierda' o 'Proyecciones adicionales' corresponden en el PACS a estudios nombrados como 'Proyección Magnificada', 'Proyección Focalizada', 'Cono de Compresión' o 'Proyección Tangencial' con la misma lateralidad (ej. 'Proyección Magnificada Mama Derecha' == 'Proyecciones complementarias, en mama derecha'). DEBES considerarlas CLÍNICAMENTE EQUIVALENTES (es_match: true).
+   - **ECOTOMOGRAFÍA ABDOMINAL / ECOTOMOGRAFÍA DE ABDOMEN**:
+     'ECOTOMOGRAFÍA ABDOMINAL' es CLÍNICAMENTE EQUIVALENTE a 'Ecotomografía de Abdomen', 'Ecotomografia Abdomen', 'Eco Abdomen', 'Ecotomogratia de Abdomen' (aberración OCR habitual donde 'fi' se lee 'ti' o 'r') o 'US Abdomen'. La cavidad abdominal NO posee lateralidad izquierda/derecha. Si ambos corresponden a ecotomografía abdominal, DEBES considerarlo EQUIVALENTE (es_match: true).
 
 4. **CORRECCIÓN OCR PERMITIDA** (errores de carácter simples y fechas PACS):
    - Dígito '0' leído como '9' en meses (ej: '15-19-2026' corresponde clínicamente al 15 de Octubre '15-10-2026'). NO descartes si día y año coinciden.
@@ -330,11 +332,11 @@ RESPONDE SOLO EN FORMATO JSON:
                     if is_match and confianza >= LLM_MIN_CONFIDENCE:
                         logger.info(f"🏆 [Cascada] Coincidencia positiva confirmada por {model_id} en {elapsed_ms}ms.")
                         return True
-                    elif not is_match and (confianza >= 0.85 or confianza == 0.0):
+                    elif not is_match and provider != "ollama" and (confianza >= 0.85 or confianza == 0.0):
                         logger.info(f"🛑 [Cascada] Descarte certero confirmado por {model_id} en {elapsed_ms}ms. Rechazando candidato.")
                         return False
                     else:
-                        logger.info(f"⚖️ [Cascada] Decisión dudosa ({confianza:.2f}) de {model_id}. Escalando a siguiente Tier...")
+                        logger.info(f"⚖️ [Cascada] Decisión negativa o dudosa de {model_id} (conf={confianza:.2f}, provider={provider}). Escalando a siguiente Tier de mayor capacidad...")
                         continue
 
                 except Exception as e:

@@ -65,12 +65,29 @@ def get_menu_revalidar_markup(registros):
     """
     Genera el teclado inline para seleccionar cuál de los registros en error
     debe quedar en estado 'En Proceso' y reprocesarse en PACS.
+    Muestra en cada botón: número de caso, fecha/hora de ejecución, nombre del doctor y examen.
     """
     keyboard = []
     for reg in registros:
         r_id = reg.get("id")
-        doc = str(reg.get("numero_documento") or "--").strip()
-        btn_text = f"🔄 Reprocesar #{r_id} (Doc: {doc})"
+
+        f_dt = reg.get("inicio")
+        if hasattr(f_dt, "strftime"):
+            inicio = f_dt.strftime("%d/%m/%Y %H:%M:%S")
+        else:
+            inicio = str(f_dt or "--").strip()
+        if not inicio or inicio.lower() == "none":
+            inicio = "--"
+
+        doctor = str(reg.get("doctor") or reg.get("doctor_detectado") or reg.get("User") or "--").strip()
+        if not doctor or doctor.lower() == "none":
+            doctor = "--"
+
+        examen = str(reg.get("examen") or "--").strip()
+        if not examen or examen.lower() == "none":
+            examen = "--"
+
+        btn_text = f"#{r_id} | {inicio} | {doctor} | {examen}"
         keyboard.append([{"text": btn_text, "callback_data": f"reproc_pacs_{r_id}"}])
 
     keyboard.append([

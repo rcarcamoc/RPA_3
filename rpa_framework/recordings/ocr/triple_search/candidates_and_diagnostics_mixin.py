@@ -202,15 +202,17 @@ class TripleSearchCandidatesMixin:
                 f"pero el estudio en PACS es diferente (Buscado: '{target_diag}' | En PACS: '{examenes_str}')"
             )
 
-        # 2. Si NO hubo candidatos: Analizar si fue por FECHA, ESTADO HECHO o si ya está APROBADO (Ya Validado)
+        # 2. Si NO hubo candidatos: Analizar si fue por FECHA, ESTADO HECHO o si ya está APROBADO (Ya Validado) o ADDENDUM
         filas_con_fecha = []
         filas_ya_validadas = []
+        filas_addendum = []
         estados_excluidos_encontrados = []
         ESTADOS_KEYWORDS = [
             'cancelado', 'cancelada', 'anulado', 'anulada',
             'agendado', 'agendada', 'citado', 'citada',
             'ordenado', 'ordenada', 'en espera', 'solicitado', 'solicitada',
-            'aprobado', 'aprobada', 'preliminar', 'informado', 'informada'
+            'aprobado', 'aprobada', 'preliminar', 'informado', 'informada',
+            'addendum', 'adenda', 'addenda'
         ]
 
         header_max_y = getattr(self, 'HEADER_MAX_Y', 42)
@@ -239,20 +241,21 @@ class TripleSearchCandidatesMixin:
                     'text': r_text,
                     'estados': estados_fila
                 })
-                # REGLA EXCLUYENTE PARA 'YA VALIDADO':
-                # Dado que todos los reportes históricos quedan en 'Aprobado' por defecto,
-                # SOLO se clasifica como 'Ya Validado' si en la MISMA FILA aparecen simultáneamente:
-                #   1. Estado 'Aprobado' / 'Aprobada' (sin estados pendientes/agendados/ordenados)
+                # REGLA EXCLUYENTE PARA 'YA VALIDADO' / 'ADDENDUM':
+                # Dado que todos los reportes históricos quedan en 'Aprobado' o 'Addendum' por defecto,
+                # SOLO se clasifica como 'Ya Validado' o 'Addendum' si en la MISMA FILA aparecen simultáneamente:
+                #   1. Estado 'Aprobado' / 'Aprobada' / 'Addendum' / 'Adenda' (sin estados pendientes/agendados/ordenados)
                 #   2. La Fecha Agendada exacta del registro (has_date=True y score_fecha >= 80)
                 #   3. El Diagnóstico/Examen registrado (validado por normalización médica + Auditor Clínico)
                 tiene_aprobado = any(est in ('APROBADO', 'APROBADA') for est in estados_fila)
+                tiene_addendum = any(est in ('ADDENDUM', 'ADENDA', 'ADDENDA') for est in estados_fila) or ('addendum' in r_norm or 'adenda' in r_norm)
                 tiene_otro_estado = any(
                     est in ('AGENDADO', 'AGENDADA', 'ORDENADO', 'ORDENADA', 'CANCELADO', 'CANCELADA', 'ANULADO', 'ANULADA')
                     for est in estados_fila
                 )
-                if tiene_aprobado and not tiene_otro_estado and target_diag:
+                if (tiene_aprobado or tiene_addendum) and not tiene_otro_estado and target_diag:
                     frag_estudio = self.extraer_fragmento_estudio(r_text)
-                    frag_estudio_clean = re.sub(r'\b(?:aprobado[as]?|normal|urgente)\b', '', frag_estudio, flags=re.IGNORECASE).strip()
+                    frag_estudio_clean = re.sub(r'\b(?:aprobado[as]?|addendum|adenda|normal|urgente)\b', '', frag_estudio, flags=re.IGNORECASE).strip()
                     if len(frag_estudio_clean) >= 4 and frag_estudio_clean.strip() != r_text.strip():
                         target_med = self.normalizar_terminologia_medica(target_diag)
                         frag_med = self.normalizar_terminologia_medica(frag_estudio_clean)
@@ -285,9 +288,19 @@ class TripleSearchCandidatesMixin:
                                 auditor_ok = self.verificar_lateralidad(target_diag, r_text)
 
                             if auditor_ok:
-                                filas_ya_validadas.append(r_text)
+                                if tiene_addendum:
+                                    filas_addendum.append(r_text)
+                                else:
+                                    filas_ya_validadas.append(r_text)
             
             estados_excluidos_encontrados.extend(estados_fila)
+
+        if filas_addendum:
+            fila_ej = filas_addendum[0][:100]
+            return (
+                f"Addendum: El examen '{target_diag}' con fecha agendada '{target_fecha_str}' "
+                f"figura en estado 'Addendum' en PACS (Fila detectada: '{fila_ej}')"
+            )
 
         if filas_ya_validadas:
             fila_ej = filas_ya_validadas[0][:100]
@@ -323,30 +336,118 @@ class TripleSearchCandidatesMixin:
         """
         Genera un resumen comparativo de las detecciones de Tesseract y PaddleOCR
         para ser enviado en la alerta de Telegram ante fallos de búsqueda.
+        Muestra únicamente los datos clínicamente relevantes: [Estado] Fecha — Examen.
         """
+        HEADER_KEYWORDS = [
+            "id paciente", "fecha nac", "nro orden", "nro. de orden",
+            "nro visita", "nro. visita", "ultima actualiz", "última actualiz"
+        ]
+        ESTADOS = [
+            "examen hecho", "hecho", "realizado", "realizada",
+            "aprobado", "aprobada", "preliminar", "informado", "informada",
+            "addendum", "adenda", "addenda",
+            "cancelado", "cancelada", "anulado", "anulada",
+            "agendado", "agendada", "citado", "citada",
+            "ordenado", "ordenada", "en espera", "solicitado", "solicitada",
+            "en proceso", "pendiente"
+        ]
+        ESTADOS_REGEX = r'\b(?:' + '|'.join([re.escape(e) for e in sorted(ESTADOS, key=len, reverse=True)]) + r')\b'
+        FECHA_REGEX = r'\b(\d{2}[-/]\d{2}[-/]\d{2,4})\b'
+
+        def parse_study_row(raw_text):
+            text_clean = raw_text.strip()
+            norm_lower = text_clean.lower()
+            if any(hk in norm_lower for hk in HEADER_KEYWORDS):
+                return None
+
+            match_fecha = re.search(FECHA_REGEX, text_clean)
+            fecha = match_fecha.group(1).replace('/', '-') if match_fecha else None
+
+            match_estado = re.search(ESTADOS_REGEX, text_clean, re.IGNORECASE)
+            estado = match_estado.group(0).title() if match_estado else None
+
+            if not estado and not fecha:
+                return None
+
+            examen = ""
+            if match_estado and match_fecha:
+                start_pos = match_estado.end()
+                end_pos = match_fecha.start()
+                if start_pos < end_pos:
+                    examen = text_clean[start_pos:end_pos].strip()
+                elif match_fecha.end() < match_estado.start():
+                    examen = text_clean[match_fecha.end():match_estado.start()].strip()
+            elif match_fecha:
+                antes_fecha = text_clean[:match_fecha.start()].strip()
+                if antes_fecha:
+                    examen = antes_fecha
+            elif match_estado:
+                despues_estado = text_clean[match_estado.end():].strip()
+                examen = re.sub(r'\b\d{6,}\b.*', '', despues_estado).strip()
+
+            examen = re.sub(r'^[_\-–—:\.\s]+|[_\-–—:\.\s]+$', '', examen)
+            examen = re.sub(r'\b(?:normal|urgente|prioridad)\b', '', examen, flags=re.IGNORECASE).strip()
+
+            partes = []
+            if estado:
+                partes.append(f"[{estado}]")
+            if fecha:
+                partes.append(fecha)
+
+            res = " ".join(partes)
+            if examen and len(examen) >= 3:
+                res = f"{res} — {examen}" if res else examen
+
+            return res if res.strip() else None
+
         def format_rows(rows_data):
             if not rows_data:
                 return []
             formatted = []
+            seen = set()
+            header_max_y = getattr(self, 'HEADER_MAX_Y', 45)
+
             for r in rows_data:
-                items = sorted(r.get('items', []), key=lambda x: x.get('center', {}).get('x', 0))
-                txt = " ".join([it.get('text', '') for it in items if it.get('text', '').strip()])
                 y = int(r.get('y_center', 0))
-                if txt.strip():
-                    formatted.append(f"Y={y}: {txt}")
-            keywords = ["hecho", "realizado", "aprobado", "cancelado", "agendado"]
+                if y < header_max_y:
+                    continue
+                items = sorted(r.get('items', []), key=lambda x: x.get('center', {}).get('x', 0))
+                txt = " ".join([it.get('text', '') for it in items if it.get('text', '').strip()]).strip()
+                if not txt:
+                    continue
+
+                parsed = parse_study_row(txt)
+                if parsed and parsed not in seen:
+                    seen.add(parsed)
+                    formatted.append(parsed)
+
+            if not formatted:
+                for r in rows_data:
+                    y = int(r.get('y_center', 0))
+                    if y < header_max_y:
+                        continue
+                    items = sorted(r.get('items', []), key=lambda x: x.get('center', {}).get('x', 0))
+                    txt = " ".join([it.get('text', '') for it in items if it.get('text', '').strip()]).strip()
+                    if txt and not any(hk in txt.lower() for hk in HEADER_KEYWORDS) and txt not in seen:
+                        seen.add(txt)
+                        formatted.append(txt[:80])
+
+            keywords = []
             if target_fecha_str:
                 d_p = target_fecha_str.split("-")
                 if len(d_p) == 3:
-                    keywords.extend([f"{d_p[0]}-{d_p[1]}", f"{d_p[1]}/{d_p[0]}", f"{d_p[0]}/{d_p[1]}", d_p[0], d_p[2]])
+                    keywords.extend([f"{d_p[0]}-{d_p[1]}", f"{d_p[1]}-{d_p[0]}", target_fecha_str])
+                else:
+                    keywords.append(target_fecha_str)
             if target_diag:
-                words = [w.lower() for w in target_diag.split() if len(w) > 3]
-                keywords.extend(words)
+                keywords.extend([w.lower() for w in target_diag.split() if len(w) > 3])
 
-            relevantes = [r for r in formatted if any(k.lower() in r.lower() for k in keywords)]
-            otros = [r for r in formatted if r not in relevantes]
-            res = (relevantes + otros)[:5]
-            return [r[:120] for r in res]
+            if keywords:
+                relevantes = [f for f in formatted if any(k.lower() in f.lower() for k in keywords)]
+                otros = [f for f in formatted if f not in relevantes]
+                formatted = relevantes + otros
+
+            return [f[:100] for f in formatted[:5]]
 
         paddle_list = format_rows(getattr(self, 'last_paddle_rows_data', []))
         if not paddle_list and getattr(self, 'last_img_bgr', None) is not None:

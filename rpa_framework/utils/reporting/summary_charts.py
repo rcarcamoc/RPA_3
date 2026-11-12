@@ -56,7 +56,7 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
             if addendum_h > 0:
                 texto += f"   ├ 📝 Addendum: <b>{addendum_h}</b>\n"
             if ya_ingresado_h > 0:
-                texto += f"   └ 🔁 Ya ingresado: <b>{ya_ingresado_h}</b>\n"
+                texto += f"   └ 🔁 Ya Aprobado: <b>{ya_ingresado_h}</b>\n"
         if proceso_h > 0:
             texto += f"• ⏳ En ejecución: <b>{proceso_h}</b>\n"
         if errores_h > 0:
@@ -92,7 +92,7 @@ def generar_texto_resumen_hourly(df_hora, df_dia, periodo_str):
             if addendum_d > 0:
                 texto += f"   ├ 📝 Addendum: <b>{addendum_d}</b> <i>(reclasificados)</i>\n"
             if ya_ingresado_d > 0:
-                texto += f"   └ 🔁 Ya ingresado: <b>{ya_ingresado_d}</b> <i>(reclasificados)</i>\n"
+                texto += f"   └ 🔁 Ya Aprobado: <b>{ya_ingresado_d}</b> <i>(reclasificados)</i>\n"
 
         base_tasa = completados_d + errores_d
         tasa = (completados_d / base_tasa * 100) if base_tasa > 0 else 100.0

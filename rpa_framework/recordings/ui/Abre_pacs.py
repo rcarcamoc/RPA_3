@@ -1,3 +1,20 @@
+# Early attach to WinSta0\Default before any GUI/pywinauto imports
+import sys
+import os
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwinsta = user32.OpenWindowStationW('WinSta0', False, 0x037F)
+        if hwinsta:
+            user32.SetProcessWindowStation(hwinsta)
+            hdesk = user32.OpenDesktopW('Default', 0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
+    except Exception:
+        pass
+
 """
 Script RPA: Cierra TODOS los programas Carestream + Abre Vue PACS limpio
 - Carestream Vue PACS (mp.exe)
@@ -246,7 +263,8 @@ def abrir_vue_pacs():
     logger.info("Esperando que las ventanas de Carestream Vue PACS se inicialicen...")
     todas_pacs = []
     start_wait = time.time()
-    while (time.time() - start_wait) < 20:
+    TIMEOUT_PACS = 60
+    while (time.time() - start_wait) < TIMEOUT_PACS:
         for titulo in TITULOS_CARESTREAM:
             try:
                 ventanas = fw.find_windows(title_re=re.compile(f".*{re.escape(titulo)}.*", re.I))
@@ -255,12 +273,26 @@ def abrir_vue_pacs():
                         todas_pacs.append(h)
             except Exception:
                 pass
+        if not todas_pacs:
+            try:
+                import win32gui
+                def _find_cb(h, _):
+                    if win32gui.IsWindow(h) and win32gui.IsWindowVisible(h):
+                        txt = win32gui.GetWindowText(h)
+                        for titulo in TITULOS_CARESTREAM:
+                            if titulo.lower() in txt.lower():
+                                if h not in todas_pacs:
+                                    todas_pacs.append(h)
+                    return True
+                win32gui.EnumWindows(_find_cb, None)
+            except Exception:
+                pass
         if todas_pacs:
             break
         time.sleep(1)
 
     if not todas_pacs:
-        logger.error("PACS demoró demasiado en abrir (> 20s). No se detectaron ventanas de Carestream.")
+        logger.error("PACS demoró demasiado en abrir (> 60s). No se detectaron ventanas de Carestream.")
         raise Exception("Timeout apertura PACS")
 
     logger.info(f"   Detectadas {len(todas_pacs)} ventana(s) de Carestream: {todas_pacs}")

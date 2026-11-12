@@ -77,7 +77,7 @@ class OCREngineBackendsMixin:
         try:
             from paddleocr import PaddleOCR
             lang = 'es' if self.language in ['es', 'spa'] else self.language
-            det_limit = getattr(self, 'det_limit_side_len', 1440)
+            det_limit = getattr(self, 'det_limit_side_len', 2048)
             self.paddle_ocr = PaddleOCR(
                 lang=lang,
                 use_doc_orientation_classify=False,

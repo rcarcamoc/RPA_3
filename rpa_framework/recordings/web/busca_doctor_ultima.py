@@ -46,10 +46,16 @@ class BuscadorDoctorSelenium:
         try:
             if self.usar_navegador_existente:
                 logger.info("Conectando al navegador existente en puerto 9222...")
-                options = ChromeOptions()
-                options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
-                self.driver = webdriver.Chrome(options=options)
-                logger.info("✓ Conectado al navegador existente")
+                try:
+                    from utils.chrome_session import connect_or_launch_rpa_chrome
+                except ImportError:
+                    from rpa_framework.utils.chrome_session import connect_or_launch_rpa_chrome
+                self.driver = connect_or_launch_rpa_chrome(
+                    port=9222,
+                    allow_launch=False,
+                    expected_url_substr="ris.chile.telemedicina.com",
+                )
+                logger.info("? Conectado al navegador existente")
             else:
                 logger.info("Abriendo nuevo navegador...")
                 options = ChromeOptions()
@@ -471,59 +477,29 @@ class BuscadorBaseDatos:
 
 
 def espera_con_countdown(segundos: int, mensaje: str):
-    """Muestra una ventana flotante con una cuenta regresiva."""
-    try:
-        import tkinter as tk
-        
-        root = tk.Tk()
-        root.title("RPA Wait")
-        root.attributes("-topmost", True)
-        
-        # Centrar ligeramente arriba a la izquierda pero no en la esquina total
-        root.geometry("350x130+100+100") 
-        root.overrideredirect(True) # Ventana sin bordes
-        
-        # Colores y bordes
-        root.configure(bg='#1e272e', highlightbackground="#3498db", highlightthickness=2)
-        
-        lbl_msg = tk.Label(root, text=mensaje, fg='white', bg='#1e272e', font=('Segoe UI', 11, 'bold'), wraplength=320)
-        lbl_msg.pack(pady=(15, 5))
-        
-        lbl_timer = tk.Label(root, text="", fg='#f1c40f', bg='#1e272e', font=('Consolas', 28, 'bold'))
-        lbl_timer.pack(pady=5)
-        
-        # Permitir mover la ventana arrastrando
-        def start_move(event):
-            root.x = event.x
-            root.y = event.y
-        def stop_move(event):
-            root.x = None
-            root.y = None
-        def on_move(event):
-            deltax = event.x - root.x
-            deltay = event.y - root.y
-            x = root.winfo_x() + deltax
-            y = root.winfo_y() + deltay
-            root.geometry(f"+{x}+{y}")
-            
-        root.bind("<Button-1>", start_move)
-        root.bind("<B1-Motion>", on_move)
-        
-        def update_timer(remaining):
-            if remaining <= 0:
-                root.destroy()
-                return
-            
+    """
+    Espera cooperativa y cancelable segundo a segundo.
+    Evita bloqueos de Tkinter en entornos desatendidos y reacciona de inmediato
+    ante cualquier señal de parada (stop_signal.txt).
+    """
+    from pathlib import Path
+    import time
+
+    stop_signal_file = Path(__file__).resolve().parent.parent.parent / "config" / "stop_signal.txt"
+    clean_msg = mensaje.replace("\n", " ").strip()
+    print(f"⏳ {clean_msg} ({segundos}s)...")
+
+    for remaining in range(segundos, 0, -1):
+        if stop_signal_file.exists():
+            print("🛑 Señal de parada detectada durante la espera. Cancelando inmediatamente.")
+            break
+
+        time.sleep(1)
+
+        # Log periódico cada 30 segundos o en los últimos 5 segundos
+        if remaining % 30 == 0 or remaining <= 5:
             mins, secs = divmod(remaining, 60)
-            lbl_timer.config(text=f"{mins:02d}:{secs:02d}")
-            root.after(1000, update_timer, remaining - 1)
-            
-        update_timer(segundos)
-        root.mainloop()
-    except Exception as e:
-        print(f"No se pudo mostrar el reloj en pantalla: {e}")
-        import time
-        time.sleep(segundos)
+            print(f"   ⏱️ Reintentando en: {mins:02d}:{secs:02d}")
 
 
 def main():

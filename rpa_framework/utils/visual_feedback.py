@@ -1,3 +1,12 @@
+try:
+    from rpa_framework.utils.screen_utils import attach_to_interactive_desktop
+except ImportError:
+    try:
+        from utils.screen_utils import attach_to_interactive_desktop
+    except ImportError:
+        def attach_to_interactive_desktop():
+            pass
+
 import time
 import threading
 import tkinter as tk
@@ -56,6 +65,7 @@ class VisualFeedback:
 
     def _draw_circle_thread(self, x, y, color, duration):
         try:
+            attach_to_interactive_desktop()
             # Crear ventana sin bordes
             root = tk.Tk()
             root.overrideredirect(True)
@@ -102,6 +112,7 @@ class VisualFeedback:
 
     def _draw_rect_thread(self, x, y, width, height, color, duration):
         try:
+            attach_to_interactive_desktop()
             root = tk.Tk()
             root.overrideredirect(True)
             root.attributes("-topmost", True)
@@ -138,6 +149,7 @@ class VisualFeedback:
 
     def _show_message_thread(self, text, duration):
         try:
+            attach_to_interactive_desktop()
             root = tk.Tk()
             root.overrideredirect(True)
             root.attributes("-topmost", True)
@@ -197,6 +209,7 @@ class VisualFeedback:
             def _create():
                 root = None
                 try:
+                    attach_to_interactive_desktop()
                     root = tk.Tk()
                     root.overrideredirect(True)
                     root.attributes("-topmost", True)
@@ -285,6 +298,7 @@ class VisualFeedback:
 
     def _show_countdown_thread(self, seconds, message):
         try:
+            attach_to_interactive_desktop()
             root = tk.Tk()
             root.overrideredirect(True)
             root.attributes("-topmost", True)
@@ -345,6 +359,7 @@ class VisualFeedback:
         Retorna True si se presiona el botón Yes (Reintentar), False si No (Cancelar).
         Es bloqueante en el hilo que lo llama.
         """
+        attach_to_interactive_desktop()
         result = {"value": False}
         
         def _on_click(val):
@@ -411,6 +426,7 @@ class VisualFeedback:
             "synonym":  str | ""      → texto ingresado por el usuario
           }
         """
+        attach_to_interactive_desktop()
         result = {"action": "cancel", "synonym": ""}
         # Usamos lista mutable para que los callbacks accedan al widget entry
         # después de crearlo (evita el problema de StringVar sin root en Python 3.13)

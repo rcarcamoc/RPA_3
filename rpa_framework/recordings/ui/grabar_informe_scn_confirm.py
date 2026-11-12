@@ -32,6 +32,14 @@ try:
 except ImportError:
     vf = None
 
+try:
+    from utils.screen_utils import safe_screenshot
+except ImportError:
+    try:
+        from rpa_framework.utils.screen_utils import safe_screenshot
+    except ImportError:
+        safe_screenshot = None
+
 
 def humanized_click(x, y, clicks=1, interval=0.1, hold_time=0.5):
     """
@@ -109,78 +117,103 @@ def guardar_debug_screenshot(screenshot_cv, info=None, suffix="", target_point=N
         pass
 
 
-def buscar_y_click_guardar(imagen_relativa=r"rpa_framework\utils\guardar_2.png", confidence_threshold=0.70):
+def buscar_y_click_guardar(imagenes_relativas=None, confidence_threshold=0.70):
     """
     Busca la imagen de referencia en pantalla y realiza el clic humanizado con offset.
+    Soporta múltiples plantillas (tema oscuro y claro).
     """
+    if imagenes_relativas is None:
+        imagenes_relativas = [
+            r"rpa_framework\utils\guardar_dark.png",  # Tema oscuro (actual)
+            r"rpa_framework\utils\guardar_2.png"     # Tema claro (legacy)
+        ]
+    elif isinstance(imagenes_relativas, str):
+        imagenes_relativas = [imagenes_relativas]
+
     base_path = r"c:\Desarrollo\RPA_3"
-    template_path = os.path.join(base_path, imagen_relativa)
-    
-    if not os.path.exists(template_path):
-        print(f"❌ No se encuentra la plantilla: {template_path}")
-        return False
 
-    template = cv2.imread(template_path)
-    if template is None:
-        print(f"❌ Error al leer la imagen: {template_path}")
-        return False
+    # Captura de pantalla resiliente (safe_screenshot o fallback pyautogui)
+    screen_cv = None
+    if safe_screenshot:
+        try:
+            pil_img = safe_screenshot()
+            if pil_img:
+                screen_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        except Exception as e_sct:
+            print(f"⚠️ Aviso safe_screenshot: {e_sct}")
 
-    original_h, original_w = template.shape[:2]
+    if screen_cv is None:
+        try:
+            screen = pyautogui.screenshot()
+            screen_np = np.array(screen)
+            screen_cv = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            print(f"❌ Error capturando pantalla: {e}")
+            return False
 
-    # Captura de pantalla
-    try:
-        screen = pyautogui.screenshot()
-        screen_np = np.array(screen)
-        screen_cv = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
-    except Exception as e:
-        print(f"❌ Error capturando pantalla: {e}")
-        return False
+    mejor_val = 0.0
+    mejor_bloque = None
+    mejor_tpl_nombre = "ninguna"
 
-    # Coincidencia de plantilla (Template Matching)
-    result = cv2.matchTemplate(screen_cv, template, cv2.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-    x, y = max_loc
+    for img_rel in imagenes_relativas:
+        template_path = os.path.join(base_path, img_rel)
+        if not os.path.exists(template_path):
+            continue
 
-    center_x = x + original_w / 2
-    center_y = y + original_h / 2
-    
-    # Ajuste: 90px a la izquierda del centro
-    target_x = center_x - 90
-    target_y = center_y
+        template = cv2.imread(template_path)
+        if template is None:
+            continue
 
-    bloque_info = (x, y, original_w, original_h, center_x, center_y)
+        original_h, original_w = template.shape[:2]
 
-    # 1. Confianza directa
-    if max_val >= confidence_threshold:
-        print(f"✅ Botón encontrado (Confianza: {max_val*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
-        if vf:
-            vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
-        
-        guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar", target_point=(target_x, target_y))
-        humanized_click(target_x, target_y, hold_time=1.0)
-        return True
+        # Coincidencia de plantilla (Template Matching)
+        result = cv2.matchTemplate(screen_cv, template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        x, y = max_loc
 
-    # 2. Doble confirmación para umbrales medios
-    elif max_val >= 0.20:
-        h_scr, w_scr = screen_cv.shape[:2]
-        crop = screen_cv[y:min(y + original_h, h_scr), x:min(x + original_w, w_scr)]
-        crop_resized = cv2.resize(crop, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
-        
-        diff = cv2.norm(crop_resized.astype(np.float32), template.astype(np.float32), cv2.NORM_L2)
-        max_possible = np.sqrt(original_w * original_h * 3) * 255.0
-        similitud = 1.0 - (diff / max_possible)
+        center_x = x + original_w / 2
+        center_y = y + original_h / 2
+        target_x = center_x - 90
+        target_y = center_y
 
-        if similitud >= 0.70:
-            print(f"✅ Botón confirmado tras 2da pasada ({similitud*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
+        bloque_info = (x, y, original_w, original_h, center_x, center_y)
+
+        if max_val > mejor_val:
+            mejor_val = max_val
+            mejor_bloque = bloque_info
+            mejor_tpl_nombre = os.path.basename(img_rel)
+
+        # 1. Confianza directa
+        if max_val >= confidence_threshold:
+            print(f"✅ Botón encontrado con '{os.path.basename(img_rel)}' (Confianza: {max_val*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
             if vf:
                 vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
-            
-            guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar_confirm2", target_point=(target_x, target_y))
+
+            guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar", target_point=(target_x, target_y))
             humanized_click(target_x, target_y, hold_time=1.0)
             return True
 
-    guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="failed_not_found")
-    print(f"❌ No se encontró el botón de guardar en pantalla (Max confianza: {max_val*100:.2f}%)")
+        # 2. Doble confirmación para umbrales medios
+        elif max_val >= 0.20:
+            h_scr, w_scr = screen_cv.shape[:2]
+            crop = screen_cv[y:min(y + original_h, h_scr), x:min(x + original_w, w_scr)]
+            crop_resized = cv2.resize(crop, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+
+            diff = cv2.norm(crop_resized.astype(np.float32), template.astype(np.float32), cv2.NORM_L2)
+            max_possible = np.sqrt(original_w * original_h * 3) * 255.0
+            similitud = 1.0 - (diff / max_possible)
+
+            if similitud >= 0.70:
+                print(f"✅ Botón confirmado tras 2da pasada con '{os.path.basename(img_rel)}' ({similitud*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
+                if vf:
+                    vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
+
+                guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar_confirm2", target_point=(target_x, target_y))
+                humanized_click(target_x, target_y, hold_time=1.0)
+                return True
+
+    guardar_debug_screenshot(screen_cv, info=mejor_bloque, suffix="failed_not_found")
+    print(f"❌ No se encontró el botón de guardar en pantalla (Mejor: '{mejor_tpl_nombre}' con {mejor_val*100:.2f}%)")
     return False
 
 

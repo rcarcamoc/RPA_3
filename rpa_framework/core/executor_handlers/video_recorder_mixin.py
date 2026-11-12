@@ -2,6 +2,7 @@
 Mixin para gestión de grabación de pantalla y envío de videos de error a Telegram.
 """
 
+import re
 from datetime import datetime
 from typing import Optional
 import mysql.connector
@@ -14,6 +15,24 @@ except ImportError:
     except ImportError:
         def get_screen_resolution():
             return "1920x1080"
+
+
+def _limpiar_motivo_error(error_desc: str) -> str:
+    """Elimina prefijos anidados repetitivos del motor de workflows para dejar la causa concreta."""
+    texto = str(error_desc or "").strip()
+    patrones_a_eliminar = [
+        r"^Iteración\s+\d+\s*\([^)]*\)\s*:\s*",
+        r"Fallo en workflow de loop:\s*",
+        r"Error en ejecución:\s*",
+        r"Fallo en sub-workflow:\s*",
+        r"Error en sub-workflow:\s*",
+        r"Error ejecutando nodo workflow:\s*",
+        r"Falla inesperada en la fase\s+['\"][^'\"]+['\"]\s*:\s*",
+        r"El asistente no pudo completar la tarea en la fase\s+['\"][^'\"]+['\"]\s*\.?\s*",
+    ]
+    for pat in patrones_a_eliminar:
+        texto = re.sub(pat, "", texto, flags=re.IGNORECASE).strip()
+    return texto or str(error_desc)
 
 
 class VideoRecorderMixin:
@@ -49,16 +68,22 @@ class VideoRecorderMixin:
                         from rpa_framework.utils.telegram_manager import enviar_video_todos
 
                     rec_id = None
+                    obs_bd = None
+                    doc_bd = None
+                    examen_bd = None
                     try:
                         _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
                         _cur = _conn.cursor(dictionary=True)
-                        _cur.execute("SELECT id FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
+                        _cur.execute("SELECT id, observacion, numero_documento, examen FROM ris.registro_acciones WHERE estado = 'En Proceso' ORDER BY id DESC LIMIT 1")
                         _r = _cur.fetchone()
                         if not _r:
-                            _cur.execute("SELECT id FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
+                            _cur.execute("SELECT id, observacion, numero_documento, examen FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
                             _r = _cur.fetchone()
                         if _r:
                             rec_id = _r.get('id')
+                            obs_bd = _r.get('observacion')
+                            doc_bd = _r.get('numero_documento')
+                            examen_bd = _r.get('examen')
                         _cur.close()
                         _conn.close()
                     except Exception:
@@ -66,7 +91,27 @@ class VideoRecorderMixin:
 
                     screen_res = self.context.get("screen_resolution") or get_screen_resolution()
                     id_txt = f"\n🆔 <b>ID Fila BD:</b> <code>{rec_id}</code>" if rec_id else ""
-                    caption = f"❌ <b>Error en Workflow: {raw_name}</b>{id_txt}\n🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n<b>Motivo:</b> {str(error_desc)[:250]}"
+                    info_extra = ""
+                    if doc_bd or examen_bd:
+                        partes = []
+                        if doc_bd: partes.append(f"📄 <b>Doc:</b> <code>{doc_bd}</code>")
+                        if examen_bd: partes.append(f"🩺 <b>Examen:</b> <code>{examen_bd}</code>")
+                        info_extra = "\n" + " | ".join(partes)
+
+                    # Priorizar la observación concreta y descriptiva registrada en BD
+                    if obs_bd and len(str(obs_bd).strip()) > 5:
+                        motivo_final = str(obs_bd).strip()
+                    else:
+                        motivo_final = _limpiar_motivo_error(str(error_desc))
+
+                    if len(motivo_final) > 550:
+                        motivo_final = motivo_final[:547] + "..."
+
+                    caption = (
+                        f"❌ <b>Error en Workflow: {raw_name}</b>{id_txt}{info_extra}\n"
+                        f"🖥️ <b>Resolución:</b> <code>{screen_res}</code>\n\n"
+                        f"📋 <b>Problema:</b>\n{motivo_final}"
+                    )
                     enviar_video_todos(saved_video_path, caption=caption)
                     self.logger.log("📱 Grabación de video del error enviada a Telegram")
                 except Exception as tel_e:

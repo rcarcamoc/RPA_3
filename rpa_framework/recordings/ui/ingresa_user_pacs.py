@@ -1,3 +1,20 @@
+# Early attach to WinSta0\Default before any GUI/pywinauto imports
+import sys
+import os
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwinsta = user32.OpenWindowStationW('WinSta0', False, 0x037F)
+        if hwinsta:
+            user32.SetProcessWindowStation(hwinsta)
+            hdesk = user32.OpenDesktopW('Default', 0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
+    except Exception:
+        pass
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

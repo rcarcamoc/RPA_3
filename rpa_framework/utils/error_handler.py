@@ -322,6 +322,88 @@ def notificar_aprobacion_pendiente(script_name: str, descripcion: str, record_id
     return True
 
 
+def notificar_caso_informativo(script_name: str, tipo_evento: str, descripcion: str, record_id: int = None):
+    """
+    Notifica a Telegram un evento informativo de éxito alternativo (Ya Ingresado / Ya Aprobado / Addendum),
+    marca el registro en BD con su respectivo estado de éxito clasificado, toma captura informativa
+    y retorna de forma limpia sin considerarse error.
+    """
+    record_data = _consultar_registro(record_id=record_id)
+    rec_id = record_data.get("id") if record_data else record_id
+
+    id_log = f" (ID Fila BD: #{rec_id})" if rec_id else ""
+    logger.info(f"ℹ️ [{script_name}]{id_log} Evento informativo: {tipo_evento} - {descripcion}")
+
+    screenshot_path = _tomar_screenshot()
+
+    es_addendum = "addendum" in tipo_evento.lower() or "adenda" in tipo_evento.lower()
+    icono = "📝" if es_addendum else "🔁"
+    nuevo_estado = "Terminado - Addendum" if es_addendum else "Terminado - Ya Ingresado"
+    estado_notif = "Addendum" if es_addendum else "Ya Ingresado"
+
+    # Actualizar estado en BD
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        obs = f"[{script_name}] {descripcion}"[:500]
+        if rec_id:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = %s, estado_notificacion = %s, observacion = %s, fecha_actualizacion_notificacion = NOW(), `update` = NOW()
+            WHERE id = %s
+            """
+            cursor.execute(query, (nuevo_estado, estado_notif, obs, rec_id))
+        else:
+            query = """
+            UPDATE ris.registro_acciones
+            SET estado = %s, estado_notificacion = %s, observacion = %s, fecha_actualizacion_notificacion = NOW(), `update` = NOW()
+            WHERE estado = 'En Proceso'
+            """
+            cursor.execute(query, (nuevo_estado, estado_notif, obs))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Registro #{rec_id} marcado exitosamente como '{nuevo_estado}'.")
+    except Exception as e:
+        logger.error(f"Error actualizando estado a {nuevo_estado} en BD: {e}")
+
+    # Enviar notificación informativa a Telegram
+    enviar_alerta_todos, enviar_foto_todos = _get_telegram()
+    doc_pac = record_data.get("numero_documento", "N/A") if record_data else "N/A"
+    ex_pac = record_data.get("examen", "N/A") if record_data else "N/A"
+    dr_pac = record_data.get("doctor_detectado", "N/A") if record_data else "N/A"
+
+    msg = (
+        f"{icono} <b>CASO GESTIONADO COMO EXITOSO ({tipo_evento.upper()})</b>\n\n"
+        f"🆔 <b>Fila BD:</b> <code>#{rec_id}</code>\n"
+        f"📄 <b>Documento:</b> <code>{doc_pac}</code>\n"
+        f"🩺 <b>Examen:</b> <code>{ex_pac}</code>\n"
+        f"👨‍⚕️ <b>Médico:</b> <code>{dr_pac}</code>\n\n"
+        f"ℹ️ <b>Detalle:</b>\n{descripcion}\n\n"
+        f"<i>El estudio ya se encontraba validado en PACS. Se contabiliza dentro del sector de Exitosos sin requerir reprocesamiento.</i>"
+    )
+
+    try:
+        import inspect
+        sig = inspect.signature(enviar_alerta_todos)
+        if "record_id" in sig.parameters:
+            enviar_alerta_todos(msg, record_id=rec_id)
+        else:
+            enviar_alerta_todos(msg)
+    except Exception as e:
+        logger.error(f"Error enviando mensaje informativo a Telegram: {e}")
+
+    try:
+        if screenshot_path and os.path.exists(screenshot_path):
+            id_tag = f" (Fila #{rec_id})" if rec_id else ""
+            caption = f"{icono} Captura informativa: {tipo_evento}{id_tag}"
+            enviar_foto_todos(screenshot_path, caption)
+    except Exception as e:
+        logger.error(f"Error enviando foto informativa a Telegram: {e}")
+
+    return True
+
+
 def handle_error_and_exit(script_name: str, error_description: str, record_id: int = None, ocr_info: dict = None):
     """
     Punto de entrada único para errores críticos en el workflow PACS.
@@ -369,8 +451,11 @@ def handle_error_and_exit(script_name: str, error_description: str, record_id: i
         if screenshot_path and os.path.exists(screenshot_path):
             id_tag = f" (ID Fila BD: #{rec_id})" if rec_id else ""
             caption = f"📸 Captura del error en <b>{script_name}</b>{id_tag}"
-            enviar_foto_todos(screenshot_path, caption)
-            logger.info("Screenshot enviado a Telegram.")
+            ok_foto = enviar_foto_todos(screenshot_path, caption)
+            if ok_foto:
+                logger.info("Screenshot enviado a Telegram exitosamente.")
+            else:
+                logger.warning("No se pudo enviar Screenshot a Telegram tras reintentos.")
     except Exception as e:
         logger.error(f"Error enviando foto a Telegram: {e}")
 

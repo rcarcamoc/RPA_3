@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("PaddleGPUWorker")
 
-DET_LIMIT_SIDE_LEN = int(os.environ.get("PADDLE_DET_LIMIT_SIDE_LEN", 1440))
+DET_LIMIT_SIDE_LEN = int(os.environ.get("PADDLE_DET_LIMIT_SIDE_LEN", 2048))
 DET_LIMIT_TYPE = os.environ.get("PADDLE_DET_LIMIT_TYPE", "max")
 
 _OCR_INSTANCE = None

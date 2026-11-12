@@ -29,6 +29,10 @@ try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
     from utils.telegram_manager import enviar_alerta_todos
     try:
+        from utils.chrome_session import connect_or_launch_rpa_chrome
+    except ImportError:
+        from rpa_framework.utils.chrome_session import connect_or_launch_rpa_chrome
+    try:
         from utils.window_utils import maximize_ris_windows
     except ImportError:
         try:
@@ -132,45 +136,15 @@ class WebAutomationV2:
                 conn.close()
 
     def setup_browser(self):
-        """Configures and connects to Chrome with fast port detection without stealing OS focus"""
+        """Configures and connects to Chrome with fast port detection and auto-repair without stealing OS focus"""
         print("[INFO v2] Configurando opciones del navegador...", flush=True)
         try:
-            is_port_open = False
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.3)
-                    if s.connect_ex(('127.0.0.1', 9222)) == 0:
-                        is_port_open = True
-            except:
-                pass
-
-            if is_port_open:
-                try:
-                    print("[INFO v2] Puerto 9222 detectado. Conectando...", flush=True)
-                    attach_options = ChromeOptions()
-                    attach_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
-                    self.driver = webdriver.Chrome(options=attach_options)
-                    print("[INFO v2] Conexión exitosa al navegador existente.", flush=True)
-                except Exception as e:
-                    print(f"[WARNING v2] Error conectando a puerto 9222: {e}", flush=True)
-
-            if not self.driver:
-                print("[INFO v2] Iniciando nueva instancia de Chrome con puerto 9222...", flush=True)
-                launch_options = ChromeOptions()
-                launch_options.add_argument("--remote-debugging-port=9222")
-                launch_options.add_argument("--no-sandbox")
-                launch_options.add_argument("--disable-dev-shm-usage")
-                
-                profile_path = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data" / "RPA_Remote_Profile"
-                launch_options.add_argument(f"--user-data-dir={profile_path}")
-                
-                if self.maximize and not self.background:
-                    launch_options.add_argument("--start-maximized")
-                
-                launch_options.add_experimental_option("detach", True)
-                self.driver = webdriver.Chrome(options=launch_options)
-                print("[INFO v2] Nueva instancia lanzada correctamente.", flush=True)
-
+            self.driver = connect_or_launch_rpa_chrome(
+                port=9222,
+                maximize=(self.maximize and not self.background),
+                headless=self.headless,
+                allow_launch=True,
+            )
             self.wait = WebDriverWait(self.driver, 8)
             
             # Solo maximizar si no estamos en modo background

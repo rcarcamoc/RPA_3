@@ -445,7 +445,7 @@ def procesar_callback_query(callback_query):
         except Exception as e:
             print(f"Error procesando callback_query addendum: {e}")
 
-    elif callback_data and callback_data.startswith("gest_ya_ingresado_"):
+    elif callback_data and (callback_data.startswith("gest_ya_ingresado_") or callback_data.startswith("gest_ya_aprobado_")):
         record_id = callback_data.split("_")[-1]
         try:
             import mysql.connector
@@ -453,20 +453,20 @@ def procesar_callback_query(callback_query):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE registro_acciones 
-                SET estado = 'Terminado - Ya Ingresado', 
-                    estado_notificacion = 'Ya Ingresado', 
+                SET estado = 'Terminado - Ya Aprobado', 
+                    estado_notificacion = 'Ya Aprobado', 
                     fecha_actualizacion_notificacion = NOW(),
-                    observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Ya Ingresado]') 
+                    observacion = CONCAT(COALESCE(observacion, ''), ' | [Telegram: Reclasificado como Ya Aprobado]') 
                 WHERE id = %s
             """, (record_id,))
             conn.commit()
             conn.close()
 
-            responder_callback(cb_id, text="Caso reclasificado como Exitoso (Ya Ingresado) 🔁")
-            new_markup = {"inline_keyboard": [[{"text": "🔁 Reclasificado: Ya Ingresado ✅", "callback_data": "ya_gestionado"}]]}
+            responder_callback(cb_id, text="Caso reclasificado como Exitoso (Ya Aprobado) 🔁")
+            new_markup = {"inline_keyboard": [[{"text": "🔁 Reclasificado: Ya Aprobado ✅", "callback_data": "ya_gestionado"}]]}
             editar_mensaje(chat_id, msg_id, callback_query["message"].get("text", "") or "Incidente reclasificado", reply_markup=new_markup)
         except Exception as e:
-            print(f"Error procesando callback_query ya ingresado: {e}")
+            print(f"Error procesando callback_query ya aprobado: {e}")
 
     elif callback_data == "ya_gestionado":
         responder_callback(cb_id, text="Este incidente ya fue gestionado / clasificado ✅", show_alert=False)
@@ -702,6 +702,13 @@ def telegram_polling_loop():
         ensure_mysql_running()
     except Exception as e:
         print(f"⚠️ Error al verificar/iniciar MySQL: {e}")
+
+    try:
+        from utils.paddle_auto_starter import restart_paddle_service
+        threading.Thread(target=restart_paddle_service, kwargs={"max_wait_sec": 30}, daemon=True, name="PaddleOCRRestart").start()
+        print("🚀 Reinicio de servicio PaddleOCR GPU iniciado en segundo plano.")
+    except Exception as e:
+        print(f"⚠️ Error al reiniciar PaddleOCR: {e}")
 
     if not TOKEN:
         print("⚠️ No hay token de Telegram configurado.")

@@ -220,7 +220,7 @@ class LoopNodeMixin:
                 es_aprobacion_pendiente = False
                 _ultimo = None
                 err_str = str(e).lower()
-                if any(k in err_str for k in ["actualiza_estado", "aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado"]):
+                if any(k in err_str for k in ["actualiza_estado", "aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado", "ya validado", "ya_validado", "ya aprobado", "ya_aprobado"]):
                     es_aprobacion_pendiente = True
                 else:
                     try:
@@ -233,13 +233,13 @@ class LoopNodeMixin:
                         if _ultimo:
                             est_ult = str(_ultimo.get("estado") or "").lower()
                             obs_ult = str(_ultimo.get("observacion") or "").lower()
-                            if any(k in est_ult for k in ["aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado", "terminado"]) or "actualiza_estado" in obs_ult:
+                            if any(k in est_ult for k in ["aprobacion_pendiente", "addendum", "ya_ingresado", "ya ingresado", "ya aprobado", "ya_aprobado", "terminado"]) or any(k in obs_ult for k in ["actualiza_estado", "ya validado", "ya_validado", "ya aprobado", "ya_aprobado", "addendum"]):
                                 es_aprobacion_pendiente = True
                     except Exception:
                         pass
 
                 if es_aprobacion_pendiente:
-                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente / Reclasificado (Addendum/Ya Ingresado): NO suma al contador de errores de auto-pausa.")
+                    self.logger.log("   ℹ️ Evento de Aprobación Pendiente / Reclasificado (Addendum/Ya Aprobado): NO suma al contador de errores de auto-pausa.")
                 else:
                     consecutive_errors += 1
                     self.logger.log(f"   ⚠️ Errores consecutivos en loop: {consecutive_errors}/2")

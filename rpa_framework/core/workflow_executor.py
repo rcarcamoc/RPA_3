@@ -229,7 +229,9 @@ class WorkflowExecutor(
                     break
 
             # Resultado final
-            if self.no_records_found:
+            if getattr(self, 'case_already_approved', False):
+                status = "already_approved"
+            elif self.no_records_found:
                 status = "no_records"
             elif self.should_stop:
                 status = "stopped"

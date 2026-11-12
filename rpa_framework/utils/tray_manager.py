@@ -89,32 +89,60 @@ def get_rpa_summary_info():
             except Exception:
                 pass
 
+    # 3. Consultar estado de PaddleOCR GPU
+    paddle_info = {}
+    try:
+        from utils.paddle_auto_starter import get_paddle_status_info
+        paddle_info = get_paddle_status_info()
+    except Exception:
+        paddle_info = {"online": False, "summary_short": "Offline ❌"}
+
     return {
         "is_running": is_running,
         "workflow_name": workflow_name,
         "total_hoy": total_hoy,
         "ok_hoy": ok_hoy,
-        "err_hoy": err_hoy
+        "err_hoy": err_hoy,
+        "paddle_info": paddle_info
     }
 
 def build_tooltip_text(info):
     """Genera el texto multilínea que se muestra al pasar el puntero sobre el icono."""
     if info.get("is_running"):
         wf = info.get("workflow_name", "En ejecución")
-        wf_str = f"▶️ {wf}" if len(wf) <= 25 else f"▶️ {wf[:22]}..."
+        wf_str = f"▶️ {wf}" if len(wf) <= 22 else f"▶️ {wf[:19]}..."
     else:
         wf_str = "⏸️ Estado: Inactivo (En espera)"
         
     total = info.get("total_hoy", 0)
     if total > 0:
-        casos_str = f"📊 Casos: {total} (✅{info.get('ok_hoy', 0)} | ❌{info.get('err_hoy', 0)})"
+        casos_str = f"📊 Casos: {total} (✅ {info.get('ok_hoy', 0)} | ❌ {info.get('err_hoy', 0)})"
     else:
-        casos_str = "📊 Casos hoy: 0"
+        casos_str = "📊 Casos: 0"
         
     llm_str = get_llm_status_summary()
-    tip = f"Bot RPA - Atrys\n{wf_str}\n{casos_str}\n{llm_str}"
+    
+    p_info = info.get("paddle_info", {})
+    if p_info.get("online"):
+        st_time = p_info.get("started_at_str")
+        time_part = f" ({st_time})" if st_time else ""
+        paddle_str = f"⚡ Paddle: Online ✅{time_part}"
+    else:
+        paddle_str = "⚡ Paddle: Offline ❌"
+
+    lines = ["Bot RPA - Atrys", wf_str, casos_str, llm_str, paddle_str]
+    tip = "\n".join(lines)
+    
+    # Asegurar que no exceda el límite de 127 caracteres de Windows (Win32 szTip limit)
     if len(tip) > 127:
-        tip = tip[:124] + "..."
+        if not info.get("is_running"):
+            lines[1] = "⏸️ Inactivo (En espera)"
+        if "(" in lines[3]:
+            lines[3] = lines[3].split("(")[0].strip()
+        tip = "\n".join(lines)
+        if len(tip) > 127:
+            tip = tip[:124] + "..."
+            
     return tip
 
 def create_robot_icon(status='idle'):
@@ -274,6 +302,52 @@ class SystemTrayManager:
 
         threading.Thread(target=task, daemon=True, name="ManualLLMUpdateTray").start()
 
+    def _get_paddle_menu_label(self, item=None):
+        info = get_rpa_summary_info()
+        p = info.get("paddle_info", {})
+        if p.get("online"):
+            st = p.get("started_at_str", "")
+            return f"⚡ PaddleOCR: Online ✅ ({st})" if st else "⚡ PaddleOCR: Online ✅"
+        return "⚡ PaddleOCR: Offline ❌"
+
+    def _get_paddle_detail_label(self, item=None):
+        info = get_rpa_summary_info()
+        p = info.get("paddle_info", {})
+        if p.get("online"):
+            cuda = "CUDA Activo" if p.get("cuda") else "CPU"
+            dev = p.get("device", "N/A")
+            pid = p.get("pid", "N/A")
+            return f"🚀 {cuda} ({dev}) • PID: {pid}"
+        return "⚠️ Inactivo en puerto 8095"
+
+    def _get_paddle_uptime_label(self, item=None):
+        info = get_rpa_summary_info()
+        p = info.get("paddle_info", {})
+        if p.get("online"):
+            st = p.get("started_at_str", "N/A")
+            up = p.get("uptime_str", "")
+            up_txt = f" (hace {up})" if up else ""
+            return f"🕒 Iniciado: {st}{up_txt}"
+        return "ℹ️ Clic abajo para iniciar / reiniciar"
+
+    def _manual_restart_paddle(self, icon=None, item=None):
+        def task():
+            print("🔄 [Tray] Solicitado reinicio manual de PaddleOCR GPU desde el menú...")
+            self.notify("Reiniciando microservicio PaddleOCR GPU...", "⚡ PaddleOCR")
+            try:
+                from utils.paddle_auto_starter import restart_paddle_service
+                ok = restart_paddle_service(max_wait_sec=25)
+                self.update_icon()
+                if ok:
+                    self.notify("PaddleOCR GPU reiniciado exitosamente (CUDA activo, 2048px).", "⚡ PaddleOCR OK")
+                else:
+                    self.notify("No se pudo reiniciar PaddleOCR. Revise logs.", "⚠️ Error PaddleOCR")
+            except Exception as e:
+                print(f"Error reiniciando PaddleOCR desde tray: {e}")
+                self.notify(f"Error al reiniciar: {e}", "❌ Error PaddleOCR")
+
+        threading.Thread(target=task, daemon=True, name="ManualPaddleRestartTray").start()
+
     def _get_notification_label(self, item=None):
         if notificaciones_pausadas():
             return "🔕 Notificaciones: Suspendidas"
@@ -370,6 +444,12 @@ class SystemTrayManager:
                 item(self._get_pat_count_label, Menu(*pat_items)),
                 Menu.SEPARATOR,
                 item("⚡ Forzar Actualización Modelos LLM", self._manual_update_llm)
+            )),
+            item(self._get_paddle_menu_label, Menu(
+                item(self._get_paddle_detail_label, None, enabled=False),
+                item(self._get_paddle_uptime_label, None, enabled=False),
+                Menu.SEPARATOR,
+                item("🔄 Reiniciar Servicio PaddleOCR", self._manual_restart_paddle)
             )),
             Menu.SEPARATOR,
             item(self._get_stop_process_label, self._stop_current_process),

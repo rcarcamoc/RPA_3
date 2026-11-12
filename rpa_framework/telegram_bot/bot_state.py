@@ -123,16 +123,27 @@ def set_execution_state(is_running, workflow_name="", is_loop=False):
 
 def is_any_workflow_running():
     """Retorna True si hay una ejecución activa local o via execution_state.json."""
-    global active_executor
+    global active_executor, executor_thread
     if active_executor is not None:
+        # Verificar si el hilo asociado realmente sigue vivo
+        if executor_thread is not None and not executor_thread.is_alive():
+            print("⚠️ [is_any_workflow_running] Se detectó active_executor pero executor_thread ya finalizó. Auto-limpiando...")
+            active_executor = None
+            executor_thread = None
+            set_execution_state(False)
+            return False
         return True
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if data.get("is_running", False):
+                    # Si han transcurrido más de 15 minutos sin heartbeat, considerarlo huérfano/expirado
                     if time.time() - data.get("updated_at", 0) < 900:
                         return True
+                    else:
+                        print("⚠️ [is_any_workflow_running] execution_state.json expirado (>900s sin actualización). Auto-reseteando...")
+                        set_execution_state(False)
         except Exception:
             pass
     return False

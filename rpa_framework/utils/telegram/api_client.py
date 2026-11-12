@@ -60,7 +60,11 @@ def telegram_request(method: str, endpoint: str, **kwargs):
             print(f"⚠️ [SSL Error] No se pudo verificar el certificado con Telegram/Firewall: {e}")
             _last_fw_warning = now
         return None
-    except Exception:
+    except requests.exceptions.Timeout as e:
+        print(f"⚠️ [Telegram Timeout] Tiempo agotado ({kwargs.get('timeout')}s) en {endpoint}")
+        return None
+    except Exception as e:
+        print(f"⚠️ [Telegram Error] Falló llamada a {endpoint}: {e}")
         return None
 
 
@@ -191,7 +195,7 @@ def enviar_alerta_todos(mensaje, record_id=None):
                 ],
                 [
                     {"text": "📝 Addendum", "callback_data": f"gest_addendum_{record_id}"},
-                    {"text": "🔁 Ya Ingresado", "callback_data": f"gest_ya_ingresado_{record_id}"}
+                    {"text": "🔁 Ya Aprobado", "callback_data": f"gest_ya_ingresado_{record_id}"}
                 ]
             ]
         }
@@ -255,90 +259,145 @@ def notificar_loop_pausado(ultimo_error: str = "", workflow_name: str = "Loop", 
     return True
 
 
-def enviar_foto(chat_id, ruta_imagen, caption="", reply_markup=None):
-    """Envía una foto a un chat. Si el archivo es muy grande, la comprime antes."""
+def _preparar_bytes_imagen(ruta_imagen):
+    """
+    Lee y prepara la imagen optimizándola como JPEG (calidad 82, máx 1920x1080)
+    para acelerar la subida y evitar timeouts por transferencias pesadas.
+    Devuelve (filename, bytes_data, mime_type).
+    """
+    try:
+        from PIL import Image as PILImage
+        with PILImage.open(ruta_imagen) as img:
+            if img.mode in ("RGBA", "P", "LA"):
+                img = img.convert("RGB")
+            # Reducir dimensiones solo si excede 1920x1080 manteniendo relación de aspecto
+            img.thumbnail((1920, 1080), PILImage.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=82, optimize=True)
+            return "screenshot.jpg", buffer.getvalue(), "image/jpeg"
+    except Exception as e:
+        pass
+
+    # Fallback: lectura en crudo si PIL no está disponible o falla
+    try:
+        with open(ruta_imagen, "rb") as f:
+            raw_bytes = f.read()
+        fname = os.path.basename(ruta_imagen)
+        ext = os.path.splitext(fname)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg" if ext in (".jpg", ".jpeg") else "application/octet-stream"
+        return fname, raw_bytes, mime
+    except Exception as e_raw:
+        print(f"Error leyendo archivo de imagen {ruta_imagen}: {e_raw}")
+        return None, None, None
+
+
+def enviar_foto(chat_id, ruta_imagen, caption="", reply_markup=None, max_intentos=3):
+    """
+    Envía una foto a un chat con reintentos automáticos y fallback a sendDocument.
+    Optimiza la imagen a JPEG ligero si es necesario para acelerar la subida y prevenir timeouts.
+    """
+    if not os.path.exists(ruta_imagen):
+        print(f"Error: El archivo de imagen no existe: {ruta_imagen}")
+        return False
+
+    filename, img_bytes, mime_type = _preparar_bytes_imagen(ruta_imagen)
+    if not img_bytes:
+        return False
+
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
 
-    opened_file = None
-    files = {}
-    try:
-        from PIL import Image as PILImage
-        tam = os.path.getsize(ruta_imagen)
-        if tam > 4 * 1024 * 1024:
-            img = PILImage.open(ruta_imagen)
-            img.thumbnail((1920, 1080), PILImage.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=70)
-            buffer.seek(0)
-            files = {"photo": ("screenshot.jpg", buffer, "image/jpeg")}
-        else:
-            opened_file = open(ruta_imagen, "rb")
-            files = {"photo": opened_file}
-    except Exception:
+    for intento in range(1, max_intentos + 1):
+        # 1. Intentar sendPhoto
         try:
-            opened_file = open(ruta_imagen, "rb")
-            files = {"photo": opened_file}
+            files = {"photo": (filename, img_bytes, mime_type)}
+            res = telegram_request("POST", "sendPhoto", data=data, files=files, timeout=25)
+            if res and res.get("ok"):
+                return True
+            desc = res.get("description") if res else "Timeout / Sin respuesta"
+            print(f"  [Telegram Foto] Intento {intento}/{max_intentos} falló sendPhoto a {chat_id} ({desc})")
         except Exception as e:
-            print(f"Error abriendo imagen para enviar: {e}")
-            return False
+            print(f"  [Telegram Foto] Intento {intento}/{max_intentos} excepción sendPhoto: {e}")
 
-    try:
-        res = telegram_request("POST", "sendPhoto", data=data, files=files, timeout=30)
-        if res and not res.get("ok"):
-            print(f"  [Telegram API Error] sendPhoto: {res.get('description', res)}")
-        return res.get("ok", False) if res else False
-    except Exception as e:
-        print(f"Error enviando foto a {chat_id}: {e}")
-        return False
-    finally:
-        if opened_file:
-            opened_file.close()
+        # 2. Si falló sendPhoto o timeout, intentar fallback como documento
+        try:
+            print(f"  [Telegram Foto] Intentando fallback sendDocument a {chat_id} (Intento {intento}/{max_intentos})...")
+            files_doc = {"document": (filename, img_bytes, mime_type)}
+            res_doc = telegram_request("POST", "sendDocument", data=data, files=files_doc, timeout=25)
+            if res_doc and res_doc.get("ok"):
+                print(f"  [Telegram Foto] ✅ Captura enviada con éxito como documento a {chat_id}")
+                return True
+            desc_doc = res_doc.get("description") if res_doc else "Timeout / Sin respuesta"
+            print(f"  [Telegram Foto] Fallback sendDocument falló ({desc_doc})")
+        except Exception as e_doc:
+            print(f"  [Telegram Foto] Excepción en fallback sendDocument: {e_doc}")
+
+        if intento < max_intentos:
+            time.sleep(2 * intento)
+
+    print(f"  [Error] No se pudo enviar foto a {chat_id} tras {max_intentos} intentos")
+    return False
 
 
-def enviar_foto_todos(ruta_imagen, caption=""):
-    """Envía una foto con mensaje a todos los usuarios registrados."""
+def enviar_foto_todos(ruta_imagen, caption="", max_intentos=3):
+    """Envía una foto con mensaje a todos los usuarios registrados (con reintentos)."""
     usuarios = cargar_usuarios()
     if not usuarios:
         print("Error: No hay usuarios registrados en usuarios.json.")
-        return
+        return False
 
-    print(f"Enviando foto a {len(usuarios)} suscriptores...")
+    print(f"Enviando foto a {len(usuarios)} suscriptores (hasta {max_intentos} intentos)...")
+    al_menos_uno = False
     for chat_id in usuarios:
-        if enviar_foto(chat_id, ruta_imagen, caption):
+        if enviar_foto(chat_id, ruta_imagen, caption, max_intentos=max_intentos):
             print(f"  [OK] Foto enviada a {chat_id}")
+            al_menos_uno = True
         else:
             print(f"  [Error] No se pudo enviar foto a {chat_id}")
+    return al_menos_uno
 
 
-def enviar_video(chat_id, ruta_video, caption=""):
-    """Envía un video a un chat de Telegram."""
+def enviar_video(chat_id, ruta_video, caption="", max_intentos=2):
+    """Envía un video a un chat de Telegram con reintentos y fallback a sendDocument."""
     if not os.path.exists(ruta_video):
         print(f"Error: El archivo de video no existe: {ruta_video}")
         return False
 
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+    filename = os.path.basename(ruta_video)
 
-    opened_file = None
-    try:
-        opened_file = open(ruta_video, "rb")
-        files = {"video": (os.path.basename(ruta_video), opened_file, "video/mp4")}
-        res = telegram_request("POST", "sendVideo", data=data, files=files, timeout=60)
-        if res and res.get("ok"):
-            return True
+    for intento in range(1, max_intentos + 1):
+        # 1. Probar sendVideo
+        try:
+            with open(ruta_video, "rb") as opened_file:
+                files = {"video": (filename, opened_file, "video/mp4")}
+                res = telegram_request("POST", "sendVideo", data=data, files=files, timeout=60)
+                if res and res.get("ok"):
+                    return True
+                desc = res.get("description") if res else "Timeout / Sin respuesta"
+                print(f"  [Telegram Video] Intento {intento}/{max_intentos} falló sendVideo ({desc})")
+        except Exception as e:
+            print(f"  [Telegram Video] Intento {intento}/{max_intentos} error en sendVideo: {e}")
 
-        print(f"  [Telegram API Info] sendVideo falló ({res.get('description') if res else 'Sin respuesta'}), intentando sendDocument...")
-        opened_file.seek(0)
-        files_doc = {"document": (os.path.basename(ruta_video), opened_file)}
-        res_doc = telegram_request("POST", "sendDocument", data=data, files=files_doc, timeout=60)
-        return res_doc.get("ok", False) if res_doc else False
-    except Exception as e:
-        print(f"Error enviando video a {chat_id}: {e}")
-        return False
-    finally:
-        if opened_file:
-            opened_file.close()
+        # 2. Probar sendDocument como respaldo
+        try:
+            print(f"  [Telegram Video] Intentando sendDocument como respaldo para video...")
+            with open(ruta_video, "rb") as opened_file:
+                files_doc = {"document": (filename, opened_file)}
+                res_doc = telegram_request("POST", "sendDocument", data=data, files=files_doc, timeout=60)
+                if res_doc and res_doc.get("ok"):
+                    print(f"  [Telegram Video] ✅ Video enviado exitosamente como documento a {chat_id}")
+                    return True
+                desc_doc = res_doc.get("description") if res_doc else "Timeout / Sin respuesta"
+                print(f"  [Telegram Video] Fallback sendDocument falló ({desc_doc})")
+        except Exception as e_doc:
+            print(f"  [Telegram Video] Error en fallback sendDocument para video: {e_doc}")
+
+        if intento < max_intentos:
+            time.sleep(3)
+
+    return False
 
 
 def enviar_video_todos(ruta_video, caption=""):

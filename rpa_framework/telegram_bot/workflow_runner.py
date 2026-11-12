@@ -49,6 +49,33 @@ def cerrar_chrome_rpa():
         print(f"[WARNING] Error al cerrar Chrome RPA: {e}")
 
 
+def kill_stuck_rpa_processes():
+    """Elimina subprocesos huérfanos de Python vinculados a nodos de RPA."""
+    try:
+        current_pid = os.getpid()
+        targets = [
+            'busqueda_triple', 'abre_pacs', 'ingresa_user_pacs',
+            'busqueda_paciente', 'pega en word', 'actualiza_estado',
+            'preparar_examen', 'busca_doctor', 'validar_pacs'
+        ]
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if proc.pid == current_pid:
+                    continue
+                name = (proc.info.get('name') or '').lower()
+                if 'python' in name:
+                    cmdline = ' '.join(proc.info.get('cmdline') or []).lower()
+                    if any(t in cmdline for t in targets):
+                        print(f"🛑 [STOP] Terminando subproceso RPA huérfano: PID {proc.pid} ({proc.name()})")
+                        if sys.platform == "win32":
+                            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=3)
+                        proc.kill()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"⚠️ [STOP] Error al limpiar subprocesos RPA: {e}")
+
+
 def detener_ejecucion_actual(chat_id=None, source="Telegram"):
     """
     Detiene de manera inmediata y completa cualquier ejecución en curso (workflow activo,
@@ -91,13 +118,26 @@ def detener_ejecucion_actual(chat_id=None, source="Telegram"):
         except Exception as e:
             print(f"Error escribiendo STOP_SIGNAL: {e}")
 
-    # 4. Cerrar Chrome RPA si quedó abierto por el bot
+    # 4. Cerrar Chrome RPA y subprocesos RPA que pudieran haber quedado retenidos
     try:
         cerrar_chrome_rpa()
     except Exception:
         pass
+    try:
+        kill_stuck_rpa_processes()
+    except Exception:
+        pass
 
-    # 5. Si había ejecución local o remota
+    # 5. Esperar brevemente a que el hilo libere; si no lo hace, forzar liberación
+    if bot_state.executor_thread and bot_state.executor_thread.is_alive():
+        bot_state.executor_thread.join(timeout=2.0)
+
+    if bot_state.active_executor is not None:
+        print("⚠️ [STOP] active_executor no se liberó tras la señal. Desvinculando forzosamente...")
+        bot_state.active_executor = None
+        bot_state.executor_thread = None
+
+    # 6. Si había ejecución local o remota
     is_running_flag = is_any_workflow_running()
     if stopped_anything or is_running_flag:
         set_execution_state(False)
@@ -106,6 +146,7 @@ def detener_ejecucion_actual(chat_id=None, source="Telegram"):
             enviar_mensaje(chat_id, f"🛑 <b>Ejecución Detenida</b>\nSe ha cancelado el proceso: <code>{wf_name}</code>.")
         return True
     else:
+        set_execution_state(False)
         if chat_id:
             enviar_mensaje(chat_id, "ℹ️ No hay ningún proceso en ejecución.")
         return False
@@ -127,6 +168,14 @@ def run_workflow(wf_path, params=None, on_finish=None):
                         node.iterations = str(valor)
                     elif tipo_loop == "timed":
                         node.duration_hours = float(valor)
+
+        # Reiniciar microservicio PaddleOCR para asegurar que esté limpio y con resolución completa
+        try:
+            from utils.paddle_auto_starter import restart_paddle_service
+            print("🔄 [WorkflowRunner] Asegurando reinicio fresco de PaddleOCR GPU antes de ejecutar el flujo...")
+            restart_paddle_service(max_wait_sec=20)
+        except Exception as e_paddle:
+            print(f"⚠️ [WorkflowRunner] Aviso al reiniciar PaddleOCR: {e_paddle}")
 
         # Recargar dinámicamente workflow_executor para asegurar últimas modificaciones en disco
         try:
@@ -271,11 +320,18 @@ def forzar_ejecucion_workflow(chat_id, msg_id, action_key):
     def _worker():
         detener_ejecucion_actual(source="Forzar Interrupción")
 
-        for _ in range(8):
+        for _ in range(6):
             if not is_any_workflow_running() and not bot_state._pacs_validating_now:
                 break
             time.sleep(0.5)
 
+        # Garantizar desvinculación total de active_executor y proceso previo
+        if bot_state.active_executor is not None:
+            print("⚠️ [Forzar Interrupción] Desvinculando active_executor forzosamente...")
+            bot_state.active_executor = None
+            bot_state.executor_thread = None
+
+        kill_stuck_rpa_processes()
         set_execution_state(False)
         time.sleep(0.5)
 

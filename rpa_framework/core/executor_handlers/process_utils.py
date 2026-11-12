@@ -30,8 +30,14 @@ def get_python_exe() -> str:
 
 
 def _get_silent_process_flags():
-    """Retorna creationflags y startupinfo. Por política de ejecución en primer plano, nunca oculta consolas en segundo plano."""
-    return 0, None
+    r"""Retorna creationflags y startupinfo vinculando al escritorio interactivo WinSta0\Default."""
+    creationflags = 0
+    startupinfo = None
+    if sys.platform == "win32":
+        import subprocess
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.lpDesktop = r"WinSta0\Default"
+    return creationflags, startupinfo
 
 
 class ProcessEnvMixin:

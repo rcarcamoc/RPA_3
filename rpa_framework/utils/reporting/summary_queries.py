@@ -10,8 +10,8 @@ import mysql.connector
 import pandas as pd
 
 # Configuraciones
-HORA_INICIO_HOURLY = 9
-HORA_FIN_HOURLY = 19
+HORA_INICIO_HOURLY = 8
+HORA_FIN_HOURLY = 20
 HORA_DAILY = "09:00"
 DIAS_SEMANA_VALIDOS = [0, 1, 2, 3, 4]  # Lunes a Viernes (0=Lunes, 4=Viernes)
 
@@ -183,11 +183,11 @@ def obtener_datos(fecha_inicio, fecha_fin):
 
 
 def is_addendum(e):
-    return 'addendum' in str(e).lower()
+    return any(k in str(e).lower() for k in ['addendum', 'adenda', 'addenda'])
 
 
 def is_ya_ingresado(e):
-    return any(k in str(e).lower() for k in ['ya ingresado', 'ya_ingresado'])
+    return any(k in str(e).lower() for k in ['ya ingresado', 'ya_ingresado', 'ya aprobado', 'ya_aprobado', 'ya validado', 'ya_validado'])
 
 
 def is_pending_approval(e):
@@ -201,12 +201,12 @@ def is_success_standard(e):
 
 def is_success(e):
     st = str(e).lower()
-    return any(k in st for k in ['terminado', 'finalizado', 'éxito', 'exito', 'addendum', 'ya ingresado', 'ya_ingresado']) or is_pending_approval(e)
+    return any(k in st for k in ['terminado', 'finalizado', 'éxito', 'exito', 'addendum', 'adenda', 'ya ingresado', 'ya_ingresado', 'ya aprobado', 'ya_aprobado', 'ya validado', 'ya_validado']) or is_pending_approval(e)
 
 
 def is_error(e):
     st = str(e).lower()
-    return any(k in st for k in ['error', 'fallo', 'falla', 'falló']) and not is_pending_approval(e) and not is_addendum(e) and not is_ya_ingresado(e) and not any(k in st for k in ['sin registros', 'vpn'])
+    return any(k in st for k in ['error', 'fallo', 'falla', 'falló', 'no_match']) and not is_pending_approval(e) and not is_addendum(e) and not is_ya_ingresado(e) and not any(k in st for k in ['sin registros', 'vpn'])
 
 
 def is_in_progress(e):

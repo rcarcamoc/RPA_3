@@ -26,6 +26,8 @@ from .summary_queries import (
     notificaciones_pausadas,
     se_ejecuto_workflow_ultimos_minutos,
     obtener_datos,
+    is_success,
+    is_error,
 )
 from .summary_charts import (
     generar_texto_resumen_hourly,
@@ -36,7 +38,8 @@ from .summary_charts import (
 
 def enviar_reporte_hourly(force=False):
     """Envía el reporte de la última hora y el acumulado del día con 1 dashboard visual y texto amigable.
-    Se salta si las notificaciones están pausadas o si no se ejecutó ningún workflow en los últimos 60 minutos (a menos que force=True).
+    Se emite únicamente si hubo casos procesados (exitosos o erróneos) en la última hora (a menos que force=True).
+    Se salta si las notificaciones están pausadas o fuera de los días y horas permitidos.
     """
     now = datetime.datetime.now()
 
@@ -51,22 +54,30 @@ def enviar_reporte_hourly(force=False):
             print(f"[{now}] Notificaciones pausadas — reporte horario omitido.")
             return
 
-        if not se_ejecuto_workflow_ultimos_minutos(minutos=60):
-            print(f"[{now}] No se ejecutó ningún workflow en los últimos 60 minutos — reporte horario omitido.")
-            return
-
-    # 1. Datos de la última hora (e.g. de 09:00:00 a 09:59:59)
+    # 1. Datos de la última hora (e.g. a las 08:00 evalúa de 07:00:00 a 07:59:59)
     fecha_fin_h = now.replace(minute=59, second=59, microsecond=999999) - datetime.timedelta(hours=1)
     fecha_inicio_h = fecha_fin_h.replace(minute=0, second=0, microsecond=0)
+
+    periodo_str = f"{fecha_inicio_h.strftime('%H:%M')} a {fecha_fin_h.strftime('%H:%M')}"
+
+    df_hora = obtener_datos(fecha_inicio_h, fecha_fin_h)
+
+    # Validación fundamental: Solo emitir si hay casos procesados exitosos o erróneos en la última hora
+    if not force:
+        exitosos_h = sum(1 for st in df_hora['estado'] if is_success(st)) if df_hora is not None and not df_hora.empty else 0
+        errores_h = sum(1 for st in df_hora['estado'] if is_error(st)) if df_hora is not None and not df_hora.empty else 0
+        total_procesados_h = exitosos_h + errores_h
+
+        if total_procesados_h == 0:
+            print(f"[{now}] No hubo casos procesados (exitosos ni errores) en la última hora ({periodo_str}) — reporte horario omitido.")
+            return
 
     # 2. Datos acumulados del día (de 00:00:00 a ahora)
     fecha_inicio_d = now.replace(hour=0, minute=0, second=0, microsecond=0)
     fecha_fin_d = now
 
-    periodo_str = f"{fecha_inicio_h.strftime('%H:%M')} a {fecha_fin_h.strftime('%H:%M')}"
-
-    print(f"[{now}] Ejecutando reporte hourly...")
-    df_hora = obtener_datos(fecha_inicio_h, fecha_fin_h)
+    cant_info = f"{total_procesados_h} casos procesados" if not force else f"{len(df_hora)} registros"
+    print(f"[{now}] Ejecutando reporte hourly ({cant_info} en ventana {periodo_str})...")
     df_dia = obtener_datos(fecha_inicio_d, fecha_fin_d)
 
     texto = generar_texto_resumen_hourly(df_hora, df_dia, periodo_str)

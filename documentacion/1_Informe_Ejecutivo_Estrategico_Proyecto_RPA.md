@@ -146,6 +146,15 @@ Para que la máquina virtual ejecute el bot de forma desatendida y sin fallas, s
 3. **Conectividad de Red y Túnel VPN Persistente:** El canal de comunicación con el RIS y el PACS institucional debe mantener latencia inferior a 50 ms. Se incluye en el bot un mecanismo de auto-reconocimiento y reconexión de VPN que monitoriza caídas del enlace.
 4. **Motor de Base de Datos Local o con Enlace de Baja Latencia:** Para garantizar que los tiempos de registro y consulta de credenciales no agreguen demoras al ciclo, el servicio MySQL debe residir en la misma máquina o en la subred local (<5 ms de latencia).
 
+### 7.2. Guía de Preparación de la Máquina y Checklist de Instalación para TI
+Para que el equipo de Infraestructura / TI deje la máquina lista para el despliegue del bot, se deben ejecutar los siguientes 5 pasos de puesta a punto:
+
+* **Paso 1: Entorno de Windows y Pantalla:** Fijar resolución 1920×1080 con escala al 100%. En Opciones de Energía configurar apagar pantalla y suspensión en "Nunca". Desactivar protector de pantalla y excluir la máquina de políticas GPO de bloqueo por inactividad. Configurar *Autologon* de Windows.
+* **Paso 2: Runtimes y Componentes Base:** Instalar Python 64-bit (3.11+) con PATH habilitado, Microsoft Visual C++ 2015-2022 Redistributable (x64) y Tesseract OCR (x64) con el paquete `spa.traineddata` agregado a la variable PATH.
+* **Paso 3: Aplicativos Clínicos y Accesos:** Instalar Google Chrome actualizado, cliente de escritorio Carestream Vue PACS (`mp.exe`) probado con credenciales de acceso, y software VPN corporativo con inicio y credenciales persistentes. Habilitar salida HTTPS (puerto 443) hacia `api.telegram.org` y endpoints de LLM, y puerto 3306 hacia MySQL.
+* **Paso 4: Base de Datos y Código Fuente:** Crear la base de datos `ris` (utf8mb4) en MySQL. Ubicar el proyecto en `C:\Desarrollo\RPA_3`, generar el entorno virtual `venv` con `pip install -r requirements.txt` y configurar el archivo de variables seguras `.env`.
+* **Paso 5: Arranque Autónomo:** Ejecutar como Administrador `C:\Desarrollo\RPA_3\Crear_Tarea_Programada.bat` para registrar la tarea de inicio automático y tolerancia a fallos, y realizar la prueba de reinicio para validar el arranque desatendido.
+
 ---
 
 ## 8. Justificación Técnica y Operacional para Gerencia

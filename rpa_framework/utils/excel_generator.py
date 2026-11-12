@@ -229,9 +229,9 @@ def generar_excel_reporte(periodo: str = "hoy"):
                     pendientes_gestionados += 1
                 elif notif == 'pendiente':
                     pendientes_pendientes += 1
-            elif 'addendum' in st:
+            elif any(k in st for k in ['addendum', 'adenda', 'addenda']):
                 addendums += 1
-            elif any(k in st for k in ['ya ingresado', 'ya_ingresado']):
+            elif any(k in st for k in ['ya ingresado', 'ya_ingresado', 'ya aprobado', 'ya_aprobado', 'ya validado', 'ya_validado']):
                 ya_ingresados += 1
             elif any(k in st for k in ['exito', 'exitoso', 'terminado', 'finalizado']):
                 exitosos += 1
