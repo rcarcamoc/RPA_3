@@ -283,80 +283,49 @@ class WebAutomation:
             # Action 1: PAGE_LOAD
             print('[ACTION] Loading page: https://ris.chile.telemedicina.com/usuario/logout')
             self.driver.get('https://ris.chile.telemedicina.com/usuario/logout')
-            time.sleep(2)
 
-            # Action 2: HANDLE_ALERT
-            print('[ACTION] Handling Alert')
+            # Action 2: HANDLE_ALERT (verificación inmediata sin espera de 5s)
             try:
-                WebDriverWait(self.driver, 5).until(EC.alert_is_present())
                 alert = self.driver.switch_to.alert
                 print(f'[INFO] Alert text: {alert.text}')
                 alert.accept()
-                time.sleep(1)
-            except Exception as e:
-                print(f'[WARNING] No alert found to handle: {e}')
+            except Exception:
+                pass
 
-            # Action 3: CLICK
-            print('[ACTION] CLICK on: ')
-            element = self.find_element(r"""//*[@id='user']""", r"""input#user""", clickable=True)
-            if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
-                time.sleep(1.0)
-                element.click()
-                time.sleep(1.0)
-
-            # Action 4: INPUT
-            print('[ACTION] Typing text')
+            # Action 3-4: INPUT Usuario
+            print('[ACTION] Typing text (user)')
             element = self.find_element(r"""//*[@id='user']""", r"""input#user""", clickable=True)
             if element:
                 element.clear()
                 element.send_keys(r'rbt.integra')
-                time.sleep(1.0)
 
-            # Action 5: CLICK
-            print('[ACTION] CLICK on: ')
-            element = self.find_element(r"""//*[@id='pass']""", r"""input#pass""", clickable=True)
-            if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
-                time.sleep(1.0)
-                element.click()
-                time.sleep(1.0)
-
-       
-
-            # Action 7: INPUT
-            print('[ACTION] Typing text')
+            # Action 5-7: INPUT Password
+            print('[ACTION] Typing text (pass)')
             element = self.find_element(r"""//*[@id='pass']""", r"""input#pass""", clickable=True)
             if element:
                 element.clear()
                 element.send_keys(r'Integramedica02!')
-                time.sleep(1.0)
 
-            # Action 8: CLICK
+            # Action 8: CLICK Ingresar y esperar redirección post-login
             print('[ACTION] CLICK on: Ingresar')
             element = self.find_element(r"""//*[@id='button']""", r"""button#button""", clickable=True)
             if element:
-                self.driver.execute_script('arguments[0].scrollIntoView(true);', element)
-                time.sleep(1.0)
                 element.click()
-                time.sleep(1.0)
+                try:
+                    self.wait.until(lambda d: '/usuario/logout' not in d.current_url)
+                except Exception:
+                    time.sleep(1.0)
 
             # Action 9: PAGE_LOAD
             print('[ACTION] Loading page: https://ris.chile.telemedicina.com/ris/atencion/lista')
             self.driver.get('https://ris.chile.telemedicina.com/ris/atencion/lista')
-            time.sleep(2)
 
-        
-
-            # Action 11: CLICK
+            # Action 11: CLICK Mostrar Filtros
             print('[ACTION] CLICK on: Mostrar Filtros')
             element = self.find_element(r"""//*[@id='mostrar']""", r"""a#mostrar""", clickable=True)
             if element:
-                # Se utiliza click via JS para evitar que Selenium haga scroll automático al elemento
                 self._visual_highlight(element)
                 self.driver.execute_script('arguments[0].click();', element)
-                # Esperar a que el botón de búsqueda sea visible (máximo 15 segundos)
-                # Esto es más eficiente que un sleep fijo de 10 segundos
                 print('[INFO] Esperando a que carguen los filtros del sistema...', flush=True)
                 self.find_element(r"//*[@id='buscar']", r"button#buscar", timeout=15)
 

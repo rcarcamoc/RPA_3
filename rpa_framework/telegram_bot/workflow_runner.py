@@ -89,8 +89,8 @@ def detener_ejecucion_actual(chat_id=None, source="Telegram"):
     # 1. Si hay executor activo local, propagar stop a todo el árbol
     if bot_state.active_executor:
         try:
-            print(f"   Deteniendo active_executor: {wf_name}")
-            bot_state.active_executor.stop()
+            print(f"   Deteniendo active_executor: {wf_name} (inmediato / forzado)")
+            bot_state.active_executor.stop(is_forced=True, motivo=f"Flujo detenido de inmediato a la fuerza desde {source}.")
             stopped_anything = True
         except Exception as e:
             print(f"⚠️ Error al detener active_executor: {e}")
@@ -177,11 +177,24 @@ def run_workflow(wf_path, params=None, on_finish=None):
         except Exception as e_paddle:
             print(f"⚠️ [WorkflowRunner] Aviso al reiniciar PaddleOCR: {e_paddle}")
 
-        # Recargar dinámicamente workflow_executor para asegurar últimas modificaciones en disco
+        # Recargar dinámicamente workflow_executor y todos sus mixins para asegurar últimas modificaciones en disco
         try:
+            for mod_name in [
+                "core.executor_handlers.process_utils",
+                "core.executor_handlers.action_node_mixin",
+                "core.executor_handlers.database_node_mixin",
+                "core.executor_handlers.loop_node_mixin",
+                "core.executor_handlers.subworkflow_node_mixin",
+                "core.executor_handlers.video_recorder_mixin",
+                "core.executor_handlers",
+                "core.workflow_executor",
+            ]:
+                if mod_name in sys.modules:
+                    importlib.reload(sys.modules[mod_name])
             import core.workflow_executor
             importlib.reload(core.workflow_executor)
             from core.workflow_executor import WorkflowExecutor
+            print("🔄 [WorkflowRunner] workflow_executor y módulos mixins recargados dinámicamente.")
         except Exception as e_reload:
             print(f"⚠️ Aviso al recargar workflow_executor: {e_reload}")
             from core.workflow_executor import WorkflowExecutor

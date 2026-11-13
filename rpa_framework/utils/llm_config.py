@@ -71,13 +71,15 @@ def get_llm_request_params(model_id):
 # Lista BASE de modelos LLM ampliados y validados (Nvidia NIM y OpenRouter Free)
 # ---------------------------------------------------------------------------
 BASE_LLM_MODELS = [
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Primario — Validado OK
-   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 1 — Validado OK
-   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 2 — Validado OK
-   "dots-studio/dots-3-note-preview:free",                   # Fallback 3 — Validado OK
-   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 4 — Validado OK
-   "baidu/ernie-5.5-flash-preview:free",                     # Fallback 5 — Validado OK
-   "openrouter/free",                                        # Fallback 6 — Validado OK
+   "minimaxai/minimax-m3.1-flash",                           # Primario - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",          # Fallback 1 - Validado OK
+   "meta/llama-3.2-90b-vision-instruct",                     # Fallback 2 - Validado OK
+   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",     # Fallback 3 - Validado OK
+   "nvidia/nemotron-3-ultra-550b-a55b:free",                 # Fallback 4 - Validado OK
+   "baidu/ernie-5.5-flash-preview:free",                     # Fallback 5 - Validado OK
+   "openrouter/free",                                        # Fallback 6 - Validado OK
+   "dots-studio/dots-3-note-preview:free",                   # Fallback 7 - Validado OK
+   "google/gemma-4-31b-it:free",                             # Fallback 8 - Validado OK
 ]
 
 # Listas de respaldo por defecto según especialización
@@ -86,6 +88,8 @@ OCR_DEFAULT_MODELS = ['qwen2.5:3b'] + list(BASE_LLM_MODELS)
 # Lista ampliada para Patología Crítica (razonamiento clínico, >= 11B-120B / reasoning)
 PATOLOGIA_DEFAULT_MODELS = [
     "baidu/ernie-5.5-flash-preview:free",
+    "google/gemma-4-31b-it:free",
+    "meta/llama-3.2-90b-vision-instruct",
     "openrouter/free",
 ]
 

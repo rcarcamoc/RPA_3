@@ -246,27 +246,20 @@ class IngresaUserPacsAutomation:
         logger.info(f"DEBUG: db_user='{db_user}', db_pass='{'*' * len(db_pass)}'")
         
         try:
-            # Acción 1: CLICK Username
+            # Acción 1: CLICK Username (directo por coordenadas para evitar timeout UIA de txtUsername)
             try:
-                # Mover cursor a la ubicación antes del clic
-                pyautogui.moveTo(980, 435, duration=0.5)
-                action = Action(
-                    type=ActionType.DOUBLE_CLICK,
-                    selector={'automation_id': 'txtUsername'},
-                    position={'x': 980, 'y': 435},
-                    timestamp=datetime.fromisoformat("2026-01-02T06:52:04.414338")
-                )
-                self.executor.execute(action)
+                pyautogui.moveTo(980, 435, duration=0.2)
+                pyautogui.doubleClick(980, 435)
                 results["completed"] += 1
-                logger.info("[1/6] click (txtUsername)")
-                time.sleep(1) # Esperar a que el foco se asiente
+                logger.info("[1/6] doubleClick directo en (980, 435)")
+                time.sleep(0.4)  # Esperar a que el foco se asiente
                 
                 # Acción 2: TYPE_TEXT (Estrategia Directa)
                 logger.info(f"Escribiendo usuario: {db_user}")
-                pyautogui.write(db_user, interval=0.1)
+                pyautogui.write(db_user, interval=0.04)
                 results["completed"] += 1
                 logger.info("[2/6] usuario escrito con pyautogui")
-                time.sleep(1)
+                time.sleep(0.3)
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 1, "type": "input_user", "reason": str(e)})
@@ -284,19 +277,19 @@ class IngresaUserPacsAutomation:
                 self.executor.execute(action)
                 results["completed"] += 1
                 logger.info("[3/6] TAB para pasar a password")
-                time.sleep(0.5)
+                time.sleep(0.3)
                 
                 # Acción 4: TYPE_TEXT (Estrategia Directa)
                 logger.info("Escribiendo password...")
-                pyautogui.write(db_pass, interval=0.1)
+                pyautogui.write(db_pass, interval=0.04)
                 results["completed"] += 1
                 logger.info("[4/6] password escrito con pyautogui")
-                time.sleep(0.5)
+                time.sleep(0.3)
 
                 # Incluir ENTER después de ingresar el password
                 logger.info("Enviando ENTER tras ingresar password...")
                 pyautogui.press('enter')
-                time.sleep(1)
+                time.sleep(0.5)
             except Exception as e:
                 results["failed"] += 1
                 results["errors"].append({"action_idx": 3, "type": "input_pass", "reason": str(e)})
@@ -383,9 +376,9 @@ def main():
             logger.error(f"Error invocado manejador de errores: {e}")
             return 1
 
-    # Delay de 10 segundos antes de terminar
-    logger.info("Esperando 10 segundos antes de terminar...")
-    time.sleep(10)
+    # Pausa mínima antes de entregar control a Verifica inicio
+    logger.info("Esperando 0.5 segundos antes de terminar...")
+    time.sleep(0.5)
     return 0
 
 

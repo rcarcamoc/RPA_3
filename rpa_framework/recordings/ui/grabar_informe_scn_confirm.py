@@ -151,9 +151,15 @@ def buscar_y_click_guardar(imagenes_relativas=None, confidence_threshold=0.70):
             print(f"❌ Error capturando pantalla: {e}")
             return False
 
-    mejor_val = 0.0
+    mejor_val = -1.0
     mejor_bloque = None
     mejor_tpl_nombre = "ninguna"
+    mejor_target = None
+
+    # Evaluar TODAS las plantillas y escalas antes de decidir (evita falsos positivos
+    # tempranos en plantillas de otro tema, ej. guardar_dark sobre zonas oscuras).
+    escalas = [1.0, 0.95, 1.05, 0.9, 1.1]
+    h_scr, w_scr = screen_cv.shape[:2]
 
     for img_rel in imagenes_relativas:
         template_path = os.path.join(base_path, img_rel)
@@ -165,55 +171,54 @@ def buscar_y_click_guardar(imagenes_relativas=None, confidence_threshold=0.70):
             continue
 
         original_h, original_w = template.shape[:2]
+        tpl_nombre = os.path.basename(img_rel)
 
-        # Coincidencia de plantilla (Template Matching)
-        result = cv2.matchTemplate(screen_cv, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        x, y = max_loc
+        for scale in escalas:
+            if scale == 1.0:
+                tpl_scaled = template
+            else:
+                new_w = int(round(original_w * scale))
+                new_h = int(round(original_h * scale))
+                if new_w < 10 or new_h < 10 or new_w > w_scr or new_h > h_scr:
+                    continue
+                tpl_scaled = cv2.resize(template, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC)
 
-        center_x = x + original_w / 2
-        center_y = y + original_h / 2
-        target_x = center_x - 90
-        target_y = center_y
+            sh, sw = tpl_scaled.shape[:2]
+            if sw > w_scr or sh > h_scr:
+                continue
 
-        bloque_info = (x, y, original_w, original_h, center_x, center_y)
+            result = cv2.matchTemplate(screen_cv, tpl_scaled, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            x, y = max_loc
 
-        if max_val > mejor_val:
-            mejor_val = max_val
-            mejor_bloque = bloque_info
-            mejor_tpl_nombre = os.path.basename(img_rel)
+            center_x = x + sw / 2.0
+            center_y = y + sh / 2.0
+            target_x = center_x - (90.0 * scale)
+            target_y = center_y
 
-        # 1. Confianza directa
-        if max_val >= confidence_threshold:
-            print(f"✅ Botón encontrado con '{os.path.basename(img_rel)}' (Confianza: {max_val*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
-            if vf:
-                vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
+            if max_val > mejor_val:
+                mejor_val = max_val
+                mejor_bloque = (x, y, sw, sh, center_x, center_y)
+                mejor_tpl_nombre = f"{tpl_nombre} (escala {scale:.2f})"
+                mejor_target = (target_x, target_y)
 
-            guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar", target_point=(target_x, target_y))
-            humanized_click(target_x, target_y, hold_time=1.0)
-            return True
+            # Si encontramos coincidencia muy alta a escala 1.0, no hace falta seguir probando escalas
+            if scale == 1.0 and max_val >= 0.85:
+                break
 
-        # 2. Doble confirmación para umbrales medios
-        elif max_val >= 0.20:
-            h_scr, w_scr = screen_cv.shape[:2]
-            crop = screen_cv[y:min(y + original_h, h_scr), x:min(x + original_w, w_scr)]
-            crop_resized = cv2.resize(crop, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+    if mejor_val >= confidence_threshold and mejor_bloque is not None and mejor_target is not None:
+        x, y, sw, sh, center_x, center_y = mejor_bloque
+        target_x, target_y = mejor_target
+        print(f"✅ Botón encontrado con '{mejor_tpl_nombre}' (Confianza: {mejor_val*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
+        if vf:
+            vf.highlight_region(x, y, sw, sh, color="#FFEB3B", duration=1.5)
 
-            diff = cv2.norm(crop_resized.astype(np.float32), template.astype(np.float32), cv2.NORM_L2)
-            max_possible = np.sqrt(original_w * original_h * 3) * 255.0
-            similitud = 1.0 - (diff / max_possible)
-
-            if similitud >= 0.70:
-                print(f"✅ Botón confirmado tras 2da pasada con '{os.path.basename(img_rel)}' ({similitud*100:.2f}%) en ({center_x:.0f}, {center_y:.0f}) -> Clic en ({target_x:.0f}, {target_y:.0f})")
-                if vf:
-                    vf.highlight_region(x, y, original_w, original_h, color="#FFEB3B", duration=1.5)
-
-                guardar_debug_screenshot(screen_cv, info=bloque_info, suffix="click_guardar_confirm2", target_point=(target_x, target_y))
-                humanized_click(target_x, target_y, hold_time=1.0)
-                return True
+        guardar_debug_screenshot(screen_cv, info=mejor_bloque, suffix="click_guardar", target_point=(target_x, target_y))
+        humanized_click(target_x, target_y, hold_time=1.0)
+        return True
 
     guardar_debug_screenshot(screen_cv, info=mejor_bloque, suffix="failed_not_found")
-    print(f"❌ No se encontró el botón de guardar en pantalla (Mejor: '{mejor_tpl_nombre}' con {mejor_val*100:.2f}%)")
+    print(f"❌ No se encontró el botón de guardar en pantalla (Mejor: '{mejor_tpl_nombre}' con {mejor_val*100:.2f}%, umbral={confidence_threshold*100:.0f}%)")
     return False
 
 

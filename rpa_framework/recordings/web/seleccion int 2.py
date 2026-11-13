@@ -233,61 +233,48 @@ class WebAutomation:
 
 
 
-            # Action 2: Click to Open Dropdown
-            print('[ACTION] Opening Dropdown (Seleccionar)')
-            # Primary: CSS selector for the Select2 container link/button
-            element = self.find_element(r"""//div[@id='s2id_filtro_cliente']/a""", r"""div#s2id_filtro_cliente > a""", clickable=True)
+            # Action 1: Selección directa de cliente Integramédica (INT-000) vía jQuery/DOM
+            print('[ACTION] Selecting client: Integramédica (INT-000)')
+            cliente_sel = self.find_element(r"""//*[@id='filtro_cliente']""", r"""select#filtro_cliente""", clickable=False)
+            if not cliente_sel:
+                raise RuntimeError("No se encontró el selector de cliente '#filtro_cliente' en RIS.")
+
+            selected_val = self.driver.execute_script("""
+                var sel = document.getElementById('filtro_cliente');
+                if (!sel) return null;
+                if (window.jQuery && jQuery(sel).length) {
+                    jQuery(sel).val('INT-000').trigger('change');
+                } else {
+                    sel.value = 'INT-000';
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return sel.value;
+            """)
+            if selected_val != 'INT-000':
+                raise RuntimeError(f"No se pudo seleccionar cliente INT-000 (valor actual: {selected_val}).")
+
+            # Action 2: Selecciona checkbox Examen Validado (name="estados[]", value="7")
+            print('[ACTION] CLICK on: Examen Validado')
+            element = self.find_element(
+                r"""//form[@id='frm_buscar']//input[@name='estados[]' and @value='7']""",
+                r"""#frm_buscar input[name="estados[]"][value="7"]""",
+                clickable=True,
+            )
             if element:
-                self._visual_highlight(element)
-                element.click() 
-                time.sleep(1.0)
-            else:
-                raise RuntimeError("No se encontr? el selector de cliente 'div#s2id_filtro_cliente > a' en RIS.")
+                if not element.is_selected():
+                    self._visual_highlight(element)
+                    element.click()
+                    time.sleep(0.1)
 
-            # Action 3, 4, 5: Search and Select
-            print('[ACTION] Searching and Selecting: integramedica')
-            
-            # Wait specifically for the dropdown container to appear
-            try:
-                self.wait.until(EC.visibility_of_element_located((By.ID, "select2-drop")))
-            except:
-                print("[WARNING] Dropdown container #select2-drop did not explicitly appear.")
-
-            # Find the input field within the now-open dropdown
-            # Using the specific class 'select2-input' which is standard for Select2
-            element = self.find_element(r"""//div[@id='select2-drop']//input[contains(@class,'select2-input')]""", r"""#select2-drop input.select2-input""", clickable=True)
-            
-            if element:
-                self._visual_highlight(element)
-                element.clear()
-                element.send_keys('integramedica')
-                time.sleep(1.5) # Wait for filtering
-             #   element.send_keys(Keys.ARROW_DOWN)
-                time.sleep(0.5)
-                element.send_keys(Keys.ENTER)
-                time.sleep(1.0)
-            else:
-                print("[ERROR] Could not find the Select2 search input!")
-
-            
-     # Action 2: selecciona examen validado
-            print('[ACTION] CLICK on: ')
-            element = self.find_element(r"""//input[contains(@class, '__rpa-highlight')]""", r"""form#frm_buscar > table > tbody > tr:nth-of-type(2) > td > input:nth-of-type(4)""", clickable=True)
-            if element:
-                self._visual_highlight(element)
-                element.click()
-                time.sleep(0.1)
-
-
-            # Action 5: CLICK en buscar
-            print('[ACTION] CLICK on:  Buscar estudios')
+            # Action 3: CLICK en Buscar estudios
+            print('[ACTION] CLICK on: Buscar estudios')
             element = self.find_element(r"""//*[@id='buscar']""", r"""button#buscar""", clickable=True)
             if element:
                 self._visual_highlight(element)
                 element.click()
-                time.sleep(0.5)
+                time.sleep(0.3)
             else:
-                raise RuntimeError("No se encontr? el bot?n 'Buscar estudios' (#buscar) en RIS.")
+                raise RuntimeError("No se encontró el botón 'Buscar estudios' (#buscar) en RIS.")
 
 
             print("[INFO] Automation completed successfully")

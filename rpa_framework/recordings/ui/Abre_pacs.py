@@ -252,11 +252,7 @@ def abrir_vue_pacs():
     except:
         logger.warning("   CPU no estabilizada en 10s, intentando continuar...")
 
-    # DEBUG
-    if vf:
-        vf.wait(3, "Debug Listar Ventanas...")
-    else:
-        time.sleep(3)
+    # DEBUG (sin pausa fija de 3s; el bucle siguiente espera activamente las ventanas)
     debug_listar_ventanas()
 
     # 1. Esperar activamente y detectar ventanas de Carestream Vue PACS
@@ -319,10 +315,7 @@ def abrir_vue_pacs():
     titulo_real = main_window.window_text()
     logger.info(f"   Ventana principal Carestream vinculada: '{titulo_real}' (hwnd: {main_window.handle})")
 
-    if vf:
-        vf.wait(3, "Finalizando apertura Vue PACS...")
-    else:
-        time.sleep(3)
+    time.sleep(0.5)
 
     logger.info(f"LISTA: '{titulo_real}'")
     print(f"\nVue PACS listo!\nhwnd: {main_window.handle}")
@@ -343,10 +336,7 @@ def main():
         logger.info(f"Intento de apertura #{intentos} / {MAX_INTENTOS}")
         try:
             cerrar_todos_carestream()
-            if vf:
-                vf.wait(3, f"Pausa estabilidad (Intento {intentos})...")
-            else:
-                time.sleep(3)  # Pausa para estabilidad
+            time.sleep(0.5)  # Breve pausa tras confirmar cierre de procesos
             
             return abrir_vue_pacs()
             

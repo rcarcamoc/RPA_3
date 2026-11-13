@@ -129,8 +129,8 @@ class LoopNodeMixin:
                 try:
                     if stop_after_file.exists():
                         stop_after_file.unlink()
-                except Exception:
-                    pass
+                except Exception as e_chk:
+                    self.logger.log(f"⚠️ Error al verificar estado para video de iteración: {e_chk}")
                 break
 
             if self.should_stop:
@@ -200,19 +200,60 @@ class LoopNodeMixin:
                 # Iteración exitosa: reiniciar contador de errores consecutivos
                 consecutive_errors = 0
 
-                # Iteración exitosa: descartar video de esta iteración y reiniciar limpio para la siguiente
-                if self.enable_recording and not self.is_sub_workflow and not self.should_stop:
-                    if self.screen_recorder:
-                        self.screen_recorder.discard()
-                        self.screen_recorder = None
-                    self._restart_screen_recorder()
+                # Verificar si el caso procesado en esta iteración finalizó en un estado especial (Aprobación Pendiente, Addendum, Ya Ingresado/Aprobado)
+                special_record = None
+                special_tipo = None
+                try:
+                    _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                    _cur = _conn.cursor(dictionary=True)
+                    _cur.execute("SELECT id, estado, observacion, numero_documento, examen FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
+                    _ultimo = _cur.fetchone()
+                    _cur.close()
+                    _conn.close()
+                    if _ultimo:
+                        est_ult = str(_ultimo.get("estado") or "").strip().lower()
+                        rec_id = _ultimo.get("id")
+                        if getattr(self, '_last_video_sent_id', None) != rec_id:
+                            if "aprobacion_pendiente" in est_ult or "pending" in est_ult:
+                                special_record = _ultimo
+                                special_tipo = "Aprobación Pendiente"
+                            elif any(k in est_ult for k in ["addendum", "adenda"]):
+                                special_record = _ultimo
+                                special_tipo = "Addendum"
+                            elif any(k in est_ult for k in ["ya ingresado", "ya_ingresado", "ya aprobado", "ya_aprobado", "ya validado", "ya_validado"]):
+                                special_record = _ultimo
+                                special_tipo = "Ya Aprobado"
+
+                            if special_record:
+                                self._last_video_sent_id = rec_id
+                except Exception as e_chk:
+                    self.logger.log(f"⚠️ Error al verificar estado para video de iteración: {e_chk}")
+
+                if special_record and self.enable_recording and not self.is_sub_workflow:
+                    self.logger.log(f"📹 Caso #{special_record.get('id')} finalizó como '{special_tipo}'. Guardando y enviando video a Telegram...")
+                    wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
+                    prefix = f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}_{special_tipo.lower().replace(' ', '_')}"
+                    self._save_and_send_special_video(tipo_evento=special_tipo, custom_prefix=prefix, record_data=special_record)
+                    if not self.should_stop:
+                        self._restart_screen_recorder()
+                else:
+                    # Iteración exitosa regular: descartar video de esta iteración y reiniciar limpio para la siguiente
+                    if self.enable_recording and not self.is_sub_workflow and not self.should_stop:
+                        if self.screen_recorder:
+                            self.screen_recorder.discard()
+                            self.screen_recorder = None
+                        self._restart_screen_recorder()
 
             except Exception as e:
                 if self.should_stop:
                     self.logger.log("⏹️ Iteración de loop interrumpida por detención externa.")
-                    if self.screen_recorder:
-                        self.screen_recorder.discard()
-                        self.screen_recorder = None
+                    if self.screen_recorder and self.enable_recording and not self.is_sub_workflow:
+                        wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
+                        self._save_and_send_special_video(
+                            tipo_evento="stopped",
+                            custom_prefix=f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}_detenido",
+                            custom_motivo="Iteración de loop interrumpida por detención del usuario."
+                        )
                     break
                 self.logger.log(f"   ❌ Error en iteración {idx + 1} (ignorado, loop continúa): {e}")
 
@@ -260,19 +301,31 @@ class LoopNodeMixin:
                         if self.should_stop:
                             motivo_fin = "detenido"
                             self.logger.log("⏹️ Loop cancelado por el usuario durante la pausa.")
-                            if self.screen_recorder:
-                                self.screen_recorder.discard()
-                                self.screen_recorder = None
+                            if self.screen_recorder and self.enable_recording and not self.is_sub_workflow:
+                                wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
+                                self._save_and_send_special_video(
+                                    tipo_evento="stopped",
+                                    custom_prefix=f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}_detenido",
+                                    custom_motivo="Loop cancelado por el usuario durante la pausa."
+                                )
                             break
 
                         # Al reanudar:
                         consecutive_errors = 0
                         self.logger.log("   ▶️ Loop reanudado por el usuario. Continuando...")
 
-                # Guardar y enviar video del error de esta iteración
+                # Guardar y enviar video del error o caso especial de esta iteración
                 wf_sub_name = Path(node.workflow_path).stem if node.workflow_path else (Path(node.script).stem if node.script else "iter")
                 prefix = f"{self.workflow.name}_{wf_sub_name}_iter{idx+1}"
-                self._save_and_send_error_video(f"Iteración {idx + 1} ({wf_sub_name}): {str(e)}", custom_prefix=prefix)
+                if es_aprobacion_pendiente:
+                    tipo_esp = "Aprobación Pendiente"
+                    if _ultimo and isinstance(_ultimo, dict):
+                        est_u = str(_ultimo.get("estado") or "").lower()
+                        if any(k in est_u for k in ["addendum", "adenda"]): tipo_esp = "Addendum"
+                        elif any(k in est_u for k in ["ya ingresado", "ya_ingresado", "ya aprobado", "ya_aprobado"]): tipo_esp = "Ya Aprobado"
+                    self._save_and_send_special_video(tipo_evento=tipo_esp, custom_prefix=f"{prefix}_{tipo_esp.lower().replace(' ', '_')}", record_data=_ultimo if isinstance(_ultimo, dict) else None)
+                else:
+                    self._save_and_send_error_video(f"Iteración {idx + 1} ({wf_sub_name}): {str(e)}", custom_prefix=prefix)
 
                 # Reiniciar grabador limpio para la siguiente iteración
                 if not self.should_stop:
@@ -308,8 +361,8 @@ class LoopNodeMixin:
                 try:
                     if stop_after_file.exists():
                         stop_after_file.unlink()
-                except Exception:
-                    pass
+                except Exception as e_chk:
+                    self.logger.log(f"⚠️ Error al verificar estado para video de iteración: {e_chk}")
                 break
 
             if self.should_stop:
@@ -434,8 +487,8 @@ class LoopNodeMixin:
                 try:
                     for l in iter(process.stdout.readline, ''):
                         out_queue.put(l)
-                except Exception:
-                    pass
+                except Exception as e_chk:
+                    self.logger.log(f"⚠️ Error al verificar estado para video de iteración: {e_chk}")
                 finally:
                     out_queue.put(None)
 
@@ -485,8 +538,8 @@ class LoopNodeMixin:
                 try:
                     if process.stdout: process.stdout.close()
                     if process.stderr: process.stderr.close()
-                except Exception:
-                    pass
+                except Exception as e_chk:
+                    self.logger.log(f"⚠️ Error al verificar estado para video de iteración: {e_chk}")
             self.active_process = None
         
         if returncode == 2:

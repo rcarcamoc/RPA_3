@@ -166,8 +166,16 @@ def run_server(port: int = 8095):
 
     @app.on_event("startup")
     def startup():
-        # Pre-cargar modelos en GPU durante el inicio
-        get_ocr_engine()
+        # Pre-cargar modelos en GPU y calentar kernels CUDA/cuDNN durante el inicio
+        ocr = get_ocr_engine()
+        try:
+            import numpy as np
+            t0 = time.perf_counter()
+            dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+            ocr.ocr(dummy, cls=False)
+            logger.info(f"Warm-up CUDA/cuDNN completado en {(time.perf_counter() - t0)*1000:.0f}ms")
+        except Exception as e:
+            logger.warning(f"Warm-up de inferencia omitido: {e}")
 
     @app.get("/health")
     def health():

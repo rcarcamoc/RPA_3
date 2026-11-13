@@ -59,8 +59,8 @@ class PaddleGPUClient:
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            # Timeout corto de 5s para no bloquear si no está corriendo
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
+            # Timeout de 15s para tolerar imágenes pesadas sin caer al fallback CLI de 30s
+            with urllib.request.urlopen(req, timeout=15.0) as resp:
                 if resp.status == 200:
                     payload = json.loads(resp.read().decode('utf-8'))
                     elapsed = payload.get("elapsed_s", 0)

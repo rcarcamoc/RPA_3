@@ -678,16 +678,19 @@ class Test1Automation:
                             
                             if cuenta >= 1:
                                 logger.info(f"🔍 Se encontraron registros ({cuenta}). Ejecutando script de patología crítica (con cierre)...")
-                                script_ext = r"c:\Desarrollo\RPA_3\rpa_framework\recordings\ui\patologia_critica,_con_cierre_ok.py"
+                                script_ext = r"c:\Desarrollo\RPA_3\rpa_framework\recordings\ui\patologia_critica,_con_cierre_ok_v2.py"
                             else:
-                                logger.info(f"🔍 No se encontraron registros (cuenta=0). Ejecutando script de patología crítica (NO)...")
-                                script_ext = r"c:\Desarrollo\RPA_3\rpa_framework\recordings\ui\patologia_critica,_NO.py"
+                                logger.info(f"🔍 No se encontraron registros (cuenta=0). Ejecutando script de patología crítica (NO v2)...")
+                                script_ext = r"c:\Desarrollo\RPA_3\rpa_framework\recordings\ui\patologia_critica,_NO_v2.py"
                             
                             import subprocess
                             cflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                            subprocess.run([sys.executable, script_ext], check=False, creationflags=cflags)
+                            res_pato = subprocess.run([sys.executable, script_ext], check=False, creationflags=cflags)
+                            if res_pato.returncode != 0:
+                                raise Exception(f"Script de patología crítica ({os.path.basename(script_ext)}) falló con código {res_pato.returncode}. Abortando guardado.")
                         except Exception as e_cond:
                             logger.error(f"⚠️ Error en ejecución condicional: {e_cond}")
+                            raise
                     # -------------------------------------
 
                     logger.info("Ejecutando script grabar_informe_scn_confirm.py...")

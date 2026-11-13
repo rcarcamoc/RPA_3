@@ -138,6 +138,24 @@ class WorkflowExecutor(
             except Exception as e_ollama:
                 self.logger.log(f"⚠️ [Validación Pre-Flujo] Error validando Ollama: {e_ollama}")
 
+            try:
+                from utils.paddle_auto_starter import check_paddle_health, ensure_paddle_running
+                paddle_health = check_paddle_health(port=8095, timeout=1.0)
+                if paddle_health and paddle_health.get("status") == "ok":
+                    self.logger.log(
+                        f"👁️ [Validación Pre-Flujo] PaddleOCR GPU ACTIVO (puerto 8095, device={paddle_health.get('device', 'N/A')})"
+                    )
+                else:
+                    self.logger.log("👁️ [Validación Pre-Flujo] Iniciando y precalentando PaddleOCR GPU en segundo plano...")
+                    threading.Thread(
+                        target=ensure_paddle_running,
+                        kwargs={"port": 8095, "max_wait_sec": 35},
+                        daemon=True,
+                        name="PaddlePrewarm",
+                    ).start()
+            except Exception as e_paddle:
+                self.logger.log(f"⚠️ [Validación Pre-Flujo] Error iniciando PaddleOCR GPU: {e_paddle}")
+
         recorder = None
         if self.enable_recording and not self.is_sub_workflow:
             try:
@@ -243,10 +261,56 @@ class WorkflowExecutor(
             self.logger.log(f"   Variables finales: {self.context}")
             self.logger.log("=" * 60)
 
-            # Si terminó correctamente, fue detenido, o finalizó sin registros, descartar grabación
-            if self.screen_recorder:
+            # Si el workflow finalizó pero el caso quedó en estado especial (Aprobación Pendiente, Addendum, Ya Ingresado/Aprobado), guardar y enviar video a Telegram
+            special_record = None
+            special_tipo = None
+            saved_video_path = None
+            if status == "success" and self.enable_recording and not self.is_sub_workflow and self.screen_recorder:
+                try:
+                    import mysql.connector
+                    _conn = mysql.connector.connect(host='localhost', user='root', password='', database='ris', connect_timeout=2)
+                    _cur = _conn.cursor(dictionary=True)
+                    _cur.execute("SELECT id, estado, observacion, numero_documento, examen FROM ris.registro_acciones ORDER BY id DESC LIMIT 1")
+                    _ultimo = _cur.fetchone()
+                    _cur.close()
+                    _conn.close()
+                    if _ultimo:
+                        est_ult = str(_ultimo.get("estado") or "").strip().lower()
+                        rec_id = _ultimo.get("id")
+                        if getattr(self, '_last_video_sent_id', None) != rec_id:
+                            if "aprobacion_pendiente" in est_ult or "pending" in est_ult:
+                                special_record = _ultimo
+                                special_tipo = "Aprobación Pendiente"
+                            elif any(k in est_ult for k in ["addendum", "adenda"]):
+                                special_record = _ultimo
+                                special_tipo = "Addendum"
+                            elif any(k in est_ult for k in ["ya ingresado", "ya_ingresado", "ya aprobado", "ya_aprobado", "ya validado", "ya_validado"]):
+                                special_record = _ultimo
+                                special_tipo = "Ya Aprobado"
+
+                            if special_record:
+                                self._last_video_sent_id = rec_id
+                except Exception:
+                    pass
+
+            if special_record and self.screen_recorder:
+                self.logger.log(f"📹 Caso #{special_record.get('id')} finalizó como '{special_tipo}'. Guardando y enviando video a Telegram...")
+                saved_video_path = self._save_and_send_special_video(
+                    tipo_evento=special_tipo,
+                    custom_prefix=f"{self.workflow.name}_{special_tipo.lower().replace(' ', '_')}",
+                    record_data=special_record
+                )
+            elif status == "stopped" and self.screen_recorder and self.enable_recording and not self.is_sub_workflow and not getattr(self, '_stop_video_sent', False):
+                self._stop_video_sent = True
+                self.logger.log(f"📹 Workflow detenido por el usuario. Guardando y enviando video a Telegram...")
+                saved_video_path = self._save_and_send_special_video(
+                    tipo_evento="stopped",
+                    custom_prefix=f"{self.workflow.name}_detenido",
+                    custom_motivo="Workflow detenido por solicitud de parada del usuario."
+                )
+            elif self.screen_recorder:
                 self.screen_recorder.discard()
-                self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso/detenido/sin registros)")
+                self.logger.log("🗑️ Grabación de pantalla descartada (workflow exitoso regular/sin registros)")
                 self.screen_recorder = None
 
             # Registrar finalización para el notificador horario
@@ -263,7 +327,8 @@ class WorkflowExecutor(
                 "status": status,
                 "context": self.context,
                 "logs": self.logger.get_logs(),
-                "error": None
+                "error": None,
+                "video_path": saved_video_path
             }
 
         except Exception as e:
@@ -279,14 +344,20 @@ class WorkflowExecutor(
 
             if self.should_stop:
                 self.logger.log("⏹️ Workflow interrumpido por solicitud de parada del usuario.")
-                if self.screen_recorder:
-                    self.screen_recorder.discard()
-                    self.screen_recorder = None
+                saved_video_path = None
+                if self.screen_recorder and self.enable_recording and not self.is_sub_workflow and not getattr(self, '_stop_video_sent', False):
+                    self._stop_video_sent = True
+                    saved_video_path = self._save_and_send_special_video(
+                        tipo_evento="stopped",
+                        custom_prefix=f"{self.workflow.name}_detenido",
+                        custom_motivo="Workflow interrumpido por solicitud de parada del usuario."
+                    )
                 return {
                     "status": "stopped",
                     "context": self.context,
                     "logs": self.logger.get_logs(),
-                    "error": None
+                    "error": None,
+                    "video_path": saved_video_path
                 }
 
             error_msg = f"Error en ejecución: {str(e)}"
@@ -348,16 +419,39 @@ class WorkflowExecutor(
             return True
         return False
 
-    def stop(self):
-        """Detiene la ejecución del workflow"""
+    def stop(self, is_forced: bool = False, motivo: Optional[str] = None):
+        """Detiene la ejecución del workflow. Si is_forced=True o llamada externa, asegura el guardado y envío del video capturado hasta el momento."""
         self.should_stop = True
         self._external_stop = True  # Marcar como stop externo (usuario/Telegram)
         self.is_paused = False
         if hasattr(self, 'pause_event') and self.pause_event:
             self.pause_event.set()
-        self.logger.log("⏹️ Deteniendo workflow...")
+        
+        tipo_stop_str = "a la fuerza / inmediato" if is_forced else "normal"
+        self.logger.log(f"⏹️ Deteniendo workflow ({tipo_stop_str})...")
 
-        if self.screen_recorder:
+        # Si el grabador de pantalla está activo y no es sub-workflow, guardar y enviar video inmediatamente
+        if self.screen_recorder and self.enable_recording and not self.is_sub_workflow and not getattr(self, '_stop_video_sent', False):
+            try:
+                self._stop_video_sent = True
+                tipo_evento = "detenido_forzado" if is_forced else "stopped"
+                motivo_txt = motivo or ("Workflow detenido de inmediato a la fuerza por el usuario/operador." if is_forced else "Workflow detenido por solicitud de parada del usuario.")
+                self.logger.log(f"📹 Guardando y enviando video de parada ({tipo_evento}) a Telegram...")
+                self._save_and_send_special_video(
+                    tipo_evento=tipo_evento,
+                    custom_prefix=f"{self.workflow.name}_{tipo_evento}",
+                    custom_motivo=motivo_txt
+                )
+            except Exception as e_rec:
+                self.logger.log(f"⚠️ Error enviando video de parada: {e_rec}")
+            finally:
+                if self.screen_recorder:
+                    try:
+                        self.screen_recorder.stop()
+                    except Exception:
+                        pass
+                    self.screen_recorder = None
+        elif self.screen_recorder:
             try:
                 self.screen_recorder.stop()
                 self.screen_recorder = None

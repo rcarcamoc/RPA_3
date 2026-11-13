@@ -81,8 +81,13 @@ class VerificaInicioSimilitud:
         # Inicializar Feedback Visual
         self.vf = VisualFeedback()
         
-        # Cargar imagen de referencia una sola vez
+        # Cargar imagen de referencia y precalcular descriptores ORB una sola vez
         self.reference_img = self._load_reference()
+        self.orb = cv2.ORB_create(nfeatures=500)
+        self.kp_ref = None
+        self.des_ref = None
+        if self.reference_img is not None:
+            self.kp_ref, self.des_ref = self.orb.detectAndCompute(self.reference_img, None)
 
     def _load_reference(self):
         """Carga la imagen de referencia en escala de grises."""
@@ -114,32 +119,42 @@ class VerificaInicioSimilitud:
         except Exception as e:
             logger.warning(f"[DB Error] {e}")
 
-    def focus_ris(self):
-        """Busca, enfoca y maximiza la ventana del RIS / Vue PACS."""
+    def _find_ris_hwnd(self):
+        """Retorna el hwnd de la primera ventana Carestream encontrada sin enfocarla."""
         try:
             titles = ["Carestream RIS", "Workflow Information Management", "Vue RIS", "Carestream RIS V11", "Carestream Vue PACS"]
             for title in titles:
                 windows = fw.find_windows(title_re=re.compile(f".*{re.escape(title)}.*", re.I))
                 if windows:
-                    hwnd = windows[0]
-                    if force_foreground_window:
-                        force_foreground_window(hwnd)
-                    elif maximize_hwnd:
-                        maximize_hwnd(hwnd)
-                    else:
+                    return windows[0]
+        except Exception:
+            pass
+        return None
+
+    def focus_ris(self, hwnd=None):
+        """Busca, enfoca y maximiza la ventana del RIS / Vue PACS."""
+        try:
+            if hwnd is None:
+                hwnd = self._find_ris_hwnd()
+            if hwnd:
+                if force_foreground_window:
+                    force_foreground_window(hwnd)
+                elif maximize_hwnd:
+                    maximize_hwnd(hwnd)
+                else:
+                    try:
+                        import win32gui
+                        import win32con
+                        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
                         try:
-                            import win32gui
-                            import win32con
-                            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-                            win32gui.SetForegroundWindow(hwnd)
+                            win = Desktop(backend="win32").window(handle=hwnd)
+                            win.maximize()
+                            win.set_focus()
                         except Exception:
-                            try:
-                                win = Desktop(backend="win32").window(handle=hwnd)
-                                win.maximize()
-                                win.set_focus()
-                            except Exception:
-                                pass
-                    return True
+                            pass
+                return True
         except Exception:
             pass
         return False
@@ -158,20 +173,21 @@ class VerificaInicioSimilitud:
             except: pass
         return False
 
-    def verify_visual_match(self) -> bool:
+    def verify_visual_match(self, show_highlight: bool = False, save_capture: bool = True, log_miss: bool = True):
         """
         Toma captura de la región y la compara estructuralmente con la referencia.
-        Usa cv2.matchTemplate para obtener un porcentaje de similitud global.
+        Usa ORB Feature Matching precalculado sobre la imagen de referencia.
+        Retorna (is_match, similarity_pct).
         """
-        if self.reference_img is None:
+        if self.reference_img is None or self.des_ref is None:
             logger.error("No hay imagen de referencia para comparar.")
-            return False
+            return False, -1.0
 
         try:
-            # Resaltar en pantalla la zona de captura
-            if self.vf:
-                self.vf.highlight_region(*self.region, duration=0.8)
-                time.sleep(0.1)
+            # Resaltar en pantalla la zona de captura solo cuando se solicita
+            if show_highlight and self.vf:
+                self.vf.highlight_region(*self.region, duration=0.4)
+                time.sleep(0.05)
 
             # 1. Capturar región actual de manera resiliente (mss con fallback a pyautogui)
             if safe_screenshot:
@@ -181,25 +197,22 @@ class VerificaInicioSimilitud:
 
             if screenshot is None:
                 logger.warning("No se pudo obtener captura de pantalla para comparar.")
-                return False
+                return False, -1.0
 
             screenshot_np = np.array(screenshot)
             
             # 2. Convertir a escala de grises
             current_gray = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2GRAY)
             
-            # 3. Comparación robusta por Puntos Clave (ORB Feature Matching)
-            # ORB es resistente a cambios de idioma, colores y menús contraídos porque busca formas (íconos, bordes).
-            orb = cv2.ORB_create(nfeatures=500)
-            kp_ref, des_ref = orb.detectAndCompute(self.reference_img, None)
-            kp_cur, des_cur = orb.detectAndCompute(current_gray, None)
+            # 3. Comparación robusta por Puntos Clave (ORB Feature Matching precalculado)
+            kp_cur, des_cur = self.orb.detectAndCompute(current_gray, None)
             
             similarity_pct = 0.0
             num_matches = 0
             
-            if des_ref is not None and des_cur is not None:
+            if des_cur is not None:
                 bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-                matches = bf.match(des_ref, des_cur)
+                matches = bf.match(self.des_ref, des_cur)
                 
                 # Filtrar matches de alta calidad (distancia < 60 es un buen estándar para ORB)
                 good_matches = [m for m in matches if m.distance < 60]
@@ -210,47 +223,69 @@ class VerificaInicioSimilitud:
                 similarity_pct = min((num_matches / 100.0) * 100.0, 100.0)
             
             umbral_pct = self.similarity_threshold * 100
+            is_match = similarity_pct >= umbral_pct
 
-            # 5. Guardar log visual de la captura
-            timestamp = datetime.now().strftime("%H%M%S_%f")[:-3]
-            log_filename = f"capture_{timestamp}_sim_{similarity_pct:.1f}.png"
-            cv2.imwrite(str(self.log_dir / log_filename), current_gray)
+            # 5. Guardar log visual en el primer intento, periódicamente o al confirmar coincidencia
+            if save_capture or is_match:
+                timestamp = datetime.now().strftime("%H%M%S_%f")[:-3]
+                log_filename = f"capture_{timestamp}_sim_{similarity_pct:.1f}.png"
+                cv2.imwrite(str(self.log_dir / log_filename), current_gray)
             
-            if similarity_pct >= umbral_pct:
+            if is_match:
                 logger.info(f"✅ ¡COINCIDENCIA! Similitud: {similarity_pct:.1f}% (Supera el umbral de {umbral_pct}%)")
-                return True
+                return True, similarity_pct
             
-            logger.info(f"⏳ Similitud insuficiente: {similarity_pct:.1f}% ({num_matches} puntos clave vs {umbral_pct}% req)")
-            return False
+            if log_miss:
+                logger.info(f"⏳ Similitud insuficiente: {similarity_pct:.1f}% ({num_matches} puntos clave vs {umbral_pct}% req)")
+            return False, similarity_pct
             
         except Exception as e:
             logger.error(f"Error en verify_visual_match: {e}")
-            return False
+            return False, -1.0
 
     def run(self) -> dict:
         logger.info(f"Iniciando Verificación de Inicio V4 (Similitud Visual > {self.similarity_threshold*100}%)")
         self.db_update_status('En Proceso')
         
         start_time = time.time()
+        last_hwnd = None
+        last_sim = None
+        attempt = 0
         
         while (time.time() - start_time) < self.wait_timeout:
+            sleep_sec = 1.0
             # 1. Verificar proceso
             if self.check_process_running():
-                # 2. Enfocar ventana
-                if self.focus_ris():
-                    logger.info(f"[{int(time.time() - start_time)}s] RIS detectado y enfocado. Validando imagen...")
-                else:
-                    logger.warning(f"[{int(time.time() - start_time)}s] RIS detectado pero no se pudo enfocar.")
-                
-                time.sleep(2) 
+                # 2. Enfocar solo al detectar una ventana nueva (evita bloqueos durante la carga)
+                current_hwnd = self._find_ris_hwnd()
+                if current_hwnd and current_hwnd != last_hwnd:
+                    if self.focus_ris(current_hwnd):
+                        logger.info(f"[{int(time.time() - start_time)}s] RIS detectado y enfocado (hwnd={current_hwnd}). Validando imagen...")
+                        last_hwnd = current_hwnd
+                    else:
+                        logger.warning(f"[{int(time.time() - start_time)}s] RIS detectado pero no se pudo enfocar.")
+                elif last_hwnd is None and current_hwnd is None:
+                    logger.warning(f"[{int(time.time() - start_time)}s] Proceso activo sin ventana visible aún.")
                 
                 # 3. Verificar contenido visual (Comparación de imagen directa)
-                if self.verify_visual_match():
+                is_match, sim = self.verify_visual_match(
+                    show_highlight=(attempt == 0),
+                    save_capture=(attempt == 0 or attempt % 5 == 0),
+                    log_miss=(last_sim is None or attempt % 5 == 0),
+                )
+                if is_match:
                     return {"status": "SUCCESS", "message": "Inicio verificado visualmente"}
+
+                # Polling rápido (0.5s) cuando la UI está cambiando, más espaciado (1.0s) si está estable
+                if last_sim is not None and sim != last_sim:
+                    logger.info(f"🔄 Cambio visual detectado ({last_sim:.1f}% → {sim:.1f}%)")
+                    sleep_sec = 0.5
+                last_sim = sim
+                attempt += 1
             else:
                 logger.debug("Esperando a que el proceso del RIS inicie...")
             
-            time.sleep(1)
+            time.sleep(sleep_sec)
             
         logger.error("Timeout alcanzado sin confirmación visual del inicio.")
         return {"status": "FAILED", "reason": "No se validó el contenido visual tras el tiempo de espera."}

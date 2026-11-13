@@ -138,7 +138,7 @@
       "type": "action",
       "label": "comprueba vpn",
       "on_error": "stop",
-      "enabled": true,
+      "enabled": false,
       "position": {
         "x": -384.0,
         "y": -625.0
@@ -155,7 +155,7 @@
       "type": "action",
       "label": "verifica open",
       "on_error": "stop",
-      "enabled": true,
+      "enabled": false,
       "position": {
         "x": -616.0,
         "y": -624.0
